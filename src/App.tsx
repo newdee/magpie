@@ -15,6 +15,7 @@ interface RepoHit {
   stars: number;
   html_url: string;
   archived: boolean;
+  pushed_at: string | null;
   score: number;
 }
 
@@ -96,6 +97,17 @@ function formatSize(n: number): string {
   if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
   if (n >= 1024) return `${Math.round(n / 1024)}KB`;
   return `${n}B`;
+}
+
+function relTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const ms = Date.now() - Date.parse(iso);
+  if (Number.isNaN(ms) || ms < 0) return null;
+  const days = ms / 86_400_000;
+  if (days < 1) return "today";
+  if (days < 30) return `${Math.floor(days)}d`;
+  if (days < 365) return `${Math.floor(days / 30)}mo`;
+  return `${Math.floor(days / 365)}y`;
 }
 
 function parentDir(path: string): string {
@@ -712,6 +724,14 @@ export default function App() {
                       {r.description && <span className="row-sub">{r.description}</span>}
                     </div>
                     <div className="row-meta">
+                      {relTime(r.pushed_at) && (
+                        <span
+                          className="mono"
+                          title={`last push ${r.pushed_at?.slice(0, 10)}`}
+                        >
+                          {relTime(r.pushed_at)}
+                        </span>
+                      )}
                       {r.language && <span>{r.language}</span>}
                       <span className="stars">★ {formatStars(r.stars)}</span>
                     </div>
