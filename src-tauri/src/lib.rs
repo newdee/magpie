@@ -558,6 +558,18 @@ pub fn run() {
             // refresh quietly at launch: stars (if token configured) + local folders
             spawn_sync(app.handle().clone());
             spawn_local_index(app.handle().clone());
+            // periodic incremental re-scan: picks up deleted/changed files while
+            // the app stays resident (an unchanged scan is sub-second)
+            let periodic = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut tick =
+                    tokio::time::interval(std::time::Duration::from_secs(30 * 60));
+                tick.tick().await; // first tick fires immediately; startup already indexed
+                loop {
+                    tick.tick().await;
+                    spawn_local_index(periodic.clone());
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
