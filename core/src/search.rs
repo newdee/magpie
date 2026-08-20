@@ -138,6 +138,20 @@ pub fn search_files(
     files::files_by_ids(conn, &ids, &scores)
 }
 
+/// Image-to-image search: a query image's SigLIP vector against all indexed
+/// image vectors. Scores are raw cosine similarities.
+pub fn search_images(
+    conn: &Connection,
+    image_qvec: &[f32],
+    limit: usize,
+) -> Result<Vec<crate::files::FileHit>> {
+    use crate::files;
+    let scored = top_similar(files::all_image_embeddings(conn)?, image_qvec, limit);
+    let scores: std::collections::HashMap<i64, f32> = scored.iter().copied().collect();
+    let ids: Vec<i64> = scored.into_iter().map(|(id, _)| id).collect();
+    files::files_by_ids(conn, &ids, &scores)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

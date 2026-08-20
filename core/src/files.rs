@@ -47,6 +47,8 @@ pub struct FileHit {
     pub size: i64,
     pub mtime: i64,
     pub score: f32,
+    /// Base64 JPEG thumbnail for image results (None for text files).
+    pub thumb: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -381,6 +383,16 @@ fn image_doc_hash(path: &str, mtime: i64, size: i64) -> String {
     embed::doc_hash(&format!("{path}|{mtime}|{size}"))
 }
 
+/// 96px JPEG thumbnail bytes; None when encoding fails.
+fn make_thumb(img: &image::DynamicImage) -> Option<Vec<u8>> {
+    let thumb = img.thumbnail(96, 96).to_rgb8();
+    let mut out = std::io::Cursor::new(Vec::new());
+    thumb
+        .write_to(&mut out, image::ImageFormat::Jpeg)
+        .ok()
+        .map(|_| out.into_inner())
+}
+
 pub fn image_embedding_hashes(conn: &Connection) -> Result<HashMap<i64, String>> {
     let mut stmt = conn.prepare("SELECT file_id, doc_hash FROM image_embeddings")?;
     let rows = stmt
@@ -467,8 +479,19 @@ pub fn embed_pending_images(
     let mut done = 0usize;
     progress(0, total);
     for (id, path, hash) in &pending {
-        match siglip.embed_image(Path::new(path)) {
-            Ok(vec) => put_image_embedding(conn, *id, hash, &vec)?,
+        // decode once; the same decode feeds both the thumbnail and the model
+        match image::open(Path::new(path)) {
+            Ok(img) => {
+                let thumb = make_thumb(&img);
+                conn.execute(
+                    "UPDATE files SET thumb = ?2 WHERE id = ?1",
+                    params![id, thumb],
+                )?;
+                match siglip.embed_dynamic(img) {
+                    Ok(vec) => put_image_embedding(conn, *id, hash, &vec)?,
+                    Err(_) => put_image_embedding(conn, *id, hash, &[])?,
+                }
+            }
             Err(_) => put_image_embedding(conn, *id, hash, &[])?, // failed marker
         }
         done += 1;
@@ -501,24 +524,28 @@ pub fn files_fts_search(conn: &Connection, query: &str, limit: usize) -> Result<
     Ok(rows)
 }
 
+fn row_to_hit(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileHit> {
+    use base64::Engine;
+    let thumb: Option<Vec<u8>> = r.get(6)?;
+    Ok(FileHit {
+        id: r.get(0)?,
+        path: r.get(1)?,
+        name: r.get(2)?,
+        ext: r.get(3)?,
+        size: r.get(4)?,
+        mtime: r.get(5)?,
+        score: 0.0,
+        thumb: thumb.map(|b| base64::engine::general_purpose::STANDARD.encode(b)),
+    })
+}
+
+const HIT_COLS: &str = "id, path, name, ext, size, mtime, thumb";
+
 pub fn files_by_ids(conn: &Connection, ids: &[i64], scores: &HashMap<i64, f32>) -> Result<Vec<FileHit>> {
     let mut out = Vec::with_capacity(ids.len());
-    let mut stmt =
-        conn.prepare("SELECT id, path, name, ext, size, mtime FROM files WHERE id = ?1")?;
+    let mut stmt = conn.prepare(&format!("SELECT {HIT_COLS} FROM files WHERE id = ?1"))?;
     for id in ids {
-        let hit = stmt
-            .query_row([id], |r| {
-                Ok(FileHit {
-                    id: r.get(0)?,
-                    path: r.get(1)?,
-                    name: r.get(2)?,
-                    ext: r.get(3)?,
-                    size: r.get(4)?,
-                    mtime: r.get(5)?,
-                    score: 0.0,
-                })
-            })
-            .optional()?;
+        let hit = stmt.query_row([id], row_to_hit).optional()?;
         if let Some(mut h) = hit {
             h.score = scores.get(&h.id).copied().unwrap_or(0.0);
             out.push(h);
@@ -528,21 +555,11 @@ pub fn files_by_ids(conn: &Connection, ids: &[i64], scores: &HashMap<i64, f32>) 
 }
 
 pub fn recent_files(conn: &Connection, limit: usize) -> Result<Vec<FileHit>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, path, name, ext, size, mtime FROM files ORDER BY mtime DESC, id DESC LIMIT ?1",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {HIT_COLS} FROM files ORDER BY mtime DESC, id DESC LIMIT ?1"
+    ))?;
     let rows = stmt
-        .query_map([limit as i64], |r| {
-            Ok(FileHit {
-                id: r.get(0)?,
-                path: r.get(1)?,
-                name: r.get(2)?,
-                ext: r.get(3)?,
-                size: r.get(4)?,
-                mtime: r.get(5)?,
-                score: 0.0,
-            })
-        })?
+        .query_map([limit as i64], row_to_hit)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

@@ -2973,6 +2973,7 @@ name = "magpie"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "magpie-core",
  "serde",
  "serde_json",
@@ -2989,6 +2990,7 @@ name = "magpie-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "fastembed",
  "futures",
  "hf-hub",

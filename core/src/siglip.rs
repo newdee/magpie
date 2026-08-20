@@ -131,8 +131,21 @@ impl Siglip {
 
     /// Embed one image file. L2-normalized. Errors on unreadable/corrupt files.
     pub fn embed_image(&mut self, path: &Path) -> Result<Vec<f32>> {
+        let img = image::open(path)?;
+        self.embed_dynamic(img)
+    }
+
+    /// Embed an in-memory image (e.g. pasted from the clipboard).
+    pub fn embed_image_bytes(&mut self, bytes: &[u8]) -> Result<Vec<f32>> {
+        let img = image::load_from_memory(bytes)?;
+        self.embed_dynamic(img)
+    }
+
+    /// Embed an already-decoded image (lets callers reuse one decode for
+    /// both thumbnailing and embedding).
+    pub fn embed_dynamic(&mut self, img: image::DynamicImage) -> Result<Vec<f32>> {
         let s = self.img_size;
-        let img = image::open(path)?
+        let img = img
             .resize_exact(s, s, self.resample) // SigLIP squashes to square, no crop
             .to_rgb8();
         let mut pixels = Array4::<f32>::zeros((1, 3, s as usize, s as usize));

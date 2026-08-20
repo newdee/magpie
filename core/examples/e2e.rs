@@ -113,6 +113,17 @@ fn main() -> anyhow::Result<()> {
     // quality signal, printed not asserted (two synthetic images only)
     println!("top image hit: {} (bird.png expected)", hits[0].name);
 
+    // 6. image-to-image: querying with bird.png itself must rank it first
+    let self_vec = siglip.embed_image(&img_dir.join("bird.png"))?;
+    let hits = magpie_core::search::search_images(&conn, &self_vec, 5)?;
+    println!("image-to-image (bird.png as query):");
+    for h in &hits {
+        println!("  {}  score={:.4}  thumb={}", h.name, h.score, h.thumb.is_some());
+    }
+    assert_eq!(hits[0].name, "bird.png", "self-similarity must win");
+    assert!(hits[0].score > 0.99, "self cosine ~1.0, got {}", hits[0].score);
+    assert!(hits[0].thumb.is_some(), "image hits must carry a thumbnail");
+
     std::fs::remove_dir_all(&tmp).ok();
     println!("E2E OK");
     Ok(())

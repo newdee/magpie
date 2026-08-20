@@ -160,6 +160,45 @@ async fn search_local(
         .map_err(err_str)
 }
 
+/// Search indexed images with a query image: a dropped file (`path`) or
+/// pasted clipboard bytes (`bytes_b64`). The query image itself does not need
+/// to be inside an indexed folder — it is only embedded, never stored.
+#[tauri::command]
+async fn search_by_image(
+    state: State<'_, AppState>,
+    path: Option<String>,
+    bytes_b64: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<FileHit>, String> {
+    let limit = limit.unwrap_or(30).min(100);
+    let sig = state.siglip.clone();
+    let qvec = tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
+        let mut guard = sig
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("image model is busy indexing, try again shortly"))?;
+        let s = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("image model not ready yet"))?;
+        match (path, bytes_b64) {
+            (Some(p), _) => s.embed_image(std::path::Path::new(&p)),
+            (None, Some(b64)) => {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(b64.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("bad image data: {e}"))?;
+                s.embed_image_bytes(&bytes)
+            }
+            (None, None) => Err(anyhow::anyhow!("no image given")),
+        }
+    })
+    .await
+    .map_err(err_str)?
+    .map_err(err_str)?;
+
+    let conn = state.db.lock().await;
+    search::search_images(&conn, &qvec, limit).map_err(err_str)
+}
+
 #[tauri::command]
 async fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderInfo>, String> {
     let conn = state.db.lock().await;
@@ -532,6 +571,7 @@ pub fn run() {
             start_sync,
             open_repo,
             search_local,
+            search_by_image,
             list_folders,
             add_folder,
             remove_folder,

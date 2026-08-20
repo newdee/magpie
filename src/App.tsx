@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
@@ -26,6 +27,7 @@ interface FileHit {
   size: number;
   mtime: number;
   score: number;
+  thumb: string | null;
 }
 
 type Hit = RepoHit | FileHit;
@@ -69,6 +71,14 @@ const SOURCES = [
   { id: "local", label: "Local Files" },
   { id: "github-stars", label: "GitHub Stars" },
 ] as const;
+
+const IMAGE_EXT_RE = /\.(jpe?g|png|webp|bmp|gif)$/i;
+
+interface ImageQuery {
+  label: string;
+  path?: string;
+  bytesB64?: string;
+}
 
 function formatStars(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
@@ -125,6 +135,7 @@ export default function App() {
   const [tokenInput, setTokenInput] = useState("");
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [imageQuery, setImageQuery] = useState<ImageQuery | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -135,6 +146,8 @@ export default function App() {
   sourceRef.current = sourceIdx;
   const needsTokenRef = useRef(false);
   const dialogOpenRef = useRef(false);
+  const imageQueryRef = useRef<ImageQuery | null>(null);
+  imageQueryRef.current = imageQuery;
 
   const source = SOURCES[sourceIdx].id;
   const needsToken = source === "github-stars" && status !== null && !status.has_token;
@@ -175,11 +188,55 @@ export default function App() {
     }
   }, []);
 
-  // live search, debounced
+  const acceptImageQuery = useCallback((iq: ImageQuery) => {
+    setQuery("");
+    setImageQuery(iq);
+    setSourceIdx(0); // images live in the local source
+    setShowFolders(false);
+    inputRef.current?.focus();
+  }, []);
+
+  // live search, debounced; an active image query searches by similarity instead
   useEffect(() => {
+    if (imageQuery) {
+      invoke<Omit<FileHit, "kind">[]>("search_by_image", {
+        path: imageQuery.path ?? null,
+        bytesB64: imageQuery.bytesB64 ?? null,
+      })
+        .then((fs) => {
+          if (imageQueryRef.current !== imageQuery) return; // stale
+          setResults(fs.map((f) => ({ ...f, kind: "file" as const })));
+          setSelected(0);
+          setLastError(null);
+        })
+        .catch((e) => setLastError(String(e)));
+      return;
+    }
     const t = setTimeout(() => runSearch(query, sourceIdx), 120);
     return () => clearTimeout(t);
-  }, [query, sourceIdx, runSearch]);
+  }, [query, sourceIdx, imageQuery, runSearch]);
+
+  // paste an image from the clipboard to search by it
+  useEffect(() => {
+    const onPaste = async (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find((i) =>
+        i.type.startsWith("image/"),
+      );
+      if (!item) return;
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (!file) return;
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < buf.length; i += chunk) {
+        bin += String.fromCharCode(...buf.subarray(i, i + chunk));
+      }
+      acceptImageQuery({ label: "pasted image", bytesB64: btoa(bin) });
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [acceptImageQuery]);
 
   // backend events
   useEffect(() => {
@@ -220,6 +277,15 @@ export default function App() {
         inputRef.current?.focus();
         inputRef.current?.select();
         refreshStatus();
+      }),
+      // drop an image file anywhere on the palette to search by it
+      getCurrentWebview().onDragDropEvent((e) => {
+        if (e.payload.type === "drop") {
+          const p = e.payload.paths.find((x) => IMAGE_EXT_RE.test(x));
+          if (p) {
+            acceptImageQuery({ label: p.split(/[\\/]/).pop() ?? "image", path: p });
+          }
+        }
       }),
       // Spotlight behavior: hide when focus leaves, except during onboarding
       // and while a native dialog owns the focus
@@ -302,7 +368,11 @@ export default function App() {
           break;
         case "Escape":
           e.preventDefault();
-          getCurrentWindow().hide();
+          if (imageQuery) {
+            setImageQuery(null); // first Esc clears the image query
+          } else {
+            getCurrentWindow().hide();
+          }
           break;
         case "Tab":
           e.preventDefault();
@@ -310,7 +380,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, sourceIdx, openHit, switchSource],
+    [results, selected, sourceIdx, imageQuery, openHit, switchSource],
   );
 
   const refresh = useCallback(async () => {
@@ -409,19 +479,37 @@ export default function App() {
           <circle cx="6.5" cy="6.5" r="4.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
           <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
+        {imageQuery && (
+          <span className="img-chip">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <circle cx="5.5" cy="6.5" r="1.25" fill="currentColor" />
+              <path d="M2.5 12l3.5-3.5 2.5 2.5 3-3 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+            <span className="img-chip-label">{imageQuery.label}</span>
+            <button onClick={() => setImageQuery(null)} aria-label="Clear image query">
+              ✕
+            </button>
+          </span>
+        )}
         <input
           ref={inputRef}
           className="query"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            if (imageQuery) setImageQuery(null); // typing replaces the image query
+          }}
           placeholder={
-            source === "github-stars"
-              ? status && status.repo_count > 0
-                ? `Search ${status.repo_count} starred repos`
-                : "Search your stars"
-              : status && status.file_count > 0
-                ? `Search ${status.file_count} local files`
-                : "Search indexed folders"
+            imageQuery
+              ? "Searching by image similarity"
+              : source === "github-stars"
+                ? status && status.repo_count > 0
+                  ? `Search ${status.repo_count} starred repos`
+                  : "Search your stars"
+                : status && status.file_count > 0
+                  ? `Search ${status.file_count} local files, drop or paste an image`
+                  : "Search indexed folders"
           }
           autoFocus
           spellCheck={false}
@@ -605,9 +693,18 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <div className="row-main">
-                      <span className="row-title">{r.name}</span>
-                      <span className="row-sub">{parentDir(r.path)}</span>
+                    <div className="row-lead">
+                      {r.thumb && (
+                        <img
+                          className="thumb"
+                          src={`data:image/jpeg;base64,${r.thumb}`}
+                          alt=""
+                        />
+                      )}
+                      <div className="row-main">
+                        <span className="row-title">{r.name}</span>
+                        <span className="row-sub">{parentDir(r.path)}</span>
+                      </div>
                     </div>
                     <div className="row-meta">
                       {r.ext && <span>{r.ext}</span>}

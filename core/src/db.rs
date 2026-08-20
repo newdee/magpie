@@ -51,6 +51,8 @@ pub fn open_in_memory() -> Result<Connection> {
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
+    // additive migration for dbs created before thumbnails existed
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN thumb BLOB", []);
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -119,7 +121,8 @@ fn migrate(conn: &Connection) -> Result<()> {
             ext       TEXT,
             size      INTEGER NOT NULL,
             mtime     INTEGER NOT NULL,
-            content   TEXT
+            content   TEXT,
+            thumb     BLOB
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
