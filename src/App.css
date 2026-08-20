@@ -420,6 +420,12 @@ body {
   justify-content: space-between;
 }
 
+.settings-gap {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 .card-title {
   font-weight: 600;
   font-size: 15px;

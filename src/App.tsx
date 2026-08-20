@@ -157,8 +157,7 @@ export default function App() {
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
-  const [showFolders, setShowFolders] = useState(false);
-  const [showTokenCard, setShowTokenCard] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -176,6 +175,7 @@ export default function App() {
   const sourceRef = useRef(sourceIdx);
   sourceRef.current = sourceIdx;
   const needsTokenRef = useRef(false);
+  const addFolderRef = useRef<(() => void) | null>(null);
   const imageQueryRef = useRef<ImageQuery | null>(null);
   imageQueryRef.current = imageQuery;
 
@@ -234,7 +234,7 @@ export default function App() {
     setQuery("");
     setImageQuery(iq);
     setSourceIdx(0); // images live in the local source
-    setShowFolders(false);
+    setShowSettings(false);
     inputRef.current?.focus();
   }, []);
 
@@ -329,6 +329,12 @@ export default function App() {
           }
         }
       }),
+      // tray menu entry points
+      listen("open-token-card", () => setShowSettings(true)),
+      listen("open-folder-add", () => {
+        setShowSettings(true);
+        addFolderRef.current?.();
+      }),
       // no hide-on-blur: the palette stays until the user dismisses it
       // explicitly (Esc, Alt+Space, tray) — dragging files in needs the
       // window to survive losing focus
@@ -371,7 +377,7 @@ export default function App() {
     setSourceIdx(idx);
     localStorage.setItem("magpie.source", SOURCES[idx].id);
     setSelected(0);
-    setShowFolders(false);
+    setShowSettings(false);
     inputRef.current?.focus();
   }, []);
 
@@ -408,6 +414,8 @@ export default function App() {
           e.preventDefault();
           if (imageQuery) {
             setImageQuery(null); // first Esc clears the image query
+          } else if (showSettings) {
+            setShowSettings(false); // then close settings, then hide
           } else {
             getCurrentWindow().hide();
           }
@@ -418,7 +426,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, sourceIdx, imageQuery, openHit, switchSource],
+    [results, selected, sourceIdx, imageQuery, showSettings, openHit, switchSource],
   );
 
   const refresh = useCallback(async () => {
@@ -457,6 +465,8 @@ export default function App() {
     }
   }, []);
 
+  addFolderRef.current = addFolder;
+
   const removeFolder = useCallback(async (id: number) => {
     try {
       setFolders(await invoke<FolderInfo[]>("remove_folder", { folderId: id }));
@@ -471,7 +481,6 @@ export default function App() {
       : localProgress !== null || (status?.local_indexing ?? false);
   const modelWarming = status !== null && status.model === "loading";
   const modelFailed = status !== null && status.model.startsWith("failed");
-  const manageFolders = source === "local" && showFolders;
 
   const footerStatus = lastError
     ? `error: ${lastError}`
@@ -567,24 +576,22 @@ export default function App() {
           autoCorrect="off"
           autoCapitalize="off"
         />
-        {source === "local" && (
-          <button
-            className={`icon-btn ${showFolders ? "active" : ""}`}
-            onClick={() => setShowFolders((v) => !v)}
-            title="Manage indexed folders"
-            aria-label="Manage folders"
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M1.75 4.25c0-.55.45-1 1-1h3l1.5 1.5h6c.55 0 1 .45 1 1v6c0 .55-.45 1-1 1h-10.5c-.55 0-1-.45-1-1z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-        )}
+        <button
+          className={`icon-btn ${showSettings ? "active" : ""}`}
+          onClick={() => setShowSettings((v) => !v)}
+          title="Settings: GitHub token, indexed folders"
+          aria-label="Settings"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path
+              d="M8 1.9v1.8M8 12.3v1.8M1.9 8h1.8M12.3 8h1.8M3.7 3.7l1.3 1.3M11 11l1.3 1.3M12.3 3.7L11 5M5 11l-1.3 1.3"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
         <button
           className={`icon-btn ${busy ? "spinning" : ""}`}
           onClick={refresh}
@@ -605,8 +612,8 @@ export default function App() {
         </button>
       </div>
 
-      {needsToken && !showTokenCard && (
-        <button className="collapse-bar" onClick={() => setShowTokenCard(true)}>
+      {needsToken && !showSettings && (
+        <button className="collapse-bar" onClick={() => setShowSettings(true)}>
           <span>Connect GitHub to sync your stars</span>
           <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -614,15 +621,24 @@ export default function App() {
         </button>
       )}
 
-      {needsToken && showTokenCard && (
+      {source === "local" && !showSettings && folders.length === 0 && (
+        <button className="collapse-bar" onClick={() => setShowSettings(true)}>
+          <span>No folders indexed yet, add some to search locally</span>
+          <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+
+      {showSettings ? (
         <div className="card">
           <div className="card-head">
-            <p className="card-title">Connect GitHub</p>
+            <p className="card-title">GitHub</p>
             <button
               className="icon-btn"
-              onClick={() => setShowTokenCard(false)}
-              title="Collapse"
-              aria-label="Collapse"
+              onClick={() => setShowSettings(false)}
+              title="Close settings"
+              aria-label="Close settings"
             >
               <svg className="chevron up" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -630,7 +646,9 @@ export default function App() {
             </button>
           </div>
           <p className="card-body">
-            Paste a personal access token. No scopes needed, it only reads your public stars.
+            {status?.has_token && status.username
+              ? `Connected as ${status.username}. Paste a new token to replace it.`
+              : "Paste a personal access token. No scopes needed, it only reads your public stars."}
           </p>
           <div className="token-row">
             <input
@@ -662,33 +680,8 @@ export default function App() {
           >
             Create one on github.com
           </button>
-        </div>
-      )}
 
-      {source === "local" && !showFolders && folders.length === 0 && (
-        <button className="collapse-bar" onClick={() => setShowFolders(true)}>
-          <span>No folders indexed yet, add some to search locally</span>
-          <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-      )}
-
-      {manageFolders ? (
-        <div className="card">
-          <div className="card-head">
-            <p className="card-title">Indexed folders</p>
-            <button
-              className="icon-btn"
-              onClick={() => setShowFolders(false)}
-              title="Collapse"
-              aria-label="Collapse"
-            >
-              <svg className="chevron up" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-          </div>
+          <p className="card-title settings-gap">Indexed folders</p>
           <p className="card-body">
             Only folders you add are scanned. Hidden files and gitignored paths are skipped.
           </p>
@@ -790,7 +783,7 @@ export default function App() {
         )
       )}
 
-      {!needsToken && !manageFolders && results.length === 0 && query.trim() !== "" && (
+      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && (
         <div className="empty">
           {source === "github-stars" ? "No matches in your stars" : "No matches in indexed folders"}
         </div>

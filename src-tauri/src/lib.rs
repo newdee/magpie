@@ -525,17 +525,30 @@ pub fn run() {
                 local_indexing: Arc::new(AtomicBool::new(false)),
             });
 
-            // tray: Show / Sync / Quit
+            // tray: Show / Sync / token / folders / Quit
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let sync_item = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
+            let token_item =
+                MenuItem::with_id(app, "set-token", "Set GitHub token…", true, None::<&str>)?;
+            let folder_item =
+                MenuItem::with_id(app, "add-folder", "Add folder…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &sync_item, &quit])?;
+            let menu =
+                Menu::with_items(app, &[&show, &sync_item, &token_item, &folder_item, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_window(app),
                     "sync" => spawn_sync(app.clone()),
+                    "set-token" => {
+                        show_window(app);
+                        let _ = app.emit("open-token-card", ());
+                    }
+                    "add-folder" => {
+                        show_window(app);
+                        let _ = app.emit("open-folder-add", ());
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
