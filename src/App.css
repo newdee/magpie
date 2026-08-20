@@ -270,6 +270,17 @@ body {
   gap: 6px;
 }
 
+.index-hint {
+  border-top: 1px solid var(--border);
+  padding: 6px 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .thumb {
   width: 32px;
   height: 32px;

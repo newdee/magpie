@@ -582,21 +582,24 @@ export default function App() {
 
   const footerStatus = lastError
     ? `error: ${lastError}`
-    : source === "github-stars" && starsProgress
-      ? starsProgressLabel(starsProgress)
-      : source === "local" && localProgress
-        ? localProgressLabel(localProgress)
-        : modelFailed
-          ? "semantic index unavailable, keyword search only"
-          : modelWarming
-            ? "semantic index warming up"
-            : source === "local" && status?.image_model === "loading"
-              ? "image search warming up"
-              : status
-              ? source === "github-stars"
-                ? `${status.repo_count} repos indexed`
-                : `${status.file_count} files indexed`
-              : "";
+    : modelFailed
+      ? "semantic index unavailable, keyword search only"
+      : modelWarming
+        ? "semantic index warming up"
+        : source === "local" && status?.image_model === "loading"
+          ? "image search warming up"
+          : status
+            ? source === "github-stars"
+              ? `${status.repo_count} repos indexed`
+              : `${status.file_count} files indexed`
+            : "";
+
+  const indexHint = [
+    localProgress ? localProgressLabel(localProgress) : null,
+    starsProgress ? starsProgressLabel(starsProgress) : null,
+  ]
+    .filter(Boolean)
+    .join("  ·  ");
 
   return (
     <div className="panel" ref={panelRef} onKeyDown={onKeyDown}>
@@ -713,6 +716,8 @@ export default function App() {
           </svg>
         </button>
       </div>
+
+      {indexHint && <div className="index-hint">{indexHint}</div>}
 
       {needsToken && !showSettings && (
         <button className="collapse-bar" onClick={() => setShowSettings(true)}>
