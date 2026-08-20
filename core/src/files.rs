@@ -18,6 +18,9 @@ const CONTENT_CHAR_CAP: usize = 16 * 1024;
 const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024;
 const EMBED_BATCH: usize = 16;
 
+/// Image formats indexed for SigLIP visual search (no text content stored).
+const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif"];
+
 const TEXT_EXTS: &[&str] = &[
     "md", "markdown", "txt", "rst", "org", "adoc", "tex", "csv", "tsv", "json", "yaml", "yml",
     "toml", "ini", "cfg", "conf", "xml", "html", "htm", "css", "scss", "less", "js", "mjs", "cjs",
@@ -179,8 +182,13 @@ pub fn index_folders(
                     continue; // unchanged
                 }
             }
-            let Some(content) = read_text_excerpt(path) else {
-                continue; // binary or unreadable
+            let content = if is_image(path) {
+                None // pixels are indexed via SigLIP, not as text
+            } else {
+                match read_text_excerpt(path) {
+                    Some(text) => Some(text),
+                    None => continue, // binary or unreadable
+                }
             };
             let name = path
                 .file_name()
@@ -219,11 +227,17 @@ pub fn index_folders(
     Ok(report)
 }
 
+fn is_image(path: &Path) -> bool {
+    path.extension()
+        .map(|e| IMAGE_EXTS.contains(&e.to_string_lossy().to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
 fn is_indexable(path: &Path) -> bool {
     match path.extension() {
         Some(ext) => {
             let ext = ext.to_string_lossy().to_lowercase();
-            TEXT_EXTS.contains(&ext.as_str())
+            TEXT_EXTS.contains(&ext.as_str()) || IMAGE_EXTS.contains(&ext.as_str())
         }
         // extensionless: allow well-known text files by name
         None => {
@@ -351,6 +365,125 @@ pub fn all_file_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
     Ok(out)
 }
 
+// ---------- image embeddings (SigLIP space) ----------
+
+/// Wipe stored image vectors if they came from a different model.
+pub fn ensure_image_embed_model(conn: &Connection) -> Result<()> {
+    let stored = crate::db::meta_get(conn, "image_embed_model")?;
+    if stored.as_deref() != Some(crate::siglip::IMAGE_EMBED_MODEL_ID) {
+        conn.execute("DELETE FROM image_embeddings", [])?;
+        crate::db::meta_set(conn, "image_embed_model", crate::siglip::IMAGE_EMBED_MODEL_ID)?;
+    }
+    Ok(())
+}
+
+fn image_doc_hash(path: &str, mtime: i64, size: i64) -> String {
+    embed::doc_hash(&format!("{path}|{mtime}|{size}"))
+}
+
+pub fn image_embedding_hashes(conn: &Connection) -> Result<HashMap<i64, String>> {
+    let mut stmt = conn.prepare("SELECT file_id, doc_hash FROM image_embeddings")?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+    Ok(rows)
+}
+
+fn put_image_embedding(conn: &Connection, file_id: i64, doc_hash: &str, vec: &[f32]) -> Result<()> {
+    let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+    conn.execute(
+        "INSERT INTO image_embeddings(file_id, doc_hash, dim, vec) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(file_id) DO UPDATE SET doc_hash = excluded.doc_hash,
+                                            dim = excluded.dim, vec = excluded.vec",
+        params![file_id, doc_hash, vec.len() as i64, bytes],
+    )?;
+    Ok(())
+}
+
+/// All usable image vectors (dim = 0 "failed" markers are skipped).
+pub fn all_image_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
+    let mut stmt =
+        conn.prepare("SELECT file_id, dim, vec FROM image_embeddings WHERE dim > 0")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as usize, r.get::<_, Vec<u8>>(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (id, dim, bytes) in rows {
+        if bytes.len() != dim * 4 {
+            continue;
+        }
+        let vec: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        out.push((id, vec));
+    }
+    Ok(out)
+}
+
+/// Embed every image whose (path, mtime, size) changed. Blocking.
+/// Corrupt/unreadable images get a dim-0 marker so they are not retried.
+pub fn embed_pending_images(
+    conn: &Connection,
+    siglip: &mut crate::siglip::Siglip,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<usize> {
+    ensure_image_embed_model(conn)?;
+    let hashes = image_embedding_hashes(conn)?;
+    let exts = IMAGE_EXTS
+        .iter()
+        .map(|e| format!("'{e}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let pending: Vec<(i64, String, String)> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, path, mtime, size FROM files WHERE ext IN ({exts})"
+        ))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .filter_map(|(id, path, mtime, size)| {
+                let hash = image_doc_hash(&path, mtime, size);
+                if hashes.get(&id) == Some(&hash) {
+                    None
+                } else {
+                    Some((id, path, hash))
+                }
+            })
+            .collect()
+    };
+
+    let total = pending.len();
+    let mut done = 0usize;
+    progress(0, total);
+    for (id, path, hash) in &pending {
+        match siglip.embed_image(Path::new(path)) {
+            Ok(vec) => put_image_embedding(conn, *id, hash, &vec)?,
+            Err(_) => put_image_embedding(conn, *id, hash, &[])?, // failed marker
+        }
+        done += 1;
+        if done % 5 == 0 || done == total {
+            progress(done, total);
+        }
+    }
+    // drop vectors for deleted files
+    conn.execute(
+        "DELETE FROM image_embeddings WHERE file_id NOT IN (SELECT id FROM files)",
+        [],
+    )?;
+    Ok(total)
+}
+
 // ---------- retrieval ----------
 
 pub fn files_fts_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<i64>> {
@@ -448,12 +581,24 @@ mod tests {
         let conn = open_in_memory().unwrap();
         add_folder(&conn, tmp.to_str().unwrap()).unwrap();
         let report = index_folders(&conn, |_| {}).unwrap();
-        assert_eq!(report.indexed, 2, "md + rs only: png not allowlisted, secret/ gitignored");
+        assert_eq!(report.indexed, 3, "md + rs + png (image, by name); secret/ gitignored");
+        // the image is findable by filename but its bytes are not text-indexed
+        assert_eq!(files_fts_search(&conn, "image", 10).unwrap().len(), 1);
+        assert!(files_fts_search(&conn, "fakebinary", 10).unwrap().is_empty());
 
         let hits = files_fts_search(&conn, "quarterly", 10).unwrap();
         assert_eq!(hits.len(), 1);
         // gitignored content must NOT be findable
         assert!(files_fts_search(&conn, "credentials", 10).unwrap().is_empty());
+
+        // corrupt image gets a dim-0 marker and is skipped by the loader
+        let img_id: i64 = conn
+            .query_row("SELECT id FROM files WHERE name = 'image.png'", [], |r| r.get(0))
+            .unwrap();
+        put_image_embedding(&conn, img_id, "h", &[]).unwrap();
+        assert!(all_image_embeddings(&conn).unwrap().is_empty());
+        put_image_embedding(&conn, img_id, "h2", &[0.5, 0.5]).unwrap();
+        assert_eq!(all_image_embeddings(&conn).unwrap().len(), 1);
 
         // incremental: nothing re-indexed when unchanged
         let report2 = index_folders(&conn, |_| {}).unwrap();

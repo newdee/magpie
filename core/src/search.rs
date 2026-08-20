@@ -51,13 +51,15 @@ pub fn vector_search(conn: &Connection, qvec: &[f32], limit: usize) -> Result<Ve
     Ok(top_similar(db::all_embeddings(conn)?, qvec, limit))
 }
 
-/// Fuse an FTS ranking with optional vector candidates: RRF over ranks plus a
-/// small similarity term. Returns (id, score), best first.
-pub fn rank_hybrid(fts: Vec<i64>, vec: Option<Vec<(i64, f32)>>) -> Vec<(i64, f32)> {
+/// Fuse an FTS ranking with any number of vector candidate lists: RRF over
+/// ranks plus a small summed similarity term. Returns (id, score), best first.
+pub fn rank_hybrid(fts: Vec<i64>, vecs: Vec<Vec<(i64, f32)>>) -> Vec<(i64, f32)> {
     let mut lists = vec![fts];
     let mut sims: std::collections::HashMap<i64, f32> = std::collections::HashMap::new();
-    if let Some(vs) = vec {
-        sims = vs.iter().copied().collect();
+    for vs in vecs {
+        for (id, sim) in &vs {
+            *sims.entry(*id).or_default() += sim;
+        }
         lists.push(vs.into_iter().map(|(id, _)| id).collect());
     }
     let mut fused = rrf_fuse(&lists);
@@ -83,11 +85,11 @@ pub fn search(
     }
 
     let fts = db::fts_search(conn, query, CANDIDATES_PER_LIST)?;
-    let vec = match qvec {
-        Some(qvec) => Some(vector_search(conn, qvec, CANDIDATES_PER_LIST)?),
-        None => None,
+    let vecs = match qvec {
+        Some(qvec) => vec![vector_search(conn, qvec, CANDIDATES_PER_LIST)?],
+        None => vec![],
     };
-    let fused = rank_hybrid(fts, vec);
+    let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
     let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
     let repos = db::repos_by_ids(conn, &ids)?;
@@ -100,11 +102,14 @@ pub fn search(
         .collect())
 }
 
-/// Hybrid search over local files. Same recipe as repo search.
+/// Hybrid search over local files: filename/content FTS + e5 text vectors +
+/// SigLIP image vectors, all fused by rank. The two vector spaces cover
+/// disjoint id sets (text files vs images), so their similarities never mix.
 pub fn search_files(
     conn: &Connection,
     query: &str,
     qvec: Option<&[f32]>,
+    image_qvec: Option<&[f32]>,
     limit: usize,
 ) -> Result<Vec<crate::files::FileHit>> {
     use crate::files;
@@ -112,15 +117,22 @@ pub fn search_files(
         return files::recent_files(conn, limit);
     }
     let fts = files::files_fts_search(conn, query, CANDIDATES_PER_LIST)?;
-    let vec = match qvec {
-        Some(qvec) => Some(top_similar(
+    let mut vecs = Vec::new();
+    if let Some(qvec) = qvec {
+        vecs.push(top_similar(
             files::all_file_embeddings(conn)?,
             qvec,
             CANDIDATES_PER_LIST,
-        )),
-        None => None,
-    };
-    let fused = rank_hybrid(fts, vec);
+        ));
+    }
+    if let Some(image_qvec) = image_qvec {
+        vecs.push(top_similar(
+            files::all_image_embeddings(conn)?,
+            image_qvec,
+            CANDIDATES_PER_LIST,
+        ));
+    }
+    let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
     let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
     files::files_by_ids(conn, &ids, &scores)

@@ -44,6 +44,7 @@ interface Status {
   username: string | null;
   has_token: boolean;
   model: string;
+  image_model: string;
   syncing: boolean;
   local_indexing: boolean;
 }
@@ -56,7 +57,7 @@ interface StarsProgress {
 }
 
 interface LocalProgress {
-  stage: "scan" | "embed";
+  stage: "scan" | "embed" | "embed-images";
   done: number;
   total?: number;
 }
@@ -97,11 +98,11 @@ function starsProgressLabel(p: StarsProgress): string {
 }
 
 function localProgressLabel(p: LocalProgress): string {
-  return p.stage === "scan"
-    ? `scanning files… ${p.done}`
-    : (p.total ?? 0) === 0
-      ? "index up to date"
-      : `indexing ${p.done}/${p.total}`;
+  if (p.stage === "scan") return `scanning files… ${p.done}`;
+  if ((p.total ?? 0) === 0) return "index up to date";
+  return p.stage === "embed-images"
+    ? `indexing images ${p.done}/${p.total}`
+    : `indexing ${p.done}/${p.total}`;
 }
 
 export default function App() {
@@ -380,7 +381,9 @@ export default function App() {
           ? "semantic index unavailable, keyword search only"
           : modelWarming
             ? "semantic index warming up"
-            : status
+            : source === "local" && status?.image_model === "loading"
+              ? "image search warming up"
+              : status
               ? source === "github-stars"
                 ? `${status.repo_count} repos indexed`
                 : `${status.file_count} files indexed`

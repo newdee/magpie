@@ -2991,12 +2991,17 @@ dependencies = [
  "anyhow",
  "fastembed",
  "futures",
+ "hf-hub",
  "ignore",
+ "image",
+ "ndarray",
+ "ort",
  "reqwest 0.13.4",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokenizers",
  "tokio",
 ]
 

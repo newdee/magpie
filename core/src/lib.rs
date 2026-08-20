@@ -5,4 +5,5 @@ pub mod embed;
 pub mod files;
 pub mod github;
 pub mod search;
+pub mod siglip;
 pub mod sync;

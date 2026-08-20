@@ -17,3 +17,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 futures = "0.3"
 ignore = "0.4"
+# siglip.rs drives these directly; versions pinned to match fastembed's tree
+ort = "=2.0.0-rc.13"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+image = "0.25"
+ndarray = "0.17"
+hf-hub = { version = "0.5", default-features = false, features = ["ureq", "native-tls"] }

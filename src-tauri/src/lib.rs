@@ -16,6 +16,7 @@ use magpie_core::embed::Embedder;
 use magpie_core::files::{self, FileHit, FolderInfo};
 use magpie_core::github::GithubClient;
 use magpie_core::search::{self, SearchResult};
+use magpie_core::siglip::Siglip;
 use magpie_core::sync;
 
 struct AppState {
@@ -24,6 +25,8 @@ struct AppState {
     db: AsyncMutex<magpie_core::rusqlite::Connection>,
     embedder: Arc<StdMutex<Option<Embedder>>>,
     model_status: Arc<StdMutex<String>>,
+    siglip: Arc<StdMutex<Option<Siglip>>>,
+    siglip_status: Arc<StdMutex<String>>,
     sync_running: Arc<AtomicBool>,
     local_indexing: Arc<AtomicBool>,
 }
@@ -46,9 +49,12 @@ async fn search_stars(
     } else {
         let emb = state.embedder.clone();
         let q = query.clone();
+        // try_lock: while a bulk embed pass holds the model, degrade to
+        // keyword-only instead of stalling every keystroke behind the lock
         tokio::task::spawn_blocking(move || {
-            let mut guard = emb.lock().unwrap();
-            guard.as_mut().map(|e| e.embed_query(&q))
+            emb.try_lock()
+                .ok()
+                .and_then(|mut guard| guard.as_mut().map(|e| e.embed_query(&q)))
         })
         .await
         .map_err(err_str)?
@@ -76,6 +82,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "username": username,
         "has_token": has_token,
         "model": state.model_status.lock().unwrap().clone(),
+        "image_model": state.siglip_status.lock().unwrap().clone(),
         "syncing": state.sync_running.load(Ordering::SeqCst),
         "local_indexing": state.local_indexing.load(Ordering::SeqCst),
     }))
@@ -123,22 +130,34 @@ async fn search_local(
     limit: Option<usize>,
 ) -> Result<Vec<FileHit>, String> {
     let limit = limit.unwrap_or(30).min(100);
-    let qvec = if query.trim().is_empty() {
-        None
+    let (qvec, image_qvec) = if query.trim().is_empty() {
+        (None, None)
     } else {
         let emb = state.embedder.clone();
+        let sig = state.siglip.clone();
         let q = query.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut guard = emb.lock().unwrap();
-            guard.as_mut().map(|e| e.embed_query(&q))
+        // try_lock: while a bulk embed pass holds a model, degrade that vector
+        // list instead of stalling every keystroke behind the lock
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            let text = emb
+                .try_lock()
+                .ok()
+                .and_then(|mut g| g.as_mut().map(|e| e.embed_query(&q)))
+                .transpose()?;
+            let image = sig
+                .try_lock()
+                .ok()
+                .and_then(|mut g| g.as_mut().map(|s| s.embed_query(&q)))
+                .transpose()?;
+            Ok((text, image))
         })
         .await
         .map_err(err_str)?
-        .transpose()
         .map_err(err_str)?
     };
     let conn = state.db.lock().await;
-    search::search_files(&conn, &query, qvec.as_deref(), limit).map_err(err_str)
+    search::search_files(&conn, &query, qvec.as_deref(), image_qvec.as_deref(), limit)
+        .map_err(err_str)
 }
 
 #[tauri::command]
@@ -198,6 +217,7 @@ fn spawn_local_index(app: AppHandle) {
     }
     let running = state.local_indexing.clone();
     let embedder = state.embedder.clone();
+    let siglip = state.siglip.clone();
     let db_path = state.db_path.clone();
     tauri::async_runtime::spawn(async move {
         let app2 = app.clone();
@@ -207,8 +227,7 @@ fn spawn_local_index(app: AppHandle) {
             let report = files::index_folders(&conn, move |scanned| {
                 let _ = scan_app.emit("local-progress", json!({ "stage": "scan", "done": scanned }));
             })?;
-            let mut guard = embedder.lock().unwrap();
-            let embedded = match guard.as_mut() {
+            let embedded = match embedder.lock().unwrap().as_mut() {
                 Some(e) => files::embed_pending_files(&conn, e, |done, total| {
                     let _ = app2.emit(
                         "local-progress",
@@ -217,7 +236,16 @@ fn spawn_local_index(app: AppHandle) {
                 })?,
                 None => 0,
             };
-            Ok(json!({ "report": report, "embedded": embedded }))
+            let images = match siglip.lock().unwrap().as_mut() {
+                Some(s) => files::embed_pending_images(&conn, s, |done, total| {
+                    let _ = app2.emit(
+                        "local-progress",
+                        json!({ "stage": "embed-images", "done": done, "total": total }),
+                    );
+                })?,
+                None => 0, // siglip not ready; catch-up runs after its init
+            };
+            Ok(json!({ "report": report, "embedded": embedded, "images": images }))
         })
         .await;
         running.store(false, Ordering::SeqCst);
@@ -359,6 +387,59 @@ fn spawn_model_init(app: AppHandle) {
     });
 }
 
+/// Load SigLIP in the background, then embed any images that are waiting.
+fn spawn_siglip_init(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let siglip = state.siglip.clone();
+    let status = state.siglip_status.clone();
+    let model_dir = state.model_dir.clone();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn(async move {
+        *status.lock().unwrap() = "loading".into();
+        let init = tokio::task::spawn_blocking({
+            let model_dir = model_dir.clone();
+            move || Siglip::new(&model_dir)
+        })
+        .await;
+        match init {
+            Ok(Ok(s)) => {
+                *siglip.lock().unwrap() = Some(s);
+                *status.lock().unwrap() = "ready".into();
+                let _ = app.emit("model-status", "image-ready");
+                let app2 = app.clone();
+                let done = tokio::task::spawn_blocking(move || -> Result<usize> {
+                    let conn = db::open(&db_path)?;
+                    match siglip.lock().unwrap().as_mut() {
+                        Some(s) => files::embed_pending_images(&conn, s, |done, total| {
+                            let _ = app2.emit(
+                                "local-progress",
+                                json!({ "stage": "embed-images", "done": done, "total": total }),
+                            );
+                        }),
+                        None => Ok(0),
+                    }
+                })
+                .await;
+                if let Ok(Ok(n)) = done {
+                    if n > 0 {
+                        let _ = app.emit("embed-caught-up", n);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                let msg = format!("failed: {e}");
+                *status.lock().unwrap() = msg;
+                let _ = app.emit("model-status", "image-failed");
+            }
+            Err(e) => {
+                let msg = format!("failed: {e}");
+                *status.lock().unwrap() = msg;
+                let _ = app.emit("model-status", "image-failed");
+            }
+        }
+    });
+}
+
 // ---------- window / tray / shortcut ----------
 
 fn toggle_window(app: &AppHandle) {
@@ -397,6 +478,8 @@ pub fn run() {
                 db: AsyncMutex::new(conn),
                 embedder: Arc::new(StdMutex::new(None)),
                 model_status: Arc::new(StdMutex::new("loading".into())),
+                siglip: Arc::new(StdMutex::new(None)),
+                siglip_status: Arc::new(StdMutex::new("loading".into())),
                 sync_running: Arc::new(AtomicBool::new(false)),
                 local_indexing: Arc::new(AtomicBool::new(false)),
             });
@@ -430,6 +513,7 @@ pub fn run() {
             }
 
             spawn_model_init(app.handle().clone());
+            spawn_siglip_init(app.handle().clone());
             // refresh quietly at launch: stars (if token configured) + local folders
             spawn_sync(app.handle().clone());
             spawn_local_index(app.handle().clone());

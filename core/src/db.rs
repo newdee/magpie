@@ -148,6 +148,15 @@ fn migrate(conn: &Connection) -> Result<()> {
             dim      INTEGER NOT NULL,
             vec      BLOB NOT NULL
         );
+
+        -- SigLIP space for images; separate from the e5 text space by design.
+        -- dim = 0 marks "tried and failed" (corrupt file), so it is not retried.
+        CREATE TABLE IF NOT EXISTS image_embeddings (
+            file_id  INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+            doc_hash TEXT NOT NULL,
+            dim      INTEGER NOT NULL,
+            vec      BLOB NOT NULL
+        );
         "#,
     )
     .context("run migrations")?;
