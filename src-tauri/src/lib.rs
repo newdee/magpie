@@ -1,0 +1,459 @@
+//! Thin Tauri shell over star-recall-core: window/tray/shortcut plumbing + commands.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+
+use anyhow::Result;
+use serde_json::json;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::Mutex as AsyncMutex;
+
+use star_recall_core::db;
+use star_recall_core::embed::Embedder;
+use star_recall_core::files::{self, FileHit, FolderInfo};
+use star_recall_core::github::GithubClient;
+use star_recall_core::search::{self, SearchResult};
+use star_recall_core::sync;
+
+struct AppState {
+    db_path: PathBuf,
+    model_dir: PathBuf,
+    db: AsyncMutex<star_recall_core::rusqlite::Connection>,
+    embedder: Arc<StdMutex<Option<Embedder>>>,
+    model_status: Arc<StdMutex<String>>,
+    sync_running: Arc<AtomicBool>,
+    local_indexing: Arc<AtomicBool>,
+}
+
+fn err_str<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
+
+// ---------- commands ----------
+
+#[tauri::command]
+async fn search_stars(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
+    let limit = limit.unwrap_or(30).min(100);
+    let qvec = if query.trim().is_empty() {
+        None
+    } else {
+        let emb = state.embedder.clone();
+        let q = query.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = emb.lock().unwrap();
+            guard.as_mut().map(|e| e.embed_query(&q))
+        })
+        .await
+        .map_err(err_str)?
+        .transpose()
+        .map_err(err_str)?
+    };
+    let conn = state.db.lock().await;
+    search::search(&conn, &query, qvec.as_deref(), limit).map_err(err_str)
+}
+
+#[tauri::command]
+async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock().await;
+    let count = db::repo_count(&conn).map_err(err_str)?;
+    let file_count = files::file_count(&conn).map_err(err_str)?;
+    let last_sync = db::meta_get(&conn, "last_sync").map_err(err_str)?;
+    let username = db::meta_get(&conn, "username").map_err(err_str)?;
+    let has_token = db::meta_get(&conn, "token").map_err(err_str)?.is_some();
+    let embedded = db::all_embedding_hashes(&conn).map_err(err_str)?.len();
+    Ok(json!({
+        "repo_count": count,
+        "file_count": file_count,
+        "embedded_count": embedded,
+        "last_sync": last_sync,
+        "username": username,
+        "has_token": has_token,
+        "model": state.model_status.lock().unwrap().clone(),
+        "syncing": state.sync_running.load(Ordering::SeqCst),
+        "local_indexing": state.local_indexing.load(Ordering::SeqCst),
+    }))
+}
+
+#[tauri::command]
+async fn set_token(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<String, String> {
+    let client = GithubClient::new(&token).map_err(err_str)?;
+    let login = client.viewer_login().await.map_err(err_str)?;
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "token", token.trim()).map_err(err_str)?;
+        db::meta_set(&conn, "username", &login).map_err(err_str)?;
+    }
+    // first token → kick off initial sync immediately
+    spawn_sync(app);
+    Ok(login)
+}
+
+#[tauri::command]
+fn start_sync(app: AppHandle) -> Result<(), String> {
+    spawn_sync(app);
+    Ok(())
+}
+
+#[tauri::command]
+fn open_repo(app: AppHandle, url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("only https urls".into());
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(url, None::<&str>).map_err(err_str)
+}
+
+// ---------- local files ----------
+
+#[tauri::command]
+async fn search_local(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<FileHit>, String> {
+    let limit = limit.unwrap_or(30).min(100);
+    let qvec = if query.trim().is_empty() {
+        None
+    } else {
+        let emb = state.embedder.clone();
+        let q = query.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = emb.lock().unwrap();
+            guard.as_mut().map(|e| e.embed_query(&q))
+        })
+        .await
+        .map_err(err_str)?
+        .transpose()
+        .map_err(err_str)?
+    };
+    let conn = state.db.lock().await;
+    search::search_files(&conn, &query, qvec.as_deref(), limit).map_err(err_str)
+}
+
+#[tauri::command]
+async fn list_folders(state: State<'_, AppState>) -> Result<Vec<FolderInfo>, String> {
+    let conn = state.db.lock().await;
+    files::list_folders(&conn).map_err(err_str)
+}
+
+#[tauri::command]
+async fn add_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<FolderInfo>, String> {
+    let out = {
+        let conn = state.db.lock().await;
+        files::add_folder(&conn, &path).map_err(err_str)?;
+        files::list_folders(&conn).map_err(err_str)?
+    };
+    spawn_local_index(app);
+    Ok(out)
+}
+
+#[tauri::command]
+async fn remove_folder(
+    state: State<'_, AppState>,
+    folder_id: i64,
+) -> Result<Vec<FolderInfo>, String> {
+    let conn = state.db.lock().await;
+    files::remove_folder(&conn, folder_id).map_err(err_str)?;
+    files::list_folders(&conn).map_err(err_str)
+}
+
+#[tauri::command]
+fn index_local(app: AppHandle) -> Result<(), String> {
+    spawn_local_index(app);
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let allowed = {
+        let conn = state.db.lock().await;
+        files::path_is_allowed(&conn, &path).map_err(err_str)?
+    };
+    if !allowed {
+        return Err("path is outside indexed folders".into());
+    }
+    // reveal in Explorer / Finder rather than executing the file
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(err_str)
+}
+
+fn spawn_local_index(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.local_indexing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let running = state.local_indexing.clone();
+    let embedder = state.embedder.clone();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn(async move {
+        let app2 = app.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
+            let conn = db::open(&db_path)?;
+            let scan_app = app2.clone();
+            let report = files::index_folders(&conn, move |scanned| {
+                let _ = scan_app.emit("local-progress", json!({ "stage": "scan", "done": scanned }));
+            })?;
+            let mut guard = embedder.lock().unwrap();
+            let embedded = match guard.as_mut() {
+                Some(e) => files::embed_pending_files(&conn, e, |done, total| {
+                    let _ = app2.emit(
+                        "local-progress",
+                        json!({ "stage": "embed", "done": done, "total": total }),
+                    );
+                })?,
+                None => 0,
+            };
+            Ok(json!({ "report": report, "embedded": embedded }))
+        })
+        .await;
+        running.store(false, Ordering::SeqCst);
+        match outcome {
+            Ok(Ok(v)) => {
+                let _ = app.emit("local-done", v);
+            }
+            Ok(Err(e)) => {
+                let _ = app.emit("local-error", e.to_string());
+            }
+            Err(e) => {
+                let _ = app.emit("local-error", e.to_string());
+            }
+        }
+    });
+}
+
+// ---------- sync orchestration ----------
+
+fn spawn_sync(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.sync_running.swap(true, Ordering::SeqCst) {
+        return; // already running
+    }
+    let running = state.sync_running.clone();
+    let embedder = state.embedder.clone();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn(async move {
+        let outcome = run_sync(app.clone(), db_path, embedder).await;
+        running.store(false, Ordering::SeqCst);
+        match outcome {
+            Ok(v) => {
+                let _ = app.emit("sync-done", v);
+            }
+            Err(e) => {
+                let _ = app.emit("sync-error", e.to_string());
+            }
+        }
+    });
+}
+
+async fn run_sync(
+    app: AppHandle,
+    db_path: PathBuf,
+    embedder: Arc<StdMutex<Option<Embedder>>>,
+) -> Result<serde_json::Value> {
+    // own connection: WAL lets the search connection keep reading meanwhile
+    let mut conn = db::open(&db_path)?;
+    let Some(token) = db::meta_get(&conn, "token")? else {
+        // fresh install, nothing to sync yet — not an error
+        return Ok(json!({ "skipped": "no_token" }));
+    };
+    let client = GithubClient::new(&token)?;
+
+    let progress_app = app.clone();
+    let report = sync::sync(&mut conn, &client, move |p| {
+        let _ = progress_app.emit("sync-progress", &p);
+    })
+    .await?;
+    drop(conn);
+
+    let embedded = {
+        let progress_app = app.clone();
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let conn = db::open(&db_path)?;
+            let mut guard = embedder.lock().unwrap();
+            match guard.as_mut() {
+                Some(e) => sync::embed_pending(&conn, e, |p| {
+                    let _ = progress_app.emit("sync-progress", &p);
+                }),
+                None => Ok(0), // model not ready; embed_pending reruns after init
+            }
+        })
+        .await??
+    };
+
+    Ok(json!({ "report": report, "embedded": embedded }))
+}
+
+/// Load the embedding model in the background, then embed anything pending.
+fn spawn_model_init(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let embedder = state.embedder.clone();
+    let status = state.model_status.clone();
+    let model_dir = state.model_dir.clone();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn(async move {
+        *status.lock().unwrap() = "loading".into();
+        let _ = app.emit("model-status", "loading");
+        let init = tokio::task::spawn_blocking({
+            let model_dir = model_dir.clone();
+            move || Embedder::new(&model_dir)
+        })
+        .await;
+        match init {
+            Ok(Ok(e)) => {
+                *embedder.lock().unwrap() = Some(e);
+                *status.lock().unwrap() = "ready".into();
+                let _ = app.emit("model-status", "ready");
+                // catch up on vectors for repos/files ingested while the model was absent
+                let app2 = app.clone();
+                let done = tokio::task::spawn_blocking(move || -> Result<usize> {
+                    let conn = db::open(&db_path)?;
+                    let mut guard = embedder.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(e) => {
+                            let repos = sync::embed_pending(&conn, e, |p| {
+                                let _ = app2.emit("sync-progress", &p);
+                            })?;
+                            let files_n = files::embed_pending_files(&conn, e, |done, total| {
+                                let _ = app2.emit(
+                                    "local-progress",
+                                    json!({ "stage": "embed", "done": done, "total": total }),
+                                );
+                            })?;
+                            Ok(repos + files_n)
+                        }
+                        None => Ok(0),
+                    }
+                })
+                .await;
+                if let Ok(Ok(n)) = done {
+                    if n > 0 {
+                        let _ = app.emit("embed-caught-up", n);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                let msg = format!("failed: {e}");
+                *status.lock().unwrap() = msg.clone();
+                let _ = app.emit("model-status", msg);
+            }
+            Err(e) => {
+                let msg = format!("failed: {e}");
+                *status.lock().unwrap() = msg.clone();
+                let _ = app.emit("model-status", msg);
+            }
+        }
+    });
+}
+
+// ---------- window / tray / shortcut ----------
+
+fn toggle_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            show_window(app);
+        }
+    }
+}
+
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = app.emit("palette-shown", ());
+    }
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            let db_path = data_dir.join("stars.db");
+            let model_dir = data_dir.join("models");
+            let conn = db::open(&db_path)?;
+            sync::ensure_embed_model(&conn)?;
+
+            app.manage(AppState {
+                db_path,
+                model_dir,
+                db: AsyncMutex::new(conn),
+                embedder: Arc::new(StdMutex::new(None)),
+                model_status: Arc::new(StdMutex::new("loading".into())),
+                sync_running: Arc::new(AtomicBool::new(false)),
+                local_indexing: Arc::new(AtomicBool::new(false)),
+            });
+
+            // tray: Show / Sync / Quit
+            let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let sync_item = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &sync_item, &quit])?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_window(app),
+                    "sync" => spawn_sync(app.clone()),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
+            // Alt+Space toggles the palette. Registration can fail when another
+            // launcher (e.g. PowerToys Run) owns the chord — degrade to tray-only
+            // instead of crashing the app.
+            use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+            if let Err(e) = app.global_shortcut().on_shortcut("Alt+Space", |app, _sc, event| {
+                if event.state() == ShortcutState::Pressed {
+                    toggle_window(app);
+                }
+            }) {
+                eprintln!("global shortcut Alt+Space unavailable: {e}");
+            }
+
+            spawn_model_init(app.handle().clone());
+            // refresh quietly at launch: stars (if token configured) + local folders
+            spawn_sync(app.handle().clone());
+            spawn_local_index(app.handle().clone());
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            search_stars,
+            get_status,
+            set_token,
+            start_sync,
+            open_repo,
+            search_local,
+            list_folders,
+            add_folder,
+            remove_folder,
+            index_local,
+            open_file
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

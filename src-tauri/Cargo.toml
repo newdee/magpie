@@ -1,0 +1,24 @@
+[package]
+name = "star-recall"
+version = "0.1.0"
+description = "Search your GitHub stars, Spotlight-style"
+authors = ["kian"]
+edition = "2021"
+
+[lib]
+name = "star_recall_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-dialog = "2"
+star-recall-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
