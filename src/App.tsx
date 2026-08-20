@@ -108,7 +108,12 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Hit[]>([]);
   const [selected, setSelected] = useState(0);
-  const [sourceIdx, setSourceIdx] = useState(0);
+  // default to local files; remember the last used source across restarts
+  const [sourceIdx, setSourceIdx] = useState(() => {
+    const saved = localStorage.getItem("magpie.source");
+    const idx = SOURCES.findIndex((s) => s.id === saved);
+    return idx >= 0 ? idx : SOURCES.findIndex((s) => s.id === "local");
+  });
   const [status, setStatus] = useState<Status | null>(null);
   const [starsProgress, setStarsProgress] = useState<StarsProgress | null>(null);
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
@@ -259,6 +264,7 @@ export default function App() {
 
   const switchSource = useCallback((idx: number) => {
     setSourceIdx(idx);
+    localStorage.setItem("magpie.source", SOURCES[idx].id);
     setSelected(0);
     setShowFolders(false);
     inputRef.current?.focus();
