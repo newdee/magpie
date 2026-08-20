@@ -85,7 +85,7 @@ type RepoSort = "relevance" | "starred" | "stars";
 const SORTS: { id: RepoSort; label: string }[] = [
   { id: "relevance", label: "match" },
   { id: "starred", label: "recent" },
-  { id: "stars", label: "★" },
+  { id: "stars", label: "stars" },
 ];
 
 function formatStars(n: number): string {
