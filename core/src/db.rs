@@ -320,8 +320,16 @@ pub fn repos_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<Repo>> {
 }
 
 pub fn recent_repos(conn: &Connection, limit: usize) -> Result<Vec<Repo>> {
+    repos_ordered(conn, "starred_at DESC, id DESC", limit)
+}
+
+pub fn repos_by_stars(conn: &Connection, limit: usize) -> Result<Vec<Repo>> {
+    repos_ordered(conn, "stars DESC, id DESC", limit)
+}
+
+fn repos_ordered(conn: &Connection, order: &str, limit: usize) -> Result<Vec<Repo>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {REPO_COLS} FROM repos ORDER BY starred_at DESC, id DESC LIMIT ?1"
+        "SELECT {REPO_COLS} FROM repos ORDER BY {order} LIMIT ?1"
     ))?;
     let rows = stmt
         .query_map([limit as i64], row_to_repo)?

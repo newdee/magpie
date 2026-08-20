@@ -70,15 +70,33 @@ pub fn rank_hybrid(fts: Vec<i64>, vecs: Vec<Vec<(i64, f32)>>) -> Vec<(i64, f32)>
     fused
 }
 
-/// Hybrid search. `qvec` is None when the embedding model is not ready — FTS-only then.
+/// Ordering applied to matched repos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RepoSort {
+    /// Hybrid retrieval score (default).
+    Relevance,
+    /// Most recently starred first.
+    Starred,
+    /// Highest star count first.
+    Stars,
+}
+
+/// Hybrid search. `qvec` is None when the embedding model is not ready — FTS-only
+/// then. Non-relevance sorts reorder the matched candidate set.
 pub fn search(
     conn: &Connection,
     query: &str,
     qvec: Option<&[f32]>,
+    sort: RepoSort,
     limit: usize,
 ) -> Result<Vec<SearchResult>> {
     if query.trim().is_empty() {
-        return Ok(db::recent_repos(conn, limit)?
+        let repos = match sort {
+            RepoSort::Stars => db::repos_by_stars(conn, limit)?,
+            _ => db::recent_repos(conn, limit)?,
+        };
+        return Ok(repos
             .into_iter()
             .map(|repo| SearchResult { repo, score: 0.0 })
             .collect());
@@ -91,15 +109,37 @@ pub fn search(
     };
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
-    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
-    let repos = db::repos_by_ids(conn, &ids)?;
-    Ok(repos
+    // for alternate sorts, reorder the whole candidate set before truncating
+    let take = if sort == RepoSort::Relevance {
+        limit
+    } else {
+        fused.len()
+    };
+    let ids: Vec<i64> = fused.iter().take(take).map(|(id, _)| *id).collect();
+    let mut results: Vec<SearchResult> = db::repos_by_ids(conn, &ids)?
         .into_iter()
         .map(|repo| {
             let score = scores.get(&repo.id).copied().unwrap_or(0.0);
             SearchResult { repo, score }
         })
-        .collect())
+        .collect();
+    match sort {
+        RepoSort::Relevance => {}
+        RepoSort::Starred => results.sort_by(|a, b| {
+            b.repo
+                .starred_at
+                .cmp(&a.repo.starred_at)
+                .then(a.repo.id.cmp(&b.repo.id))
+        }),
+        RepoSort::Stars => results.sort_by(|a, b| {
+            b.repo
+                .stars
+                .cmp(&a.repo.stars)
+                .then(a.repo.id.cmp(&b.repo.id))
+        }),
+    }
+    results.truncate(limit);
+    Ok(results)
 }
 
 /// Hybrid search over local files: filename/content FTS + e5 text vectors +
@@ -236,8 +276,8 @@ mod tests {
         crate::db::put_embedding(&conn, 2, "h", &[0.0, 1.0]).unwrap();
 
         // both match FTS equally on "tool"; the query vector must break the tie
-        let towards_1 = search(&conn, "tool", Some(&[1.0, 0.0]), 10).unwrap();
-        let towards_2 = search(&conn, "tool", Some(&[0.0, 1.0]), 10).unwrap();
+        let towards_1 = search(&conn, "tool", Some(&[1.0, 0.0]), RepoSort::Relevance, 10).unwrap();
+        let towards_2 = search(&conn, "tool", Some(&[0.0, 1.0]), RepoSort::Relevance, 10).unwrap();
         assert_eq!(towards_1.len(), 2);
         assert_eq!(towards_1[0].repo.id, 1, "qvec [1,0] must rank repo 1 first");
         assert_eq!(towards_2[0].repo.id, 2, "qvec [0,1] must rank repo 2 first");
@@ -245,14 +285,21 @@ mod tests {
         assert!(towards_1[0].score > towards_1[1].score);
 
         // FTS-only fallback still returns both
-        let fts_only = search(&conn, "tool", None, 10).unwrap();
+        let fts_only = search(&conn, "tool", None, RepoSort::Relevance, 10).unwrap();
         assert_eq!(fts_only.len(), 2);
+
+        // alternate sorts reorder matches: repo 2 starred later, repo 1 has more stars
+        conn.execute("UPDATE repos SET stars = 500 WHERE id = 1", []).unwrap();
+        let by_starred = search(&conn, "tool", None, RepoSort::Starred, 10).unwrap();
+        assert_eq!(by_starred[0].repo.id, 2, "starred_at 2026-01-02 wins");
+        let by_stars = search(&conn, "tool", None, RepoSort::Stars, 10).unwrap();
+        assert_eq!(by_stars[0].repo.id, 1, "500 stars wins");
     }
 
     #[test]
     fn empty_query_returns_recent() {
         let conn = crate::db::open_in_memory().unwrap();
-        let results = search(&conn, "   ", None, 10).unwrap();
+        let results = search(&conn, "   ", None, RepoSort::Relevance, 10).unwrap();
         assert!(results.is_empty());
     }
 }

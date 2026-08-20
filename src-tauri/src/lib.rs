@@ -41,8 +41,10 @@ fn err_str<E: std::fmt::Display>(e: E) -> String {
 async fn search_stars(
     state: State<'_, AppState>,
     query: String,
+    sort: Option<search::RepoSort>,
     limit: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
+    let sort = sort.unwrap_or(search::RepoSort::Relevance);
     let limit = limit.unwrap_or(30).min(100);
     let qvec = if query.trim().is_empty() {
         None
@@ -62,7 +64,7 @@ async fn search_stars(
         .map_err(err_str)?
     };
     let conn = state.db.lock().await;
-    search::search(&conn, &query, qvec.as_deref(), limit).map_err(err_str)
+    search::search(&conn, &query, qvec.as_deref(), sort, limit).map_err(err_str)
 }
 
 #[tauri::command]

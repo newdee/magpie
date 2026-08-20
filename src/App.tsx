@@ -80,6 +80,13 @@ interface ImageQuery {
   bytesB64?: string;
 }
 
+type RepoSort = "relevance" | "starred" | "stars";
+const SORTS: { id: RepoSort; label: string }[] = [
+  { id: "relevance", label: "match" },
+  { id: "starred", label: "recent" },
+  { id: "stars", label: "★" },
+];
+
 function formatStars(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
   return String(n);
@@ -136,6 +143,10 @@ export default function App() {
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [imageQuery, setImageQuery] = useState<ImageQuery | null>(null);
+  const [repoSort, setRepoSort] = useState<RepoSort>(() => {
+    const saved = localStorage.getItem("magpie.sort") as RepoSort | null;
+    return saved && SORTS.some((s) => s.id === saved) ? saved : "relevance";
+  });
 
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -145,7 +156,6 @@ export default function App() {
   const sourceRef = useRef(sourceIdx);
   sourceRef.current = sourceIdx;
   const needsTokenRef = useRef(false);
-  const dialogOpenRef = useRef(false);
   const imageQueryRef = useRef<ImageQuery | null>(null);
   imageQueryRef.current = imageQuery;
 
@@ -169,11 +179,17 @@ export default function App() {
     }
   }, []);
 
+  const repoSortRef = useRef(repoSort);
+  repoSortRef.current = repoSort;
+
   const runSearch = useCallback(async (q: string, srcIdx: number) => {
     try {
       let hits: Hit[];
       if (SOURCES[srcIdx].id === "github-stars") {
-        const rs = await invoke<Omit<RepoHit, "kind">[]>("search_stars", { query: q });
+        const rs = await invoke<Omit<RepoHit, "kind">[]>("search_stars", {
+          query: q,
+          sort: repoSortRef.current,
+        });
         hits = rs.map((r) => ({ ...r, kind: "repo" as const }));
       } else {
         const fs = await invoke<Omit<FileHit, "kind">[]>("search_local", { query: q });
@@ -214,7 +230,7 @@ export default function App() {
     }
     const t = setTimeout(() => runSearch(query, sourceIdx), 120);
     return () => clearTimeout(t);
-  }, [query, sourceIdx, imageQuery, runSearch]);
+  }, [query, sourceIdx, imageQuery, repoSort, runSearch]);
 
   // paste an image from the clipboard to search by it
   useEffect(() => {
@@ -287,13 +303,9 @@ export default function App() {
           }
         }
       }),
-      // Spotlight behavior: hide when focus leaves, except during onboarding
-      // and while a native dialog owns the focus
-      getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-        if (!focused && !needsTokenRef.current && !dialogOpenRef.current) {
-          getCurrentWindow().hide();
-        }
-      }),
+      // no hide-on-blur: the palette stays until the user dismisses it
+      // explicitly (Esc, Alt+Space, tray) — dragging files in needs the
+      // window to survive losing focus
     ];
     return () => {
       subs.forEach((p) => p.then((un) => un()));
@@ -409,13 +421,7 @@ export default function App() {
   }, [tokenInput, tokenBusy, refreshStatus]);
 
   const addFolder = useCallback(async () => {
-    dialogOpenRef.current = true;
-    let dir: string | string[] | null = null;
-    try {
-      dir = await openDialog({ directory: true, multiple: false });
-    } finally {
-      dialogOpenRef.current = false;
-    }
+    const dir = await openDialog({ directory: true, multiple: false });
     if (typeof dir !== "string") return;
     try {
       setFolders(await invoke<FolderInfo[]>("add_folder", { path: dir }));
@@ -472,6 +478,25 @@ export default function App() {
             {s.label}
           </button>
         ))}
+        {source === "github-stars" && (
+          <span className="sort-group">
+            {SORTS.map((s) => (
+              <button
+                key={s.id}
+                className={`source ${repoSort === s.id ? "active" : ""}`}
+                onClick={() => {
+                  setRepoSort(s.id);
+                  localStorage.setItem("magpie.sort", s.id);
+                  inputRef.current?.focus();
+                }}
+                tabIndex={-1}
+                title={`Sort by ${s.id}`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </span>
+        )}
       </div>
 
       <div className="input-row">
