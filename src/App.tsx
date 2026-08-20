@@ -65,8 +65,8 @@ const PAGE = 8;
 const WINDOW_WIDTH = 720;
 
 const SOURCES = [
-  { id: "github-stars", label: "GitHub Stars" },
   { id: "local", label: "Local Files" },
+  { id: "github-stars", label: "GitHub Stars" },
 ] as const;
 
 function formatStars(n: number): string {
