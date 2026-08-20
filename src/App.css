@@ -345,6 +345,14 @@ body {
   text-align: right;
 }
 
+.sim {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--accent);
+  min-width: 38px;
+  text-align: right;
+}
+
 .mono {
   font-family: var(--font-mono);
   font-size: 11.5px;

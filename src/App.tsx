@@ -709,6 +709,11 @@ export default function App() {
                     <div className="row-meta">
                       {r.ext && <span>{r.ext}</span>}
                       <span className="mono">{formatSize(r.size)}</span>
+                      {imageQuery && (
+                        <span className="sim">
+                          {Math.max(0, Math.round(r.score * 100))}%
+                        </span>
+                      )}
                     </div>
                   </>
                 )}
