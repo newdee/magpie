@@ -15,7 +15,7 @@ use magpie_core::db;
 use magpie_core::embed::Embedder;
 use magpie_core::files::{self, FileHit, FolderInfo};
 use magpie_core::github::GithubClient;
-use magpie_core::search::{self, SearchResult};
+use magpie_core::search::{self, SearchResult, VectorStore};
 use magpie_core::siglip::Siglip;
 use magpie_core::sync;
 
@@ -27,8 +27,19 @@ struct AppState {
     model_status: Arc<StdMutex<String>>,
     siglip: Arc<StdMutex<Option<Siglip>>>,
     siglip_status: Arc<StdMutex<String>>,
+    /// All embedding vectors, resident; reloaded after every embed/sync pass.
+    store: Arc<StdMutex<VectorStore>>,
     sync_running: Arc<AtomicBool>,
     local_indexing: Arc<AtomicBool>,
+}
+
+/// Reload the resident vector store from the database.
+fn reload_store(db_path: &std::path::Path, store: &Arc<StdMutex<VectorStore>>) {
+    if let Ok(conn) = db::open(db_path) {
+        if let Ok(fresh) = VectorStore::load(&conn) {
+            *store.lock().unwrap() = fresh;
+        }
+    }
 }
 
 fn err_str<E: std::fmt::Display>(e: E) -> String {
@@ -64,7 +75,8 @@ async fn search_stars(
         .map_err(err_str)?
     };
     let conn = state.db.lock().await;
-    search::search(&conn, &query, qvec.as_deref(), sort, limit).map_err(err_str)
+    let store = state.store.lock().unwrap();
+    search::search(&conn, &store, &query, qvec.as_deref(), sort, limit).map_err(err_str)
 }
 
 #[tauri::command]
@@ -158,8 +170,16 @@ async fn search_local(
         .map_err(err_str)?
     };
     let conn = state.db.lock().await;
-    search::search_files(&conn, &query, qvec.as_deref(), image_qvec.as_deref(), limit)
-        .map_err(err_str)
+    let store = state.store.lock().unwrap();
+    search::search_files(
+        &conn,
+        &store,
+        &query,
+        qvec.as_deref(),
+        image_qvec.as_deref(),
+        limit,
+    )
+    .map_err(err_str)
 }
 
 /// Search indexed images with a query image: a dropped file (`path`) or
@@ -198,7 +218,14 @@ async fn search_by_image(
     .map_err(err_str)?;
 
     let conn = state.db.lock().await;
-    search::search_images(&conn, &qvec, limit).map_err(err_str)
+    let store = state.store.lock().unwrap();
+    search::search_images(&conn, &store, &qvec, limit).map_err(err_str)
+}
+
+/// Thumbnail of a query image for the input-row chip. Read-only, never stored.
+#[tauri::command]
+fn preview_thumb(path: String) -> Result<Option<String>, String> {
+    Ok(files::thumb_b64_for(std::path::Path::new(&path)))
 }
 
 #[tauri::command]
@@ -260,8 +287,10 @@ fn spawn_local_index(app: AppHandle) {
     let embedder = state.embedder.clone();
     let siglip = state.siglip.clone();
     let db_path = state.db_path.clone();
+    let store = state.store.clone();
     tauri::async_runtime::spawn(async move {
         let app2 = app.clone();
+        let store_path = db_path.clone();
         let outcome = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
             let conn = db::open(&db_path)?;
             let scan_app = app2.clone();
@@ -289,6 +318,7 @@ fn spawn_local_index(app: AppHandle) {
             Ok(json!({ "report": report, "embedded": embedded, "images": images }))
         })
         .await;
+        reload_store(&store_path, &store);
         running.store(false, Ordering::SeqCst);
         match outcome {
             Ok(Ok(v)) => {
@@ -314,8 +344,10 @@ fn spawn_sync(app: AppHandle) {
     let running = state.sync_running.clone();
     let embedder = state.embedder.clone();
     let db_path = state.db_path.clone();
+    let store = state.store.clone();
     tauri::async_runtime::spawn(async move {
-        let outcome = run_sync(app.clone(), db_path, embedder).await;
+        let outcome = run_sync(app.clone(), db_path.clone(), embedder).await;
+        reload_store(&db_path, &store);
         running.store(false, Ordering::SeqCst);
         match outcome {
             Ok(v) => {
@@ -373,6 +405,7 @@ fn spawn_model_init(app: AppHandle) {
     let status = state.model_status.clone();
     let model_dir = state.model_dir.clone();
     let db_path = state.db_path.clone();
+    let store = state.store.clone();
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let _ = app.emit("model-status", "loading");
@@ -388,8 +421,9 @@ fn spawn_model_init(app: AppHandle) {
                 let _ = app.emit("model-status", "ready");
                 // catch up on vectors for repos/files ingested while the model was absent
                 let app2 = app.clone();
+                let catchup_path = db_path.clone();
                 let done = tokio::task::spawn_blocking(move || -> Result<usize> {
-                    let conn = db::open(&db_path)?;
+                    let conn = db::open(&catchup_path)?;
                     let mut guard = embedder.lock().unwrap();
                     match guard.as_mut() {
                         Some(e) => {
@@ -408,6 +442,7 @@ fn spawn_model_init(app: AppHandle) {
                     }
                 })
                 .await;
+                reload_store(&db_path, &store);
                 if let Ok(Ok(n)) = done {
                     if n > 0 {
                         let _ = app.emit("embed-caught-up", n);
@@ -435,6 +470,7 @@ fn spawn_siglip_init(app: AppHandle) {
     let status = state.siglip_status.clone();
     let model_dir = state.model_dir.clone();
     let db_path = state.db_path.clone();
+    let store = state.store.clone();
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let init = tokio::task::spawn_blocking({
@@ -448,8 +484,9 @@ fn spawn_siglip_init(app: AppHandle) {
                 *status.lock().unwrap() = "ready".into();
                 let _ = app.emit("model-status", "image-ready");
                 let app2 = app.clone();
+                let catchup_path = db_path.clone();
                 let done = tokio::task::spawn_blocking(move || -> Result<usize> {
-                    let conn = db::open(&db_path)?;
+                    let conn = db::open(&catchup_path)?;
                     match siglip.lock().unwrap().as_mut() {
                         Some(s) => files::embed_pending_images(&conn, s, |done, total| {
                             let _ = app2.emit(
@@ -461,6 +498,7 @@ fn spawn_siglip_init(app: AppHandle) {
                     }
                 })
                 .await;
+                reload_store(&db_path, &store);
                 if let Ok(Ok(n)) = done {
                     if n > 0 {
                         let _ = app.emit("embed-caught-up", n);
@@ -512,11 +550,13 @@ pub fn run() {
             let model_dir = data_dir.join("models");
             let conn = db::open(&db_path)?;
             sync::ensure_embed_model(&conn)?;
+            let store = VectorStore::load(&conn).unwrap_or_else(|_| VectorStore::empty());
 
             app.manage(AppState {
                 db_path,
                 model_dir,
                 db: AsyncMutex::new(conn),
+                store: Arc::new(StdMutex::new(store)),
                 embedder: Arc::new(StdMutex::new(None)),
                 model_status: Arc::new(StdMutex::new("loading".into())),
                 siglip: Arc::new(StdMutex::new(None)),
@@ -599,6 +639,7 @@ pub fn run() {
             open_repo,
             search_local,
             search_by_image,
+            preview_thumb,
             list_folders,
             add_folder,
             remove_folder,

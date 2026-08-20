@@ -29,6 +29,7 @@ interface FileHit {
   mtime: number;
   score: number;
   thumb: string | null;
+  snippet: string | null;
 }
 
 type Hit = RepoHit | FileHit;
@@ -79,6 +80,8 @@ interface ImageQuery {
   label: string;
   path?: string;
   bytesB64?: string;
+  /// preview for the input-row chip (blob: URL or data: URL)
+  thumbSrc?: string;
 }
 
 type RepoSort = "relevance" | "starred" | "stars";
@@ -121,6 +124,21 @@ function relTimeFromMs(ms: number): string | null {
 function parentDir(path: string): string {
   const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
   return cut > 0 ? path.slice(0, cut) : path;
+}
+
+/// FTS snippet with \u0001..\u0002 sentinels around matches → <mark> nodes
+function renderSnippet(s: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  s.split("\u0001").forEach((seg, i) => {
+    if (i === 0) {
+      nodes.push(seg);
+      return;
+    }
+    const [hit, ...rest] = seg.split("\u0002");
+    nodes.push(<mark key={i}>{hit}</mark>);
+    nodes.push(rest.join("\u0002"));
+  });
+  return nodes;
 }
 
 function starsProgressLabel(p: StarsProgress): string {
@@ -258,6 +276,14 @@ export default function App() {
     return () => clearTimeout(t);
   }, [query, sourceIdx, imageQuery, repoSort, runSearch]);
 
+  // release blob preview URLs when the image query changes or clears
+  useEffect(() => {
+    const src = imageQuery?.thumbSrc;
+    return () => {
+      if (src?.startsWith("blob:")) URL.revokeObjectURL(src);
+    };
+  }, [imageQuery]);
+
   // paste an image from the clipboard to search by it
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
@@ -274,7 +300,11 @@ export default function App() {
       for (let i = 0; i < buf.length; i += chunk) {
         bin += String.fromCharCode(...buf.subarray(i, i + chunk));
       }
-      acceptImageQuery({ label: "pasted image", bytesB64: btoa(bin) });
+      acceptImageQuery({
+        label: "pasted image",
+        bytesB64: btoa(bin),
+        thumbSrc: URL.createObjectURL(file),
+      });
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -321,11 +351,18 @@ export default function App() {
         refreshStatus();
       }),
       // drop an image file anywhere on the palette to search by it
-      getCurrentWebview().onDragDropEvent((e) => {
+      getCurrentWebview().onDragDropEvent(async (e) => {
         if (e.payload.type === "drop") {
           const p = e.payload.paths.find((x) => IMAGE_EXT_RE.test(x));
           if (p) {
-            acceptImageQuery({ label: p.split(/[\\/]/).pop() ?? "image", path: p });
+            const thumb = await invoke<string | null>("preview_thumb", { path: p }).catch(
+              () => null,
+            );
+            acceptImageQuery({
+              label: p.split(/[\\/]/).pop() ?? "image",
+              path: p,
+              thumbSrc: thumb ? `data:image/jpeg;base64,${thumb}` : undefined,
+            });
           }
         }
       }),
@@ -541,11 +578,15 @@ export default function App() {
         </svg>
         {imageQuery && (
           <span className="img-chip">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <circle cx="5.5" cy="6.5" r="1.25" fill="currentColor" />
-              <path d="M2.5 12l3.5-3.5 2.5 2.5 3-3 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-            </svg>
+            {imageQuery.thumbSrc ? (
+              <img className="chip-thumb" src={imageQuery.thumbSrc} alt="" />
+            ) : (
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <circle cx="5.5" cy="6.5" r="1.25" fill="currentColor" />
+                <path d="M2.5 12l3.5-3.5 2.5 2.5 3-3 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+            )}
             <span className="img-chip-label">{imageQuery.label}</span>
             <button onClick={() => setImageQuery(null)} aria-label="Clear image query">
               ✕
@@ -755,7 +796,9 @@ export default function App() {
                       )}
                       <div className="row-main">
                         <span className="row-title">{r.name}</span>
-                        <span className="row-sub">{parentDir(r.path)}</span>
+                        <span className="row-sub">
+                          {r.snippet ? renderSnippet(r.snippet) : parentDir(r.path)}
+                        </span>
                       </div>
                     </div>
                     <div className="row-meta">

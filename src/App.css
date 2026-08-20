@@ -282,6 +282,14 @@ body {
   flex-shrink: 0;
 }
 
+.chip-thumb {
+  width: 20px;
+  height: 20px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
 .img-chip-label {
   white-space: nowrap;
   overflow: hidden;
@@ -333,6 +341,13 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.row-sub mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 .row-meta {

@@ -145,11 +145,17 @@ fn migrate(conn: &Connection) -> Result<()> {
             VALUES (new.id, new.name, new.path, new.content);
         END;
 
-        CREATE TABLE IF NOT EXISTS file_embeddings (
-            file_id  INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
-            doc_hash TEXT NOT NULL,
-            dim      INTEGER NOT NULL,
-            vec      BLOB NOT NULL
+        -- pre-1.0 schema step: single-vector-per-file replaced by chunks;
+        -- dropped vectors rebuild automatically on the next index pass
+        DROP TABLE IF EXISTS file_embeddings;
+
+        CREATE TABLE IF NOT EXISTS file_chunks (
+            file_id   INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            chunk_idx INTEGER NOT NULL,
+            doc_hash  TEXT NOT NULL,
+            dim       INTEGER NOT NULL,
+            vec       BLOB NOT NULL,
+            PRIMARY KEY (file_id, chunk_idx)
         );
 
         -- SigLIP space for images; separate from the e5 text space by design.

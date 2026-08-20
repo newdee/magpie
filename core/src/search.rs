@@ -34,21 +34,67 @@ pub fn rrf_fuse(lists: &[Vec<i64>]) -> Vec<(i64, f32)> {
     out
 }
 
-/// Brute-force top-k over a set of embeddings. Returns (id, similarity), best first.
-pub fn top_similar(all: Vec<(i64, Vec<f32>)>, qvec: &[f32], limit: usize) -> Vec<(i64, f32)> {
+/// All embedding vectors held resident in memory. Reload after any embed or
+/// sync pass; per-query loading from SQLite does not survive chunk-scale
+/// corpora (tens of MB per keystroke).
+pub struct VectorStore {
+    pub repos: Vec<(i64, Vec<f32>)>,
+    /// (file_id, chunk vector); file_id repeats across a file's chunks.
+    pub file_chunks: Vec<(i64, Vec<f32>)>,
+    pub images: Vec<(i64, Vec<f32>)>,
+}
+
+impl VectorStore {
+    pub fn load(conn: &Connection) -> Result<Self> {
+        Ok(Self {
+            repos: db::all_embeddings(conn)?,
+            file_chunks: crate::files::all_file_chunk_embeddings(conn)?,
+            images: crate::files::all_image_embeddings(conn)?,
+        })
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            repos: Vec::new(),
+            file_chunks: Vec::new(),
+            images: Vec::new(),
+        }
+    }
+}
+
+/// Brute-force top-k over embeddings. Returns (id, similarity), best first.
+pub fn top_similar(all: &[(i64, Vec<f32>)], qvec: &[f32], limit: usize) -> Vec<(i64, f32)> {
     let mut scored: Vec<(i64, f32)> = all
-        .into_iter()
+        .iter()
         .filter(|(_, v)| v.len() == qvec.len())
-        .map(|(id, v)| (id, dot(qvec, &v)))
+        .map(|(id, v)| (*id, dot(qvec, v)))
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     scored.truncate(limit);
     scored
 }
 
-/// Vector candidates over repo embeddings.
-pub fn vector_search(conn: &Connection, qvec: &[f32], limit: usize) -> Result<Vec<(i64, f32)>> {
-    Ok(top_similar(db::all_embeddings(conn)?, qvec, limit))
+/// Like top_similar, but ids repeat (chunks): a file scores as its best chunk.
+pub fn top_similar_grouped(
+    all: &[(i64, Vec<f32>)],
+    qvec: &[f32],
+    limit: usize,
+) -> Vec<(i64, f32)> {
+    let mut best: std::collections::HashMap<i64, f32> = std::collections::HashMap::new();
+    for (id, v) in all {
+        if v.len() != qvec.len() {
+            continue;
+        }
+        let sim = dot(qvec, v);
+        let entry = best.entry(*id).or_insert(f32::NEG_INFINITY);
+        if sim > *entry {
+            *entry = sim;
+        }
+    }
+    let mut scored: Vec<(i64, f32)> = best.into_iter().collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    scored.truncate(limit);
+    scored
 }
 
 /// Fuse an FTS ranking with any number of vector candidate lists: RRF over
@@ -86,6 +132,7 @@ pub enum RepoSort {
 /// then. Non-relevance sorts reorder the matched candidate set.
 pub fn search(
     conn: &Connection,
+    store: &VectorStore,
     query: &str,
     qvec: Option<&[f32]>,
     sort: RepoSort,
@@ -102,7 +149,7 @@ pub fn search(
 
     let fts = db::fts_search(conn, query, CANDIDATES_PER_LIST)?;
     let vecs = match qvec {
-        Some(qvec) => vec![vector_search(conn, qvec, CANDIDATES_PER_LIST)?],
+        Some(qvec) => vec![top_similar(&store.repos, qvec, CANDIDATES_PER_LIST)],
         None => vec![],
     };
     let fused = rank_hybrid(fts, vecs);
@@ -141,6 +188,7 @@ pub fn search(
 /// disjoint id sets (text files vs images), so their similarities never mix.
 pub fn search_files(
     conn: &Connection,
+    store: &VectorStore,
     query: &str,
     qvec: Option<&[f32]>,
     image_qvec: Option<&[f32]>,
@@ -150,40 +198,47 @@ pub fn search_files(
     if query.trim().is_empty() {
         return files::recent_files(conn, limit);
     }
-    let fts = files::files_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let fts_hits = files::files_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let snippets: std::collections::HashMap<i64, String> = fts_hits
+        .iter()
+        .filter(|(_, s)| s.contains('\u{1}'))
+        .map(|(id, s)| (*id, s.clone()))
+        .collect();
+    let fts: Vec<i64> = fts_hits.into_iter().map(|(id, _)| id).collect();
     let mut vecs = Vec::new();
     if let Some(qvec) = qvec {
-        vecs.push(top_similar(
-            files::all_file_embeddings(conn)?,
+        // a file ranks by its best chunk
+        vecs.push(top_similar_grouped(
+            &store.file_chunks,
             qvec,
             CANDIDATES_PER_LIST,
         ));
     }
     if let Some(image_qvec) = image_qvec {
-        vecs.push(top_similar(
-            files::all_image_embeddings(conn)?,
-            image_qvec,
-            CANDIDATES_PER_LIST,
-        ));
+        vecs.push(top_similar(&store.images, image_qvec, CANDIDATES_PER_LIST));
     }
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
     let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
-    files::files_by_ids(conn, &ids, &scores)
+    let mut hits = files::files_by_ids(conn, &ids, &scores)?;
+    for h in &mut hits {
+        h.snippet = snippets.get(&h.id).cloned();
+    }
+    Ok(hits)
 }
 
 /// Image-to-image search: a query image's SigLIP vector against all indexed
 /// image vectors. Scores are raw cosine similarities.
 pub fn search_images(
     conn: &Connection,
+    store: &VectorStore,
     image_qvec: &[f32],
     limit: usize,
 ) -> Result<Vec<crate::files::FileHit>> {
-    use crate::files;
-    let scored = top_similar(files::all_image_embeddings(conn)?, image_qvec, limit);
+    let scored = top_similar(&store.images, image_qvec, limit);
     let scores: std::collections::HashMap<i64, f32> = scored.iter().copied().collect();
     let ids: Vec<i64> = scored.into_iter().map(|(id, _)| id).collect();
-    files::files_by_ids(conn, &ids, &scores)
+    crate::files::files_by_ids(conn, &ids, &scores)
 }
 
 #[cfg(test)]
@@ -233,14 +288,24 @@ mod tests {
         crate::db::put_embedding(&conn, 1, "h", &[1.0, 0.0]).unwrap();
         crate::db::put_embedding(&conn, 2, "h", &[0.0, 1.0]).unwrap();
         crate::db::put_embedding(&conn, 3, "h", &[0.7, 0.7]).unwrap();
-        let hits: Vec<i64> = vector_search(&conn, &[1.0, 0.0], 3)
-            .unwrap()
+        let store = VectorStore::load(&conn).unwrap();
+        let hits: Vec<i64> = top_similar(&store.repos, &[1.0, 0.0], 3)
             .into_iter()
             .map(|(id, _)| id)
             .collect();
         assert_eq!(hits, vec![1, 3, 2]);
         // dimension-mismatched query vectors match nothing rather than panicking
-        assert!(vector_search(&conn, &[1.0, 0.0, 0.0], 3).unwrap().is_empty());
+        assert!(top_similar(&store.repos, &[1.0, 0.0, 0.0], 3).is_empty());
+
+        // grouped: a file scores as its best chunk
+        let chunks = vec![
+            (10i64, vec![0.2, 0.0]),
+            (10i64, vec![0.9, 0.0]),
+            (11i64, vec![0.5, 0.0]),
+        ];
+        let grouped = top_similar_grouped(&chunks, &[1.0, 0.0], 5);
+        assert_eq!(grouped[0], (10, 0.9));
+        assert_eq!(grouped[1], (11, 0.5));
     }
 
     #[test]
@@ -269,9 +334,12 @@ mod tests {
         crate::db::put_embedding(&conn, 1, "h", &[1.0, 0.0]).unwrap();
         crate::db::put_embedding(&conn, 2, "h", &[0.0, 1.0]).unwrap();
 
+        let store = VectorStore::load(&conn).unwrap();
         // both match FTS equally on "tool"; the query vector must break the tie
-        let towards_1 = search(&conn, "tool", Some(&[1.0, 0.0]), RepoSort::Relevance, 10).unwrap();
-        let towards_2 = search(&conn, "tool", Some(&[0.0, 1.0]), RepoSort::Relevance, 10).unwrap();
+        let towards_1 =
+            search(&conn, &store, "tool", Some(&[1.0, 0.0]), RepoSort::Relevance, 10).unwrap();
+        let towards_2 =
+            search(&conn, &store, "tool", Some(&[0.0, 1.0]), RepoSort::Relevance, 10).unwrap();
         assert_eq!(towards_1.len(), 2);
         assert_eq!(towards_1[0].repo.id, 1, "qvec [1,0] must rank repo 1 first");
         assert_eq!(towards_2[0].repo.id, 2, "qvec [0,1] must rank repo 2 first");
@@ -279,21 +347,22 @@ mod tests {
         assert!(towards_1[0].score > towards_1[1].score);
 
         // FTS-only fallback still returns both
-        let fts_only = search(&conn, "tool", None, RepoSort::Relevance, 10).unwrap();
+        let fts_only = search(&conn, &store, "tool", None, RepoSort::Relevance, 10).unwrap();
         assert_eq!(fts_only.len(), 2);
 
         // alternate sorts reorder matches: repo 2 starred later, repo 1 has more stars
         conn.execute("UPDATE repos SET stars = 500 WHERE id = 1", []).unwrap();
-        let by_starred = search(&conn, "tool", None, RepoSort::Starred, 10).unwrap();
+        let by_starred = search(&conn, &store, "tool", None, RepoSort::Starred, 10).unwrap();
         assert_eq!(by_starred[0].repo.id, 2, "starred_at 2026-01-02 wins");
-        let by_stars = search(&conn, "tool", None, RepoSort::Stars, 10).unwrap();
+        let by_stars = search(&conn, &store, "tool", None, RepoSort::Stars, 10).unwrap();
         assert_eq!(by_stars[0].repo.id, 1, "500 stars wins");
     }
 
     #[test]
     fn empty_query_returns_recent() {
         let conn = crate::db::open_in_memory().unwrap();
-        let results = search(&conn, "   ", None, RepoSort::Relevance, 10).unwrap();
+        let store = VectorStore::empty();
+        let results = search(&conn, &store, "   ", None, RepoSort::Relevance, 10).unwrap();
         assert!(results.is_empty());
     }
 }
