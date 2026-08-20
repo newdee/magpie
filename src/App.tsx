@@ -115,6 +115,7 @@ export default function App() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [showFolders, setShowFolders] = useState(false);
+  const [showTokenCard, setShowTokenCard] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -127,6 +128,7 @@ export default function App() {
   const sourceRef = useRef(sourceIdx);
   sourceRef.current = sourceIdx;
   const needsTokenRef = useRef(false);
+  const dialogOpenRef = useRef(false);
 
   const source = SOURCES[sourceIdx].id;
   const needsToken = source === "github-stars" && status !== null && !status.has_token;
@@ -214,8 +216,9 @@ export default function App() {
         refreshStatus();
       }),
       // Spotlight behavior: hide when focus leaves, except during onboarding
+      // and while a native dialog owns the focus
       getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-        if (!focused && !needsTokenRef.current) {
+        if (!focused && !needsTokenRef.current && !dialogOpenRef.current) {
           getCurrentWindow().hide();
         }
       }),
@@ -329,7 +332,13 @@ export default function App() {
   }, [tokenInput, tokenBusy, refreshStatus]);
 
   const addFolder = useCallback(async () => {
-    const dir = await openDialog({ directory: true, multiple: false });
+    dialogOpenRef.current = true;
+    let dir: string | string[] | null = null;
+    try {
+      dir = await openDialog({ directory: true, multiple: false });
+    } finally {
+      dialogOpenRef.current = false;
+    }
     if (typeof dir !== "string") return;
     try {
       setFolders(await invoke<FolderInfo[]>("add_folder", { path: dir }));
@@ -353,8 +362,7 @@ export default function App() {
       : localProgress !== null || (status?.local_indexing ?? false);
   const modelWarming = status !== null && status.model === "loading";
   const modelFailed = status !== null && status.model.startsWith("failed");
-  const noFolders = source === "local" && folders.length === 0;
-  const manageFolders = source === "local" && (showFolders || noFolders);
+  const manageFolders = source === "local" && showFolders;
 
   const footerStatus = lastError
     ? `error: ${lastError}`
@@ -449,9 +457,30 @@ export default function App() {
         </button>
       </div>
 
-      {needsToken ? (
+      {needsToken && !showTokenCard && (
+        <button className="collapse-bar" onClick={() => setShowTokenCard(true)}>
+          <span>Connect GitHub to sync your stars</span>
+          <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+
+      {needsToken && showTokenCard && (
         <div className="card">
-          <p className="card-title">Connect GitHub</p>
+          <div className="card-head">
+            <p className="card-title">Connect GitHub</p>
+            <button
+              className="icon-btn"
+              onClick={() => setShowTokenCard(false)}
+              title="Collapse"
+              aria-label="Collapse"
+            >
+              <svg className="chevron up" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
           <p className="card-body">
             Paste a personal access token. No scopes needed, it only reads your public stars.
           </p>
@@ -486,9 +515,32 @@ export default function App() {
             Create one on github.com
           </button>
         </div>
-      ) : manageFolders ? (
+      )}
+
+      {source === "local" && !showFolders && folders.length === 0 && (
+        <button className="collapse-bar" onClick={() => setShowFolders(true)}>
+          <span>No folders indexed yet, add some to search locally</span>
+          <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+
+      {manageFolders ? (
         <div className="card">
-          <p className="card-title">Indexed folders</p>
+          <div className="card-head">
+            <p className="card-title">Indexed folders</p>
+            <button
+              className="icon-btn"
+              onClick={() => setShowFolders(false)}
+              title="Collapse"
+              aria-label="Collapse"
+            >
+              <svg className="chevron up" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
           <p className="card-body">
             Only folders you add are scanned. Hidden files and gitignored paths are skipped.
           </p>

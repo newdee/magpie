@@ -24,7 +24,7 @@
         "skipTaskbar": true,
         "center": true,
         "shadow": false,
-        "visible": true,
+        "visible": false,
         "windowEffects": {
           "effects": ["acrylic", "hudWindow"],
           "radius": 14
