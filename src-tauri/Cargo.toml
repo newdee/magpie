@@ -1,12 +1,12 @@
 [package]
-name = "star-recall"
+name = "magpie"
 version = "0.1.0"
-description = "Search your GitHub stars, Spotlight-style"
+description = "Spotlight-style search over things you saved and forgot: GitHub stars, local folders"
 authors = ["kian"]
 edition = "2021"
 
 [lib]
-name = "star_recall_lib"
+name = "magpie_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -17,7 +17,7 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-dialog = "2"
-star-recall-core = { path = "../core" }
+magpie-core = { path = "../core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

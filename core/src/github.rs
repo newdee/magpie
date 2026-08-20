@@ -52,7 +52,7 @@ pub enum ReadmeResult {
 impl GithubClient {
     pub fn new(token: &str) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .user_agent("star-recall")
+            .user_agent("magpie")
             .build()?;
         Ok(Self {
             http,

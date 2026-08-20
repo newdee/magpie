@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "star-recall",
+  "productName": "magpie",
   "version": "0.1.0",
-  "identifier": "com.dfine.star-recall",
+  "identifier": "com.dfine.magpie",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "star-recall",
+        "title": "magpie",
         "width": 720,
         "height": 480,
         "resizable": false,

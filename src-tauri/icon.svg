@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- magpie app icon: geometric magpie eyeing an amber star -->
+  <rect x="0" y="0" width="1024" height="1024" rx="200" fill="#17171c"/>
+  <!-- tail: long wedge tapering to a point, the magpie signature -->
+  <polygon points="160,900 508,648 424,582" fill="#f4f4f7"/>
+  <!-- body -->
+  <circle cx="520" cy="520" r="150" fill="#f4f4f7"/>
+  <!-- head -->
+  <circle cx="650" cy="380" r="95" fill="#f4f4f7"/>
+  <!-- beak -->
+  <polygon points="728,348 834,390 724,426" fill="#f4f4f7"/>
+  <!-- eye (tile-colored cutout) -->
+  <circle cx="672" cy="366" r="18" fill="#17171c"/>
+  <!-- the shiny thing it collected and forgot -->
+  <path d="M 810 105 C 822 172 850 200 916 212 C 850 224 822 252 810 319 C 798 252 770 224 704 212 C 770 200 798 172 810 105 Z" fill="#f5b942"/>
+  <path d="M 668 138 C 673 165 684 176 710 181 C 684 186 673 197 668 224 C 663 197 652 186 626 181 C 652 176 663 165 668 138 Z" fill="#f5b942" opacity="0.75"/>
+</svg>

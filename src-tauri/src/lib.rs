@@ -1,4 +1,4 @@
-//! Thin Tauri shell over star-recall-core: window/tray/shortcut plumbing + commands.
+//! Thin Tauri shell over magpie-core: window/tray/shortcut plumbing + commands.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,17 +11,17 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
-use star_recall_core::db;
-use star_recall_core::embed::Embedder;
-use star_recall_core::files::{self, FileHit, FolderInfo};
-use star_recall_core::github::GithubClient;
-use star_recall_core::search::{self, SearchResult};
-use star_recall_core::sync;
+use magpie_core::db;
+use magpie_core::embed::Embedder;
+use magpie_core::files::{self, FileHit, FolderInfo};
+use magpie_core::github::GithubClient;
+use magpie_core::search::{self, SearchResult};
+use magpie_core::sync;
 
 struct AppState {
     db_path: PathBuf,
     model_dir: PathBuf,
-    db: AsyncMutex<star_recall_core::rusqlite::Connection>,
+    db: AsyncMutex<magpie_core::rusqlite::Connection>,
     embedder: Arc<StdMutex<Option<Embedder>>>,
     model_status: Arc<StdMutex<String>>,
     sync_running: Arc<AtomicBool>,

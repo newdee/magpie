@@ -479,7 +479,7 @@ export default function App() {
             className="link-btn"
             onClick={() =>
               invoke("open_repo", {
-                url: "https://github.com/settings/tokens/new?description=star-recall",
+                url: "https://github.com/settings/tokens/new?description=magpie",
               })
             }
           >

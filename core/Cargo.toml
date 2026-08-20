@@ -1,10 +1,10 @@
 [package]
-name = "star-recall-core"
+name = "magpie-core"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "star_recall_core"
+name = "magpie_core"
 
 [dependencies]
 rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }

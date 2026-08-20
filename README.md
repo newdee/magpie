@@ -1,4 +1,4 @@
-# star-recall
+# magpie
 
 Spotlight-style launcher for searching things you've saved and forgotten:
 your GitHub stars, and local folders you explicitly add. Press `Alt+Space`,
@@ -40,7 +40,7 @@ src-tauri/  thin shell: commands, tray, global shortcut, window management
 src/        React palette UI (one window, frosted, follows system theme)
 ```
 
-Data lives in the per-user app data dir (`com.dfine.star-recall/stars.db`,
+Data lives in the per-user app data dir (`com.dfine.magpie/stars.db`,
 `models/`). The GitHub token is stored in that local database, plaintext.
 
 ## Build
@@ -49,7 +49,7 @@ Data lives in the per-user app data dir (`com.dfine.star-recall/stars.db`,
 pnpm install
 pnpm tauri dev            # development
 pnpm tauri build          # release bundle
-cargo test -p star-recall-core   # core unit tests
+cargo test -p magpie-core   # core unit tests
 ```
 
 ## Keys

@@ -2969,6 +2969,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
+name = "magpie"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "magpie-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-opener",
+ "tokio",
+]
+
+[[package]]
+name = "magpie-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastembed",
+ "futures",
+ "ignore",
+ "reqwest 0.13.4",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5065,38 +5097,6 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
-
-[[package]]
-name = "star-recall"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "star-recall-core",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-opener",
- "tokio",
-]
-
-[[package]]
-name = "star-recall-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fastembed",
- "futures",
- "ignore",
- "reqwest 0.13.4",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
-]
 
 [[package]]
 name = "static_assertions"
