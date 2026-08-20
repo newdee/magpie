@@ -101,7 +101,15 @@ function formatSize(n: number): string {
 
 function relTime(iso: string | null): string | null {
   if (!iso) return null;
-  const ms = Date.now() - Date.parse(iso);
+  return relTimeFromMs(Date.now() - Date.parse(iso));
+}
+
+function relTimeUnix(secs: number): string | null {
+  if (!secs) return null;
+  return relTimeFromMs(Date.now() - secs * 1000);
+}
+
+function relTimeFromMs(ms: number): string | null {
   if (Number.isNaN(ms) || ms < 0) return null;
   const days = ms / 86_400_000;
   if (days < 1) return "today";
@@ -758,6 +766,14 @@ export default function App() {
                       </div>
                     </div>
                     <div className="row-meta">
+                      {relTimeUnix(r.mtime) && (
+                        <span
+                          className="mono"
+                          title={`modified ${new Date(r.mtime * 1000).toISOString().slice(0, 10)}`}
+                        >
+                          {relTimeUnix(r.mtime)}
+                        </span>
+                      )}
                       {r.ext && <span>{r.ext}</span>}
                       <span className="mono">{formatSize(r.size)}</span>
                       {imageQuery && (
