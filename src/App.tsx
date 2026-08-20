@@ -51,6 +51,8 @@ interface Status {
   image_model: string;
   syncing: boolean;
   local_indexing: boolean;
+  max_file_mb: number;
+  hotkey: string;
 }
 
 interface StarsProgress {
@@ -89,6 +91,16 @@ const SORTS: { id: RepoSort; label: string }[] = [
   { id: "relevance", label: "match" },
   { id: "starred", label: "recent" },
   { id: "stars", label: "stars" },
+];
+
+type Theme = "auto" | "light" | "dark";
+const THEMES: Theme[] = ["auto", "light", "dark"];
+
+const FILE_CAPS: { mb: number; label: string }[] = [
+  { mb: 4, label: "4 MB" },
+  { mb: 16, label: "16 MB" },
+  { mb: 64, label: "64 MB" },
+  { mb: 0, label: "Unlimited" },
 ];
 
 function formatStars(n: number): string {
@@ -184,6 +196,22 @@ export default function App() {
     const saved = localStorage.getItem("magpie.sort") as RepoSort | null;
     return saved && SORTS.some((s) => s.id === saved) ? saved : "relevance";
   });
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem("magpie.theme") as Theme | null;
+    return saved && THEMES.includes(saved) ? saved : "auto";
+  });
+  const [hotkeyDraft, setHotkeyDraft] = useState("");
+  const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
+
+  // theme: auto follows the system; light/dark force via data attribute
+  useEffect(() => {
+    if (theme === "auto") {
+      delete document.documentElement.dataset.theme;
+    } else {
+      document.documentElement.dataset.theme = theme;
+    }
+    localStorage.setItem("magpie.theme", theme);
+  }, [theme]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -193,7 +221,6 @@ export default function App() {
   const sourceRef = useRef(sourceIdx);
   sourceRef.current = sourceIdx;
   const needsTokenRef = useRef(false);
-  const addFolderRef = useRef<(() => void) | null>(null);
   const imageQueryRef = useRef<ImageQuery | null>(null);
   imageQueryRef.current = imageQuery;
 
@@ -366,12 +393,8 @@ export default function App() {
           }
         }
       }),
-      // tray menu entry points
-      listen("open-token-card", () => setShowSettings(true)),
-      listen("open-folder-add", () => {
-        setShowSettings(true);
-        addFolderRef.current?.();
-      }),
+      // tray menu entry point
+      listen("open-settings", () => setShowSettings(true)),
       // no hide-on-blur: the palette stays until the user dismisses it
       // explicitly (Esc, Alt+Space, tray) — dragging files in needs the
       // window to survive losing focus
@@ -502,7 +525,45 @@ export default function App() {
     }
   }, []);
 
-  addFolderRef.current = addFolder;
+  const captureHotkey = useCallback((e: React.KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+    const parts: string[] = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    if (e.metaKey) parts.push("Super");
+    let key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    if (e.key === " ") key = "Space";
+    parts.push(key);
+    setHotkeyDraft(parts.join("+"));
+    setHotkeyMsg(null);
+  }, []);
+
+  const applyHotkey = useCallback(async () => {
+    if (!hotkeyDraft) return;
+    try {
+      await invoke("set_hotkey", { hotkey: hotkeyDraft });
+      setHotkeyMsg("saved");
+      setHotkeyDraft("");
+      refreshStatus();
+    } catch (e) {
+      setHotkeyMsg(String(e));
+    }
+  }, [hotkeyDraft, refreshStatus]);
+
+  const applyFileCap = useCallback(
+    async (mb: number) => {
+      try {
+        await invoke("set_max_file_mb", { mb });
+        await refreshStatus();
+      } catch (e) {
+        setLastError(String(e));
+      }
+    },
+    [refreshStatus],
+  );
 
   const removeFolder = useCallback(async (id: number) => {
     try {
@@ -749,6 +810,57 @@ export default function App() {
           <button className="primary-btn self-start" onClick={addFolder}>
             Add folder
           </button>
+
+          <p className="card-title settings-gap">Appearance</p>
+          <div className="pill-row">
+            {THEMES.map((t) => (
+              <button
+                key={t}
+                className={`source ${theme === t ? "active" : ""}`}
+                onClick={() => setTheme(t)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          <p className="card-title settings-gap">Summon shortcut</p>
+          <p className="card-body">
+            Current: <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>. Click below and press a new
+            combination.
+          </p>
+          <div className="token-row">
+            <input
+              className="token-input"
+              value={hotkeyDraft}
+              onChange={() => {}}
+              onKeyDown={captureHotkey}
+              placeholder="press keys…"
+              spellCheck={false}
+            />
+            <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
+              Apply
+            </button>
+          </div>
+          {hotkeyMsg && (
+            <p className={hotkeyMsg === "saved" ? "card-body" : "error-line"}>{hotkeyMsg}</p>
+          )}
+
+          <p className="card-title settings-gap">Max file size</p>
+          <p className="card-body">
+            Files above this size are skipped. Changing it rebuilds the local index.
+          </p>
+          <div className="pill-row">
+            {FILE_CAPS.map((c) => (
+              <button
+                key={c.mb}
+                className={`source ${status?.max_file_mb === c.mb ? "active" : ""}`}
+                onClick={() => applyFileCap(c.mb)}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         results.length > 0 && (
@@ -786,20 +898,11 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <div className="row-lead">
-                      {r.thumb && (
-                        <img
-                          className="thumb"
-                          src={`data:image/jpeg;base64,${r.thumb}`}
-                          alt=""
-                        />
-                      )}
-                      <div className="row-main">
-                        <span className="row-title">{r.name}</span>
-                        <span className="row-sub">
-                          {r.snippet ? renderSnippet(r.snippet) : parentDir(r.path)}
-                        </span>
-                      </div>
+                    <div className="row-main">
+                      <span className="row-title">{r.name}</span>
+                      <span className="row-sub">
+                        {r.snippet ? renderSnippet(r.snippet) : parentDir(r.path)}
+                      </span>
                     </div>
                     <div className="row-meta">
                       {relTimeUnix(r.mtime) && (
@@ -816,6 +919,13 @@ export default function App() {
                         <span className="sim">
                           {Math.max(0, Math.round(r.score * 100))}%
                         </span>
+                      )}
+                      {r.thumb && (
+                        <img
+                          className="thumb"
+                          src={`data:image/jpeg;base64,${r.thumb}`}
+                          alt=""
+                        />
                       )}
                     </div>
                   </>

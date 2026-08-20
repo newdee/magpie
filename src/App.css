@@ -21,8 +21,10 @@
   --font-mono: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
 }
 
+/* system-light applies light tokens unless the user forces dark;
+   data-theme="light" forces light regardless of the system */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --bg: rgba(248, 248, 250, 0.68);
     --bg-fallback: rgba(248, 248, 250, 0.98);
     --border: rgba(0, 0, 0, 0.09);
@@ -38,6 +40,23 @@
     --on-accent: #ffffff;
     --error: #b3261e;
   }
+}
+
+:root[data-theme="light"] {
+  --bg: rgba(248, 248, 250, 0.68);
+  --bg-fallback: rgba(248, 248, 250, 0.98);
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #1c1c22;
+  --text-dim: #55555e;
+  --text-faint: #8e8e99;
+  --row-hover: rgba(0, 0, 0, 0.06);
+  --field-bg: rgba(0, 0, 0, 0.04);
+  --accent: #b45309;
+  --accent-soft: rgba(180, 83, 9, 0.08);
+  --accent-border: rgba(180, 83, 9, 0.3);
+  --on-accent: #ffffff;
+  --error: #b3261e;
 }
 
 * {
@@ -246,11 +265,9 @@ body {
   border-left-color: var(--accent);
 }
 
-.row-lead {
-  min-width: 0;
+.pill-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 
 .thumb {

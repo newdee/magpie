@@ -11,11 +11,41 @@ use std::path::Path;
 
 use crate::embed::{self, Embedder};
 
-/// Full-text ingestion: whole files are read, stored, and FTS-indexed up to
-/// these caps (the caps are safety rails, not sampling).
-const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024;
+/// Full-text ingestion defaults; the file-size cap is user-configurable via
+/// the "max_file_mb" meta key (0 = unlimited).
+pub const DEFAULT_MAX_FILE_MB: u64 = 4;
 const MAX_PDF_SIZE: u64 = 64 * 1024 * 1024;
 const CONTENT_CHAR_CAP: usize = 2 * 1024 * 1024;
+
+/// Effective ingestion limits for one index pass.
+#[derive(Clone, Copy)]
+struct Limits {
+    file_bytes: u64,
+    doc_bytes: u64,
+    char_cap: usize,
+}
+
+fn limits_from(conn: &Connection) -> Limits {
+    let mb = crate::db::meta_get(conn, "max_file_mb")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_FILE_MB);
+    if mb == 0 {
+        Limits {
+            file_bytes: u64::MAX,
+            doc_bytes: u64::MAX,
+            char_cap: usize::MAX,
+        }
+    } else {
+        let bytes = mb * 1024 * 1024;
+        Limits {
+            file_bytes: bytes,
+            doc_bytes: bytes.max(MAX_PDF_SIZE),
+            char_cap: CONTENT_CHAR_CAP,
+        }
+    }
+}
 /// Binary sniff window (a NUL in the first 8KB marks a file as binary).
 const SNIFF_BYTES: usize = 8 * 1024;
 const EMBED_BATCH: usize = 16;
@@ -135,6 +165,7 @@ pub fn index_folders(
     mut progress: impl FnMut(usize),
 ) -> Result<IndexReport> {
     let mut report = IndexReport::default();
+    let limits = limits_from(conn);
 
     // current index state: path -> (id, mtime, size)
     let mut known: HashMap<String, (i64, i64, i64)> = HashMap::new();
@@ -175,9 +206,9 @@ pub fn index_folders(
             }
             let Ok(meta) = entry.metadata() else { continue };
             let size_cap = if is_pdf(path) || is_office(path) {
-                MAX_PDF_SIZE
+                limits.doc_bytes
             } else {
-                MAX_FILE_SIZE
+                limits.file_bytes
             };
             if meta.len() > size_cap {
                 continue;
@@ -206,11 +237,11 @@ pub fn index_folders(
                 None // pixels are indexed via SigLIP, not as text
             } else if is_pdf(path) {
                 // scanned / garbled PDFs stay findable by name, content-less
-                extract_pdf_text(path)
+                extract_pdf_text(path, limits.char_cap)
             } else if is_office(path) {
-                extract_office_text(path)
+                extract_office_text(path, limits.char_cap)
             } else {
-                match read_text_full(path) {
+                match read_text_full(path, limits) {
                     Some(text) => Some(text),
                     None => continue, // binary or unreadable
                 }
@@ -293,26 +324,29 @@ fn is_indexable(path: &Path) -> bool {
     }
 }
 
-/// Read the whole file (bounded by MAX_FILE_SIZE); reject binary (NUL in the
-/// sniff window); cap at CONTENT_CHAR_CAP chars.
-fn read_text_full(path: &Path) -> Option<String> {
+/// Read the whole file (bounded by the configured cap); reject binary (NUL in
+/// the sniff window); cap chars per the configured limit.
+fn read_text_full(path: &Path, limits: Limits) -> Option<String> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = Vec::new();
     f.by_ref()
-        .take(MAX_FILE_SIZE)
+        .take(limits.file_bytes)
         .read_to_end(&mut buf)
         .ok()?;
     if buf[..buf.len().min(SNIFF_BYTES)].contains(&0) {
         return None; // binary
     }
     let text = String::from_utf8_lossy(&buf);
-    Some(text.chars().take(CONTENT_CHAR_CAP).collect())
+    if text.len() <= limits.char_cap {
+        return Some(text.into_owned());
+    }
+    Some(text.chars().take(limits.char_cap).collect())
 }
 
 /// Extract PDF text as markdown. None for scanned or garbled PDFs — those
 /// stay in the index by filename only.
-fn extract_pdf_text(path: &Path) -> Option<String> {
+fn extract_pdf_text(path: &Path, char_cap: usize) -> Option<String> {
     let result = pdf_inspector::process_pdf(path).ok()?;
     if result.has_encoding_issues {
         return None;
@@ -321,12 +355,12 @@ fn extract_pdf_text(path: &Path) -> Option<String> {
     if text.trim().is_empty() {
         return None;
     }
-    Some(text.chars().take(CONTENT_CHAR_CAP).collect())
+    Some(text.chars().take(char_cap).collect())
 }
 
 /// Extract text from docx/xlsx/pptx: read the text-bearing XML parts and
 /// strip markup. None when the archive is unreadable or textless.
-fn extract_office_text(path: &Path) -> Option<String> {
+fn extract_office_text(path: &Path, char_cap: usize) -> Option<String> {
     use std::io::Read;
     let file = std::fs::File::open(path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
@@ -353,7 +387,7 @@ fn extract_office_text(path: &Path) -> Option<String> {
             .replace("</si>", "\n");
         out.push_str(&strip_xml_text(&xml));
         out.push('\n');
-        if out.len() > CONTENT_CHAR_CAP * 4 {
+        if out.len() >= char_cap.saturating_mul(4) {
             break;
         }
     }
@@ -361,7 +395,7 @@ fn extract_office_text(path: &Path) -> Option<String> {
     if out.is_empty() {
         return None;
     }
-    Some(out.chars().take(CONTENT_CHAR_CAP).collect())
+    Some(out.chars().take(char_cap).collect())
 }
 
 /// Text outside XML tags, basic entities decoded, whitespace collapsed per line.
@@ -869,7 +903,12 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let p = tmp.join("data.json");
         std::fs::write(&p, b"{\"a\": 1}\x00binary tail").unwrap();
-        assert!(read_text_full(&p).is_none());
+        let limits = Limits {
+            file_bytes: u64::MAX,
+            doc_bytes: u64::MAX,
+            char_cap: usize::MAX,
+        };
+        assert!(read_text_full(&p, limits).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

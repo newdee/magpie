@@ -88,9 +88,18 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let username = db::meta_get(&conn, "username").map_err(err_str)?;
     let has_token = db::meta_get(&conn, "token").map_err(err_str)?.is_some();
     let embedded = db::all_embedding_hashes(&conn).map_err(err_str)?.len();
+    let max_file_mb = db::meta_get(&conn, "max_file_mb")
+        .map_err(err_str)?
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(files::DEFAULT_MAX_FILE_MB);
+    let hotkey = db::meta_get(&conn, "hotkey")
+        .map_err(err_str)?
+        .unwrap_or_else(|| DEFAULT_HOTKEY.to_string());
     Ok(json!({
         "repo_count": count,
         "file_count": file_count,
+        "max_file_mb": max_file_mb,
+        "hotkey": hotkey,
         "embedded_count": embedded,
         "last_sync": last_sync,
         "username": username,
@@ -226,6 +235,65 @@ async fn search_by_image(
 #[tauri::command]
 fn preview_thumb(path: String) -> Result<Option<String>, String> {
     Ok(files::thumb_b64_for(std::path::Path::new(&path)))
+}
+
+// ---------- settings ----------
+
+const DEFAULT_HOTKEY: &str = "Alt+Space";
+
+/// Change the file-size cap (MB, 0 = unlimited) and rebuild the local index:
+/// mtime-based increments would miss files the old cap truncated or skipped.
+#[tauri::command]
+async fn set_max_file_mb(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mb: u64,
+) -> Result<(), String> {
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "max_file_mb", &mb.to_string()).map_err(err_str)?;
+        conn.execute("DELETE FROM files", []).map_err(err_str)?;
+    }
+    spawn_local_index(app);
+    Ok(())
+}
+
+fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let gs = app.global_shortcut();
+    gs.unregister_all().map_err(err_str)?;
+    gs.on_shortcut(hotkey, |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            toggle_window(app);
+        }
+    })
+    .map_err(err_str)
+}
+
+#[tauri::command]
+async fn set_hotkey(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hotkey: String,
+) -> Result<(), String> {
+    let hotkey = hotkey.trim().to_string();
+    if hotkey.is_empty() {
+        return Err("empty shortcut".into());
+    }
+    let previous = {
+        let conn = state.db.lock().await;
+        db::meta_get(&conn, "hotkey")
+            .map_err(err_str)?
+            .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
+    };
+    if let Err(e) = register_hotkey(&app, &hotkey) {
+        // keep the old chord working instead of leaving nothing registered
+        let _ = register_hotkey(&app, &previous);
+        return Err(format!("cannot register {hotkey:?}: {e}"));
+    }
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, "hotkey", &hotkey).map_err(err_str)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -565,45 +633,41 @@ pub fn run() {
                 local_indexing: Arc::new(AtomicBool::new(false)),
             });
 
-            // tray: Show / Sync / token / folders / Quit
+            // tray: Show / Sync / Settings / Quit
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let sync_item = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
-            let token_item =
-                MenuItem::with_id(app, "set-token", "Set GitHub token…", true, None::<&str>)?;
-            let folder_item =
-                MenuItem::with_id(app, "add-folder", "Add folder…", true, None::<&str>)?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu =
-                Menu::with_items(app, &[&show, &sync_item, &token_item, &folder_item, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &sync_item, &settings_item, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_window(app),
                     "sync" => spawn_sync(app.clone()),
-                    "set-token" => {
+                    "settings" => {
                         show_window(app);
-                        let _ = app.emit("open-token-card", ());
-                    }
-                    "add-folder" => {
-                        show_window(app);
-                        let _ = app.emit("open-folder-add", ());
+                        let _ = app.emit("open-settings", ());
                     }
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
 
-            // Alt+Space toggles the palette. Registration can fail when another
-            // launcher (e.g. PowerToys Run) owns the chord — degrade to tray-only
+            // register the stored (or default) summon hotkey. Registration can
+            // fail when another launcher owns the chord — degrade to tray-only
             // instead of crashing the app.
-            use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-            if let Err(e) = app.global_shortcut().on_shortcut("Alt+Space", |app, _sc, event| {
-                if event.state() == ShortcutState::Pressed {
-                    toggle_window(app);
-                }
-            }) {
-                eprintln!("global shortcut Alt+Space unavailable: {e}");
+            let hotkey = {
+                let state = app.state::<AppState>();
+                let db_path = state.db_path.clone();
+                db::open(&db_path)
+                    .ok()
+                    .and_then(|c| db::meta_get(&c, "hotkey").ok().flatten())
+                    .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
+            };
+            if let Err(e) = register_hotkey(app.handle(), &hotkey) {
+                eprintln!("global shortcut {hotkey} unavailable: {e}");
             }
 
             spawn_model_init(app.handle().clone());
@@ -640,6 +704,8 @@ pub fn run() {
             search_local,
             search_by_image,
             preview_thumb,
+            set_max_file_mb,
+            set_hotkey,
             list_folders,
             add_folder,
             remove_folder,
