@@ -195,6 +195,12 @@ export default function App() {
   repoSortRef.current = repoSort;
 
   const runSearch = useCallback(async (q: string, srcIdx: number) => {
+    // empty input shows nothing: the palette stays a bare search box
+    if (q.trim() === "") {
+      setResults([]);
+      setSelected(0);
+      return;
+    }
     try {
       let hits: Hit[];
       if (SOURCES[srcIdx].id === "github-stars") {

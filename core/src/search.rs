@@ -91,12 +91,10 @@ pub fn search(
     sort: RepoSort,
     limit: usize,
 ) -> Result<Vec<SearchResult>> {
+    // sorting only applies to search matches; the empty-query browse view is
+    // always the recently-starred list
     if query.trim().is_empty() {
-        let repos = match sort {
-            RepoSort::Stars => db::repos_by_stars(conn, limit)?,
-            _ => db::recent_repos(conn, limit)?,
-        };
-        return Ok(repos
+        return Ok(db::recent_repos(conn, limit)?
             .into_iter()
             .map(|repo| SearchResult { repo, score: 0.0 })
             .collect());
@@ -109,13 +107,9 @@ pub fn search(
     };
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
-    // for alternate sorts, reorder the whole candidate set before truncating
-    let take = if sort == RepoSort::Relevance {
-        limit
-    } else {
-        fused.len()
-    };
-    let ids: Vec<i64> = fused.iter().take(take).map(|(id, _)| *id).collect();
+    // alternate sorts reorder exactly the top-`limit` relevant matches — never
+    // a wider pool, so a famous-but-barely-related repo cannot crowd in
+    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
     let mut results: Vec<SearchResult> = db::repos_by_ids(conn, &ids)?
         .into_iter()
         .map(|repo| {
@@ -123,6 +117,7 @@ pub fn search(
             SearchResult { repo, score }
         })
         .collect();
+    results.truncate(limit);
     match sort {
         RepoSort::Relevance => {}
         RepoSort::Starred => results.sort_by(|a, b| {
@@ -138,7 +133,6 @@ pub fn search(
                 .then(a.repo.id.cmp(&b.repo.id))
         }),
     }
-    results.truncate(limit);
     Ok(results)
 }
 
