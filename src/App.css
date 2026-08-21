@@ -674,6 +674,9 @@ input.query:active {
   gap: 4px;
   max-height: 240px;
   overflow-y: auto;
+  /* scrollable flex children may shrink to zero height inside the
+     height-capped settings card; keep the list at its natural size */
+  flex-shrink: 0;
 }
 
 .folder-row {
