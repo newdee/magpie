@@ -861,8 +861,10 @@ mod tests {
         let conn = open_in_memory().unwrap();
         add_folder(&conn, tmp.to_str().unwrap()).unwrap();
         let canonical = list_folders(&conn).unwrap()[0].path.clone();
-        assert!(path_is_allowed(&conn, &format!("{canonical}\\a.txt")).unwrap());
-        assert!(!path_is_allowed(&conn, "C:\\Windows\\system32\\config").unwrap());
+        let inside = Path::new(&canonical).join("a.txt");
+        assert!(path_is_allowed(&conn, inside.to_str().unwrap()).unwrap());
+        let outside = if cfg!(windows) { "C:\\Windows\\system32\\config" } else { "/etc/passwd" };
+        assert!(!path_is_allowed(&conn, outside).unwrap());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
