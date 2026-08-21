@@ -561,6 +561,20 @@ export default function App() {
     }
   }, [tokenInput, tokenBusy, refreshStatus]);
 
+  const pickQueryImage = useCallback(async () => {
+    const file = await openDialog({
+      multiple: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+    });
+    if (typeof file !== "string") return;
+    const thumb = await invoke<string | null>("preview_thumb", { path: file }).catch(() => null);
+    acceptImageQuery({
+      label: file.split(/[\\/]/).pop() ?? "image",
+      path: file,
+      thumbSrc: thumb ? `data:image/jpeg;base64,${thumb}` : undefined,
+    });
+  }, [acceptImageQuery]);
+
   const addFolder = useCallback(async () => {
     const dir = await openDialog({ directory: true, multiple: false });
     if (typeof dir !== "string") return;
@@ -783,15 +797,31 @@ export default function App() {
                 ? status && status.repo_count > 0
                   ? `Search ${status.repo_count} starred repos`
                   : "Search your stars"
-                : status && status.file_count > 0
-                  ? `Search ${status.file_count} local files, drop or paste an image`
-                  : "Search indexed folders"
+                : localScope === "images"
+                  ? "Describe the image, or pick / drop / paste one"
+                  : status && status.file_count > 0
+                    ? `Search ${status.file_count} local files, drop or paste an image`
+                    : "Search indexed folders"
           }
           autoFocus
           spellCheck={false}
           autoCorrect="off"
           autoCapitalize="off"
         />
+        {source === "local" && !imageQuery && (
+          <button
+            className="icon-btn"
+            onClick={pickQueryImage}
+            title="Search with an image file"
+            aria-label="Pick a query image"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <circle cx="5.5" cy="6.5" r="1.25" fill="currentColor" />
+              <path d="M2.5 12l3.5-3.5 2.5 2.5 3-3 2 2" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         <button
           className={`icon-btn ${busy ? "spinning" : ""}`}
           onClick={refresh}
