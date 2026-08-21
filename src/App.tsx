@@ -893,6 +893,25 @@ export default function App() {
             ))}
           </div>
 
+          <div className="model-status">
+            <span>
+              Semantic model:{" "}
+              {status?.model === "ready"
+                ? "ready"
+                : status?.model === "loading"
+                  ? "downloading / preparing (~500 MB on first run)…"
+                  : (status?.model ?? "…")}
+            </span>
+            <span>
+              Image model:{" "}
+              {status?.image_model === "ready"
+                ? "ready"
+                : status?.image_model === "loading"
+                  ? "downloading / preparing (~200 MB on first run)…"
+                  : (status?.image_model ?? "…")}
+            </span>
+          </div>
+
           <p className="card-title settings-gap">Max file size</p>
           <p className="card-body">
             Files above this size are skipped. Changing it rebuilds the local index.

@@ -505,6 +505,15 @@ body {
   margin-bottom: 4px;
 }
 
+.model-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
 .card-title {
   font-weight: 600;
   font-size: 15px;
