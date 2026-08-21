@@ -1,3 +1,24 @@
+# 验收记录 2026-08-21（设置页文件夹列表不可见，v0.1.9）
+
+症状（mac 与 Windows 同现）：设置页 folder 计数徽章=1，但列表区完全空白，
+无空态文案也无报错。根因：`.folder-list` 是高度受限（max-height:560px）的
+flex column 卡片里唯一带 `overflow-y:auto` 的子元素——此类元素允许被压到
+0 高，全部 flex 压缩量都落在它头上，行在 DOM 里但高度为 0。修复一行：
+`flex-shrink: 0`。
+
+验证链（夹逼定位法）：
+- 数据层：dbcheck 例程跑真实库，folder_count=1、serde JSON 正确
+- IPC 层：v0.1.8 诊断徽章显示 1（get_status 通）
+- 空态分支：截图无红字无 "No folders" → folders 数组非空 → 唯余渲染层
+- 渲染层：CSS 审计锁定 flex 挤压；同类元素全查（.results 父容器无高度
+  上限，不受影响，仅 .folder-list 一处）
+- 修复验证：debug 构建投放真机桌面会话，用户目视确认列表显示（prompt-shelf
+  · 190 files + ↻/✕ 按钮）
+- 教训：v0.1.5/0.1.6 两轮"修复"（refresh-on-open、空态文案）修在错误层，
+  因为当时把"看不见"当成了"没数据"。不可见 ≠ 空。
+
+---
+
 # 验收记录 2026-08-21（书签通用发现，v0.1.7）
 
 变更：discover() 加通用 Chromium 分支扫描（`<app>/Default|Profile*/Bookmarks`、
