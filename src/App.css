@@ -170,13 +170,24 @@ body {
 
 .query {
   flex: 1;
-  background: none;
+  background: transparent;
   border: none;
   outline: none;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
   font: inherit;
   font-size: 16px;
   color: var(--text);
   caret-color: var(--accent);
+}
+
+/* WebView2 autofill paints its own background; neutralize it */
+.query:-webkit-autofill,
+.query:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px transparent inset;
+  transition: background-color 9999s ease-out;
+  -webkit-text-fill-color: var(--text);
 }
 
 .query::placeholder {
