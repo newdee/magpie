@@ -646,6 +646,10 @@ fn show_window(app: &AppHandle) {
             let y = (m.height as f64 * 0.22) as i32;
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }
+        // above everything, on every summon: re-assert topmost (another app
+        // may have claimed it) and follow the user across macOS Spaces
+        let _ = w.set_always_on_top(true);
+        let _ = w.set_visible_on_all_workspaces(true);
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("palette-shown", ());
