@@ -79,9 +79,11 @@ are obvious.
 
 ### Bookmarks
 
-Chrome, Edge, Brave, and Firefox bookmarks — read directly from their local
-stores (all profiles), searchable by title, URL, and folder path, with
-semantic matching on top. `Enter` opens the bookmark in your default browser.
+Bookmarks from **any Chromium-based browser** — Chrome, Edge, Brave,
+Vivaldi, Arc, and lesser-known forks are auto-discovered by their on-disk
+profile layout — plus Firefox. Read directly from local stores (all
+profiles), searchable by title, URL, and folder path, with semantic matching
+on top. `Enter` opens the bookmark in your default browser.
 
 ## Keyboard
 

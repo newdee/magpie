@@ -64,9 +64,10 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 
 ### 浏览器书签
 
-Chrome、Edge、Brave、Firefox 的书签——直接读浏览器本地存储（全部
-profile），按标题、URL、文件夹路径检索并叠加语义匹配。`Enter` 在默认浏览器
-打开。
+**任意 Chromium 内核浏览器**的书签——Chrome、Edge、Brave、Vivaldi、Arc 及
+各种小众分支，按磁盘上的 profile 结构自动发现——外加 Firefox。直接读浏览器
+本地存储（全部 profile），按标题、URL、文件夹路径检索并叠加语义匹配。
+`Enter` 在默认浏览器打开。
 
 ## 快捷键
 

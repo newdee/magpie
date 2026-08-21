@@ -1,3 +1,26 @@
+# 验收记录 2026-08-21（书签通用发现，v0.1.7）
+
+变更：discover() 加通用 Chromium 分支扫描（`<app>/Default|Profile*/Bookmarks`、
+`<app>/User Data/...`、vendor 嵌套一层），按书签文件路径去重；已知浏览器仍
+显式命名优先。动机：用户默认浏览器 ego（Chromium 分支）不在硬编码列表。
+
+## 连续三轮干净
+
+- R1（机制存活）：25/25 单测 + clippy -D warnings 0 告警；新单测证 fork 布局
+  两种（直下/User Data 嵌套）均被发现、非浏览器目录忽略、重扫零新增；本机
+  实测 discover 扫全量 LOCALAPPDATA 仅出 chrome+edge 两 store，零误报，
+  452ms（后台线程可接受）
+- R2（边界）：无权限/不存在目录走 read_dir Err 静默；Snapshots/Guest 目录
+  不匹配 Default|Profile* 前缀不进入；显式+通用重复发现由路径去重（单测+
+  真机双证：chrome 只出现一次且名为 chrome 非 google）；复跑 25/25
+- R3（静态一致）：README 双语"Chrome、Edge、Brave、Firefox"改为"任意
+  Chromium 内核+Firefox"；grep 全仓无其他写死浏览器列表；cargo check 全
+  workspace 过；复跑 25/25。注：cargo fmt 不合规为仓库基线（CI 不查 fmt，
+  未动文件同样不合规），不计入本轮
+- 附诊断工具：`print_discovered_stores` ignored 测试，真机排查用
+
+---
+
 # 验收记录 2026-08-21（第二轮，全功能形态）
 
 ## 发现并修复

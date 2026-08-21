@@ -43,29 +43,20 @@ struct RawBookmark {
 fn discover() -> Vec<(String, PathBuf, bool)> {
     // (browser name, path, is_firefox)
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let home = dirs_home();
-    let mut push_chromium = |browser: &str, base: PathBuf| {
-        if let Ok(entries) = std::fs::read_dir(&base) {
-            for e in entries.flatten() {
-                let p = e.path();
-                let name = e.file_name().to_string_lossy().to_string();
-                if p.is_dir() && (name == "Default" || name.starts_with("Profile")) {
-                    let f = p.join("Bookmarks");
-                    if f.is_file() {
-                        out.push((browser.to_string(), f, false));
-                    }
-                }
-            }
-        }
-    };
 
+    // Known browsers first so they keep stable names; then a generic sweep of
+    // the platform data root so any Chromium fork (Ego, Arc, Vivaldi, ...) is
+    // picked up without a hardcoded path.
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             let local = PathBuf::from(local);
-            push_chromium("chrome", local.join("Google/Chrome/User Data"));
-            push_chromium("edge", local.join("Microsoft/Edge/User Data"));
-            push_chromium("brave", local.join("BraveSoftware/Brave-Browser/User Data"));
+            push_chromium_profiles("chrome", &local.join("Google/Chrome/User Data"), &mut seen, &mut out);
+            push_chromium_profiles("edge", &local.join("Microsoft/Edge/User Data"), &mut seen, &mut out);
+            push_chromium_profiles("brave", &local.join("BraveSoftware/Brave-Browser/User Data"), &mut seen, &mut out);
+            scan_chromium_forks(&local, &mut seen, &mut out);
         }
         if let Ok(roaming) = std::env::var("APPDATA") {
             push_firefox(&mut out, PathBuf::from(roaming).join("Mozilla/Firefox/Profiles"));
@@ -74,22 +65,78 @@ fn discover() -> Vec<(String, PathBuf, bool)> {
     #[cfg(target_os = "macos")]
     {
         let sup = home.join("Library/Application Support");
-        push_chromium("chrome", sup.join("Google/Chrome"));
-        push_chromium("edge", sup.join("Microsoft Edge"));
-        push_chromium("brave", sup.join("BraveSoftware/Brave-Browser"));
+        push_chromium_profiles("chrome", &sup.join("Google/Chrome"), &mut seen, &mut out);
+        push_chromium_profiles("edge", &sup.join("Microsoft Edge"), &mut seen, &mut out);
+        push_chromium_profiles("brave", &sup.join("BraveSoftware/Brave-Browser"), &mut seen, &mut out);
+        scan_chromium_forks(&sup, &mut seen, &mut out);
         push_firefox(&mut out, sup.join("Firefox/Profiles"));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let cfg = home.join(".config");
-        push_chromium("chrome", cfg.join("google-chrome"));
-        push_chromium("chromium", cfg.join("chromium"));
-        push_chromium("edge", cfg.join("microsoft-edge"));
-        push_chromium("brave", cfg.join("BraveSoftware/Brave-Browser"));
+        push_chromium_profiles("chrome", &cfg.join("google-chrome"), &mut seen, &mut out);
+        push_chromium_profiles("chromium", &cfg.join("chromium"), &mut seen, &mut out);
+        push_chromium_profiles("edge", &cfg.join("microsoft-edge"), &mut seen, &mut out);
+        push_chromium_profiles("brave", &cfg.join("BraveSoftware/Brave-Browser"), &mut seen, &mut out);
+        scan_chromium_forks(&cfg, &mut seen, &mut out);
         push_firefox(&mut out, home.join(".mozilla/firefox"));
     }
-    let _ = &home;
+    let _ = (&home, &mut seen);
     out
+}
+
+/// Collect `Default` / `Profile *` bookmark files directly under `base`.
+fn push_chromium_profiles(
+    browser: &str,
+    base: &Path,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    out: &mut Vec<(String, PathBuf, bool)>,
+) {
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if p.is_dir() && (name == "Default" || name.starts_with("Profile")) {
+                let f = p.join("Bookmarks");
+                if f.is_file() && seen.insert(f.clone()) {
+                    out.push((browser.to_string(), f, false));
+                }
+            }
+        }
+    }
+}
+
+/// Sweep a platform data root for Chromium forks. Every fork keeps profiles
+/// either directly in its data dir, under a `User Data` subdir, or one vendor
+/// level deeper (`Google/Chrome`, `BraveSoftware/Brave-Browser`). Only actual
+/// `Default`/`Profile *`/`Bookmarks` layouts match, and parsing later requires
+/// the Chromium JSON shape, so unrelated app dirs contribute nothing.
+fn scan_chromium_forks(
+    root: &Path,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    out: &mut Vec<(String, PathBuf, bool)>,
+) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for e in entries.flatten() {
+        let dir = e.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        push_chromium_profiles(&name, &dir, seen, out);
+        push_chromium_profiles(&name, &dir.join("User Data"), seen, out);
+        if let Ok(subs) = std::fs::read_dir(&dir) {
+            for s in subs.flatten() {
+                let sub = s.path();
+                if !sub.is_dir() {
+                    continue;
+                }
+                let sub_name = s.file_name().to_string_lossy().to_lowercase();
+                push_chromium_profiles(&sub_name, &sub, seen, out);
+                push_chromium_profiles(&sub_name, &sub.join("User Data"), seen, out);
+            }
+        }
+    }
 }
 
 fn push_firefox(out: &mut Vec<(String, PathBuf, bool)>, profiles: PathBuf) {
@@ -459,6 +506,41 @@ mod tests {
         assert_eq!(out[0].folder, "Bookmarks bar");
         assert!(out[0].added_at.unwrap() > 1_500_000_000, "webkit time converts");
         assert_eq!(out[1].folder, "Bookmarks bar/Dev");
+    }
+
+    #[test]
+    #[ignore = "diagnostic: prints real browser stores found on this machine"]
+    fn print_discovered_stores() {
+        let t = std::time::Instant::now();
+        let found = discover();
+        for (b, p, ff) in &found {
+            println!("{b}\tfirefox={ff}\t{}", p.display());
+        }
+        println!("{} stores in {:?}", found.len(), t.elapsed());
+    }
+
+    #[test]
+    fn discovers_chromium_forks() {
+        let root = std::env::temp_dir().join(format!("magpie-forks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mk = |p: &str| {
+            let f = root.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, "{}").unwrap();
+        };
+        mk("Ego/Default/Bookmarks"); // mac/linux-style: profiles in the data dir
+        mk("Vendor/Fork/User Data/Profile 1/Bookmarks"); // windows-style vendor nesting
+        mk("NotABrowser/settings.json"); // no profile layout -> ignored
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        scan_chromium_forks(&root, &mut seen, &mut out);
+        let mut names: Vec<&str> = out.iter().map(|(b, _, _)| b.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["ego", "fork"]);
+        // rescanning adds nothing: dedup is by bookmark-file path
+        scan_chromium_forks(&root, &mut seen, &mut out);
+        assert_eq!(out.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
