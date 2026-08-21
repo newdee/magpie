@@ -216,7 +216,7 @@ export default function App() {
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(!!import.meta.env.VITE_DEMO);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
