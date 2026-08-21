@@ -54,6 +54,7 @@ interface FolderInfo {
 interface Status {
   repo_count: number;
   file_count: number;
+  folder_count: number;
   bookmark_count: number;
   embedded_count: number;
   last_sync: string | null;
@@ -271,8 +272,9 @@ export default function App() {
   const refreshFolders = useCallback(async () => {
     try {
       setFolders(await invoke<FolderInfo[]>("list_folders"));
-    } catch {
-      /* ignore */
+    } catch (e) {
+      // surfaced in settings; a silent failure here looks like "no folders"
+      setLastError(`folder list failed: ${String(e)}`);
     }
   }, []);
 
@@ -999,14 +1001,23 @@ export default function App() {
             </button>
           )}
 
-          <p className="card-title settings-gap">Indexed folders</p>
+          <p className="card-title settings-gap">
+            Indexed folders
+            {status != null && <span className="ver">{status.folder_count}</span>}
+          </p>
           <p className="card-body">
             Only folders you add are scanned, recursively (subfolders included). Hidden
             files and gitignored paths are skipped.
           </p>
-          {folders.length === 0 && (
-            <p className="card-body">No folders indexed yet.</p>
-          )}
+          {folders.length === 0 &&
+            (status != null && status.folder_count > 0 ? (
+              <p className="error-line">
+                {status.folder_count} folder(s) are indexed but the list failed to load —
+                please report this together with the error shown below.
+              </p>
+            ) : (
+              <p className="card-body">No folders indexed yet.</p>
+            ))}
           {folders.length > 0 && (
             <div className="folder-list">
               {folders.map((f) => (

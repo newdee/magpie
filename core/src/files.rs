@@ -181,6 +181,10 @@ pub fn file_count(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?)
 }
 
+pub fn folder_count(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM folders", [], |r| r.get(0))?)
+}
+
 // ---------- indexing ----------
 
 /// Incremental scan of all registered folders. Unchanged files (same mtime and

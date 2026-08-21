@@ -85,6 +85,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let conn = state.db.lock().await;
     let count = db::repo_count(&conn).map_err(err_str)?;
     let file_count = files::file_count(&conn).map_err(err_str)?;
+    let folder_count = files::folder_count(&conn).map_err(err_str)?;
     let bookmark_count = bookmarks::bookmark_count(&conn).map_err(err_str)?;
     let last_sync = db::meta_get(&conn, "last_sync").map_err(err_str)?;
     let username = db::meta_get(&conn, "username").map_err(err_str)?;
@@ -104,6 +105,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "version": env!("CARGO_PKG_VERSION"),
         "repo_count": count,
         "file_count": file_count,
+        "folder_count": folder_count,
         "bookmark_count": bookmark_count,
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
