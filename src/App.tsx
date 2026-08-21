@@ -251,6 +251,14 @@ export default function App() {
     }
   }, []);
 
+  // opening settings always shows fresh state
+  useEffect(() => {
+    if (showSettings) {
+      refreshStatus();
+      refreshFolders();
+    }
+  }, [showSettings, refreshStatus, refreshFolders]);
+
   const repoSortRef = useRef(repoSort);
   repoSortRef.current = repoSort;
 
@@ -961,6 +969,8 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {lastError && <p className="error-line settings-gap">{lastError}</p>}
         </div>
       ) : (
         results.length > 0 && (
