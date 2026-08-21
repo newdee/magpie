@@ -702,22 +702,6 @@ export default function App() {
           autoCapitalize="off"
         />
         <button
-          className={`icon-btn ${showSettings ? "active" : ""}`}
-          onClick={() => setShowSettings((v) => !v)}
-          title="Settings: GitHub token, indexed folders"
-          aria-label="Settings"
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="2.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path
-              d="M8 1.9v1.8M8 12.3v1.8M1.9 8h1.8M12.3 8h1.8M3.7 3.7l1.3 1.3M11 11l1.3 1.3M12.3 3.7L11 5M5 11l-1.3 1.3"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
-        </button>
-        <button
           className={`icon-btn ${busy ? "spinning" : ""}`}
           onClick={refresh}
           disabled={busy || needsToken}
