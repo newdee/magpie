@@ -538,6 +538,17 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+    // bare Backspace/Delete/Escape clears the recording
+    if (
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      ["Backspace", "Delete", "Escape"].includes(e.key)
+    ) {
+      setHotkeyDraft("");
+      setHotkeyMsg(null);
+      return;
+    }
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Ctrl");
     if (e.altKey) parts.push("Alt");
@@ -835,7 +846,8 @@ export default function App() {
           <p className="card-title settings-gap">Summon shortcut</p>
           <p className="card-body">
             Current: <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>. Click below and press a new
-            combination.
+            combination; Backspace clears it. Shortcuts the OS reserves (like ⌘Space for
+            Spotlight on macOS) cannot be captured — free them in system settings first.
           </p>
           <div className="token-row">
             <input
@@ -846,12 +858,42 @@ export default function App() {
               placeholder="press keys…"
               spellCheck={false}
             />
+            {hotkeyDraft && (
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  setHotkeyDraft("");
+                  setHotkeyMsg(null);
+                }}
+                title="Clear"
+                aria-label="Clear recorded shortcut"
+              >
+                ✕
+              </button>
+            )}
             <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
               Apply
             </button>
           </div>
           {hotkeyMsg && (
             <p className={hotkeyMsg === "saved" ? "card-body" : "error-line"}>{hotkeyMsg}</p>
+          )}
+          {status?.hotkey !== "Alt+Space" && (
+            <button
+              className="link-btn"
+              onClick={async () => {
+                try {
+                  await invoke("set_hotkey", { hotkey: "Alt+Space" });
+                  setHotkeyDraft("");
+                  setHotkeyMsg("saved");
+                  refreshStatus();
+                } catch (e) {
+                  setHotkeyMsg(String(e));
+                }
+              }}
+            >
+              Reset to Alt+Space
+            </button>
           )}
 
           <p className="card-title settings-gap">Model download source</p>
