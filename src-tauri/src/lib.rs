@@ -370,6 +370,38 @@ fn index_local(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Wipe one folder's index (files, FTS, vectors, thumbnails) and re-scan it.
+#[tauri::command]
+async fn rebuild_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    folder_id: i64,
+) -> Result<(), String> {
+    if state.local_indexing.load(Ordering::SeqCst) {
+        return Err("indexing is running; try again when it finishes".into());
+    }
+    {
+        let conn = state.db.lock().await;
+        files::clear_folder_files(&conn, folder_id).map_err(err_str)?;
+    }
+    spawn_local_index(app);
+    Ok(())
+}
+
+/// Wipe the whole star index (repos, READMEs, vectors) and sync from zero.
+#[tauri::command]
+async fn rebuild_stars(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.sync_running.load(Ordering::SeqCst) {
+        return Err("sync is running; try again when it finishes".into());
+    }
+    {
+        let conn = state.db.lock().await;
+        conn.execute("DELETE FROM repos", []).map_err(err_str)?;
+    }
+    spawn_sync(app);
+    Ok(())
+}
+
 #[tauri::command]
 async fn open_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let allowed = {
@@ -776,6 +808,8 @@ pub fn run() {
             add_folder,
             remove_folder,
             index_local,
+            rebuild_folder,
+            rebuild_stars,
             open_file
         ])
         .run(tauri::generate_context!())

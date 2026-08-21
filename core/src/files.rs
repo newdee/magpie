@@ -109,6 +109,24 @@ pub fn add_folder(conn: &Connection, path: &str) -> Result<i64> {
         bail!("not a directory: {path}");
     }
     let canonical = dunce_canonicalize(p)?;
+    // nesting guard: overlapping roots would scan files twice and make
+    // folder ownership ambiguous
+    for existing in list_folders(conn)? {
+        let ex = Path::new(&existing.path);
+        let new = Path::new(&canonical);
+        if new == ex {
+            return Ok(existing.id); // exact duplicate: no-op
+        }
+        if new.starts_with(ex) {
+            bail!("already covered by indexed folder {}", existing.path);
+        }
+        if ex.starts_with(new) {
+            bail!(
+                "contains already-indexed folder {}; remove that one first",
+                existing.path
+            );
+        }
+    }
     conn.execute(
         "INSERT OR IGNORE INTO folders(path) VALUES (?1)",
         [canonical.as_str()],
@@ -118,6 +136,13 @@ pub fn add_folder(conn: &Connection, path: &str) -> Result<i64> {
         [canonical.as_str()],
         |r| r.get(0),
     )?)
+}
+
+/// Wipe one folder's files (FTS via triggers, vectors via FK cascade) so the
+/// next index pass rebuilds it from scratch.
+pub fn clear_folder_files(conn: &Connection, folder_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM files WHERE folder_id = ?1", [folder_id])?;
+    Ok(())
 }
 
 /// Canonicalize without Windows `\\?\` prefix noise.
@@ -847,6 +872,26 @@ mod tests {
         assert_eq!(file_count(&conn).unwrap(), 0);
         assert!(files_fts_search(&conn, "scraper", 10).unwrap().is_empty());
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn nested_folder_rejected() {
+        let tmp = std::env::temp_dir().join(format!("sr-nest-{}", std::process::id()));
+        let child = tmp.join("sub");
+        std::fs::create_dir_all(&child).unwrap();
+        let conn = open_in_memory().unwrap();
+        let id = add_folder(&conn, tmp.to_str().unwrap()).unwrap();
+        // exact duplicate is a no-op returning the same id
+        assert_eq!(add_folder(&conn, tmp.to_str().unwrap()).unwrap(), id);
+        // child of an indexed folder is rejected
+        let err = add_folder(&conn, child.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("already covered"));
+        // parent of an indexed folder is rejected too
+        let conn2 = open_in_memory().unwrap();
+        add_folder(&conn2, child.to_str().unwrap()).unwrap();
+        let err = add_folder(&conn2, tmp.to_str().unwrap()).unwrap_err();
+        assert!(err.to_string().contains("remove that one first"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

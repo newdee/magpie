@@ -609,6 +609,29 @@ export default function App() {
     }
   }, []);
 
+  const rebuildFolder = useCallback(
+    async (id: number) => {
+      setLastError(null);
+      try {
+        await invoke("rebuild_folder", { folderId: id });
+        await refreshFolders();
+      } catch (e) {
+        setLastError(String(e));
+      }
+    },
+    [refreshFolders],
+  );
+
+  const rebuildStars = useCallback(async () => {
+    setLastError(null);
+    try {
+      await invoke("rebuild_stars");
+      await refreshStatus();
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, [refreshStatus]);
+
   const busy =
     source === "github-stars"
       ? starsProgress !== null || (status?.syncing ?? false)
@@ -827,11 +850,24 @@ export default function App() {
           >
             Create one on github.com
           </button>
+          {status?.has_token && (
+            <button
+              className="link-btn"
+              onClick={rebuildStars}
+              title="Wipe the star index and sync everything from scratch"
+            >
+              Rebuild star index from scratch
+            </button>
+          )}
 
           <p className="card-title settings-gap">Indexed folders</p>
           <p className="card-body">
-            Only folders you add are scanned. Hidden files and gitignored paths are skipped.
+            Only folders you add are scanned, recursively (subfolders included). Hidden
+            files and gitignored paths are skipped.
           </p>
+          {folders.length === 0 && (
+            <p className="card-body">No folders indexed yet.</p>
+          )}
           {folders.length > 0 && (
             <div className="folder-list">
               {folders.map((f) => (
@@ -840,6 +876,14 @@ export default function App() {
                     {f.path}
                   </span>
                   <span className="folder-count">{f.file_count} files</span>
+                  <button
+                    className="folder-remove"
+                    onClick={() => rebuildFolder(f.id)}
+                    title="Rebuild this folder's index from scratch"
+                    aria-label={`Rebuild index for ${f.path}`}
+                  >
+                    ↻
+                  </button>
                   <button
                     className="folder-remove"
                     onClick={() => removeFolder(f.id)}
