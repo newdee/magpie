@@ -9,6 +9,19 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 树里的书签。**magpie** 是一个小巧的桌面启动器，把它们找回来——按下快捷键，输
 入模糊的印象（或者拖进一张图），回车。
 
+<p align="center"><img src="docs/img/palette-stars.jpeg" width="760" alt="magpie 检索 GitHub stars"></p>
+
+<table>
+  <tr>
+    <td><img src="docs/img/image-similarity.jpeg" alt="以图搜图，显示相似度百分比"><br><sub>拖进一张图——最相似的文件按余弦相似度排列</sub></td>
+    <td><img src="docs/img/fulltext-highlight.jpeg" alt="全文检索高亮片段"><br><sub>全文命中显示高亮上下文片段</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/img/text-to-image.jpeg" alt="文字搜图带缩略图"><br><sub>任何语言描述画面，匹配图片直接呈现</sub></td>
+    <td><img src="docs/img/bookmarks.jpeg" alt="浏览器书签检索"><br><sub>任意 Chromium 分支与 Firefox 的书签</sub></td>
+  </tr>
+</table>
+
 ## 为什么选 magpie
 
 **隐私优先，靠架构保证，不靠承诺。**

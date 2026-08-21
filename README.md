@@ -10,6 +10,19 @@ we can describe but cannot find, bookmarks lost in folder trees. **magpie** is
 a tiny desktop launcher that brings them back — press a hotkey, type what you
 vaguely remember (or drop in an image), hit Enter.
 
+<p align="center"><img src="docs/img/palette-stars.jpeg" width="760" alt="magpie searching GitHub stars"></p>
+
+<table>
+  <tr>
+    <td><img src="docs/img/image-similarity.jpeg" alt="image-to-image search with similarity percentages"><br><sub>Drop in an image — most similar files rank with cosine percentages</sub></td>
+    <td><img src="docs/img/fulltext-highlight.jpeg" alt="full-text search with highlighted snippets"><br><sub>Full-text hits show highlighted context snippets</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/img/text-to-image.jpeg" alt="text-to-image search with thumbnails"><br><sub>Describe a picture in any language, get matching images</sub></td>
+    <td><img src="docs/img/bookmarks.jpeg" alt="browser bookmark search"><br><sub>Bookmarks from any Chromium fork and Firefox</sub></td>
+  </tr>
+</table>
+
 ## Why magpie
 
 **Privacy first, by architecture — not by promise.**
