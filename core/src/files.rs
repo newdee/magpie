@@ -223,7 +223,7 @@ pub fn index_folders(
             let size = meta.len() as i64;
 
             report.scanned += 1;
-            if report.scanned % 200 == 0 {
+            if report.scanned.is_multiple_of(200) {
                 progress(report.scanned);
             }
             seen.push(path_str.clone());
@@ -529,7 +529,7 @@ pub fn embed_pending_files(
         }
         tx.commit()?;
         done += 1;
-        if done % 4 == 0 || done == total {
+        if done.is_multiple_of(4) || done == total {
             progress(done, total);
         }
     }
@@ -554,10 +554,8 @@ pub fn all_file_chunk_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>
         if bytes.len() != dim * 4 {
             continue;
         }
-        let vec: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let (chunks, _) = bytes.as_chunks::<4>();
+        let vec: Vec<f32> = chunks.iter().map(|c| f32::from_le_bytes(*c)).collect();
         out.push((id, vec));
     }
     Ok(out)
@@ -630,10 +628,8 @@ pub fn all_image_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
         if bytes.len() != dim * 4 {
             continue;
         }
-        let vec: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let (chunks, _) = bytes.as_chunks::<4>();
+        let vec: Vec<f32> = chunks.iter().map(|c| f32::from_le_bytes(*c)).collect();
         out.push((id, vec));
     }
     Ok(out)
@@ -699,7 +695,7 @@ pub fn embed_pending_images(
             Err(_) => put_image_embedding(conn, *id, hash, &[])?, // failed marker
         }
         done += 1;
-        if done % 5 == 0 || done == total {
+        if done.is_multiple_of(5) || done == total {
             progress(done, total);
         }
     }

@@ -420,10 +420,8 @@ pub fn all_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
         if bytes.len() != dim * 4 {
             continue; // corrupt row; skip rather than crash
         }
-        let vec: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
+        let (chunks, _) = bytes.as_chunks::<4>();
+        let vec: Vec<f32> = chunks.iter().map(|c| f32::from_le_bytes(*c)).collect();
         out.push((id, vec));
     }
     Ok(out)

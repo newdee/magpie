@@ -104,7 +104,7 @@ pub async fn sync(
             }
         }
         done += 1;
-        if done % 10 == 0 || done == total_stale {
+        if done.is_multiple_of(10) || done == total_stale {
             progress(Progress::Readmes { done, total: total_stale });
         }
     }
@@ -224,7 +224,7 @@ mod tests {
             state(4, Some(""), false),        // 404'd empty repo, pushed_at null -> fresh
             state(5, Some("t1"), false),      // 404'd at t1, repo pushed t2 -> retry
         ];
-        let repos = vec![
+        let repos = [
             repo(1, Some("t1")),
             repo(2, Some("t1")),
             repo(3, Some("t2")),
