@@ -535,10 +535,12 @@ fn spawn_model_init(app: AppHandle) {
                                 let _ = app2.emit("sync-progress", &p);
                             })?;
                             let files_n = files::embed_pending_files(&conn, e, |done, total| {
-                                let _ = app2.emit(
-                                    "local-progress",
-                                    json!({ "stage": "embed", "done": done, "total": total }),
-                                );
+                                if total > 0 {
+                                    let _ = app2.emit(
+                                        "local-progress",
+                                        json!({ "stage": "embed", "done": done, "total": total }),
+                                    );
+                                }
                             })?;
                             Ok(repos + files_n)
                         }
@@ -547,6 +549,10 @@ fn spawn_model_init(app: AppHandle) {
                 })
                 .await;
                 reload_store(&db_path, &store);
+                // close out any progress state the catch-up opened; without
+                // these the UI spinner never stops
+                let _ = app.emit("sync-done", json!({ "catchup": true }));
+                let _ = app.emit("local-done", json!({ "catchup": true }));
                 if let Ok(Ok(n)) = done {
                     if n > 0 {
                         let _ = app.emit("embed-caught-up", n);
@@ -593,16 +599,19 @@ fn spawn_siglip_init(app: AppHandle) {
                     let conn = db::open(&catchup_path)?;
                     match siglip.lock().unwrap().as_mut() {
                         Some(s) => files::embed_pending_images(&conn, s, |done, total| {
-                            let _ = app2.emit(
-                                "local-progress",
-                                json!({ "stage": "embed-images", "done": done, "total": total }),
-                            );
+                            if total > 0 {
+                                let _ = app2.emit(
+                                    "local-progress",
+                                    json!({ "stage": "embed-images", "done": done, "total": total }),
+                                );
+                            }
                         }),
                         None => Ok(0),
                     }
                 })
                 .await;
                 reload_store(&db_path, &store);
+                let _ = app.emit("local-done", json!({ "catchup": true }));
                 if let Ok(Ok(n)) = done {
                     if n > 0 {
                         let _ = app.emit("embed-caught-up", n);
