@@ -43,6 +43,7 @@ pub struct VectorStore {
     /// (file_id, chunk vector); file_id repeats across a file's chunks.
     pub file_chunks: Vec<(i64, Vec<f32>)>,
     pub images: Vec<(i64, Vec<f32>)>,
+    pub bookmarks: Vec<(i64, Vec<f32>)>,
 }
 
 impl VectorStore {
@@ -51,6 +52,7 @@ impl VectorStore {
             repos: db::all_repo_chunk_embeddings(conn)?,
             file_chunks: crate::files::all_file_chunk_embeddings(conn)?,
             images: crate::files::all_image_embeddings(conn)?,
+            bookmarks: crate::bookmarks::all_bookmark_embeddings(conn)?,
         })
     }
 
@@ -59,6 +61,7 @@ impl VectorStore {
             repos: Vec::new(),
             file_chunks: Vec::new(),
             images: Vec::new(),
+            bookmarks: Vec::new(),
         }
     }
 }
@@ -252,6 +255,30 @@ pub fn search_files(
         h.snippet = snippets.get(&h.id).cloned();
     }
     Ok(hits)
+}
+
+/// Hybrid search over browser bookmarks: title/url/folder FTS + one e5
+/// vector per bookmark.
+pub fn search_bookmarks(
+    conn: &Connection,
+    store: &VectorStore,
+    query: &str,
+    qvec: Option<&[f32]>,
+    limit: usize,
+) -> Result<Vec<crate::bookmarks::BookmarkHit>> {
+    use crate::bookmarks;
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let fts = bookmarks::bookmarks_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let vecs = match qvec {
+        Some(qvec) => vec![top_similar(&store.bookmarks, qvec, CANDIDATES_PER_LIST)],
+        None => vec![],
+    };
+    let fused = rank_hybrid(fts, vecs);
+    let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
+    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
+    bookmarks::bookmarks_by_ids(conn, &ids, &scores)
 }
 
 /// Image-to-image search: a query image's SigLIP vector against all indexed

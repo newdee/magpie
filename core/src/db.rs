@@ -164,6 +164,44 @@ fn migrate(conn: &Connection) -> Result<()> {
             PRIMARY KEY (file_id, chunk_idx)
         );
 
+        -- browser bookmarks, mirrored from local browser stores
+        CREATE TABLE IF NOT EXISTS bookmarks (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            url      TEXT NOT NULL,
+            title    TEXT NOT NULL,
+            folder   TEXT NOT NULL DEFAULT '',
+            browser  TEXT NOT NULL,
+            added_at INTEGER,
+            UNIQUE(browser, url, folder, title)
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
+            title, url, folder,
+            content='bookmarks', content_rowid='id', tokenize='unicode61'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS bookmarks_ai AFTER INSERT ON bookmarks BEGIN
+            INSERT INTO bookmarks_fts(rowid, title, url, folder)
+            VALUES (new.id, new.title, new.url, new.folder);
+        END;
+        CREATE TRIGGER IF NOT EXISTS bookmarks_ad AFTER DELETE ON bookmarks BEGIN
+            INSERT INTO bookmarks_fts(bookmarks_fts, rowid, title, url, folder)
+            VALUES ('delete', old.id, old.title, old.url, old.folder);
+        END;
+        CREATE TRIGGER IF NOT EXISTS bookmarks_au AFTER UPDATE ON bookmarks BEGIN
+            INSERT INTO bookmarks_fts(bookmarks_fts, rowid, title, url, folder)
+            VALUES ('delete', old.id, old.title, old.url, old.folder);
+            INSERT INTO bookmarks_fts(rowid, title, url, folder)
+            VALUES (new.id, new.title, new.url, new.folder);
+        END;
+
+        CREATE TABLE IF NOT EXISTS bookmark_vecs (
+            bookmark_id INTEGER PRIMARY KEY REFERENCES bookmarks(id) ON DELETE CASCADE,
+            doc_hash    TEXT NOT NULL,
+            dim         INTEGER NOT NULL,
+            vec         BLOB NOT NULL
+        );
+
         -- SigLIP space for images; separate from the e5 text space by design.
         -- dim = 0 marks "tried and failed" (corrupt file), so it is not retried.
         CREATE TABLE IF NOT EXISTS image_embeddings (

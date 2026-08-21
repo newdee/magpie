@@ -11,6 +11,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
+use magpie_core::bookmarks::{self, BookmarkHit};
 use magpie_core::db;
 use magpie_core::embed::Embedder;
 use magpie_core::files::{self, FileHit, FolderInfo};
@@ -84,6 +85,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let conn = state.db.lock().await;
     let count = db::repo_count(&conn).map_err(err_str)?;
     let file_count = files::file_count(&conn).map_err(err_str)?;
+    let bookmark_count = bookmarks::bookmark_count(&conn).map_err(err_str)?;
     let last_sync = db::meta_get(&conn, "last_sync").map_err(err_str)?;
     let username = db::meta_get(&conn, "username").map_err(err_str)?;
     let has_token = db::meta_get(&conn, "token").map_err(err_str)?.is_some();
@@ -102,6 +104,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "version": env!("CARGO_PKG_VERSION"),
         "repo_count": count,
         "file_count": file_count,
+        "bookmark_count": bookmark_count,
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
         "hf_endpoint": hf_endpoint,
@@ -142,8 +145,8 @@ fn start_sync(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn open_repo(app: AppHandle, url: String) -> Result<(), String> {
-    if !url.starts_with("https://") {
-        return Err("only https urls".into());
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("only http(s) urls".into());
     }
     use tauri_plugin_opener::OpenerExt;
     app.opener().open_url(url, None::<&str>).map_err(err_str)
@@ -391,6 +394,78 @@ async fn rebuild_folder(
     Ok(())
 }
 
+// ---------- bookmarks ----------
+
+#[tauri::command]
+async fn search_bookmarks(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<BookmarkHit>, String> {
+    let limit = limit.unwrap_or(30).min(100);
+    let qvec = if query.trim().is_empty() {
+        None
+    } else {
+        let emb = state.embedder.clone();
+        let q = query.clone();
+        tokio::task::spawn_blocking(move || {
+            emb.try_lock()
+                .ok()
+                .and_then(|mut guard| guard.as_mut().map(|e| e.embed_query(&q)))
+        })
+        .await
+        .map_err(err_str)?
+        .transpose()
+        .map_err(err_str)?
+    };
+    let conn = state.db.lock().await;
+    let store = state.store.lock().unwrap();
+    search::search_bookmarks(&conn, &store, &query, qvec.as_deref(), limit).map_err(err_str)
+}
+
+/// Re-read every browser's bookmark store and refresh vectors.
+fn spawn_bookmark_sync(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let embedder = state.embedder.clone();
+    let db_path = state.db_path.clone();
+    tauri::async_runtime::spawn(async move {
+        let outcome = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
+            let conn = db::open(&db_path)?;
+            let report = bookmarks::sync_bookmarks(&conn)?;
+            let embedded = match embedder.try_lock() {
+                Ok(mut guard) => match guard.as_mut() {
+                    Some(e) => bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?,
+                    None => 0, // model not ready; catch-up covers it
+                },
+                Err(_) => 0, // busy embedding elsewhere; next sync catches up
+            };
+            Ok(json!({ "report": report, "embedded": embedded }))
+        })
+        .await;
+        match outcome {
+            Ok(Ok(v)) => {
+                {
+                    let state = app.state::<AppState>();
+                    reload_store(&state.db_path, &state.store);
+                }
+                let _ = app.emit("bookmarks-done", v);
+            }
+            Ok(Err(e)) => {
+                let _ = app.emit("bookmarks-error", e.to_string());
+            }
+            Err(e) => {
+                let _ = app.emit("bookmarks-error", e.to_string());
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn sync_bookmarks_now(app: AppHandle) -> Result<(), String> {
+    spawn_bookmark_sync(app);
+    Ok(())
+}
+
 /// Wipe the whole star index (repos, READMEs, vectors) and sync from zero.
 #[tauri::command]
 async fn rebuild_stars(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
@@ -578,7 +653,8 @@ fn spawn_model_init(app: AppHandle) {
                                     );
                                 }
                             })?;
-                            Ok(repos + files_n)
+                            let bm = bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?;
+                            Ok(repos + files_n + bm)
                         }
                         None => Ok(0),
                     }
@@ -775,8 +851,9 @@ pub fn run() {
             // refresh quietly at launch: stars (if token configured) + local folders
             spawn_sync(app.handle().clone());
             spawn_local_index(app.handle().clone());
-            // periodic incremental re-scan: picks up deleted/changed files while
-            // the app stays resident (an unchanged scan is sub-second)
+            spawn_bookmark_sync(app.handle().clone());
+            // periodic incremental re-scan: picks up deleted/changed files and
+            // bookmarks while the app stays resident (unchanged scans are fast)
             let periodic = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut tick =
@@ -785,6 +862,7 @@ pub fn run() {
                 loop {
                     tick.tick().await;
                     spawn_local_index(periodic.clone());
+                    spawn_bookmark_sync(periodic.clone());
                 }
             });
             Ok(())
@@ -813,6 +891,8 @@ pub fn run() {
             index_local,
             rebuild_folder,
             rebuild_stars,
+            search_bookmarks,
+            sync_bookmarks_now,
             open_file
         ])
         .run(tauri::generate_context!())

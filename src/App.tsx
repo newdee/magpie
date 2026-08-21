@@ -32,7 +32,18 @@ interface FileHit {
   snippet: string | null;
 }
 
-type Hit = RepoHit | FileHit;
+interface BookmarkHit {
+  kind: "bookmark";
+  id: number;
+  url: string;
+  title: string;
+  folder: string;
+  browser: string;
+  added_at: number | null;
+  score: number;
+}
+
+type Hit = RepoHit | FileHit | BookmarkHit;
 
 interface FolderInfo {
   id: number;
@@ -43,6 +54,7 @@ interface FolderInfo {
 interface Status {
   repo_count: number;
   file_count: number;
+  bookmark_count: number;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -76,6 +88,7 @@ const WINDOW_WIDTH = 720;
 const SOURCES = [
   { id: "local", label: "Local Files" },
   { id: "github-stars", label: "GitHub Stars" },
+  { id: "bookmarks", label: "Bookmarks" },
 ] as const;
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|bmp|gif)$/i;
@@ -297,6 +310,9 @@ export default function App() {
           sort: repoSortRef.current,
         });
         hits = rs.map((r) => ({ ...r, kind: "repo" as const }));
+      } else if (SOURCES[srcIdx].id === "bookmarks") {
+        const bs = await invoke<Omit<BookmarkHit, "kind">[]>("search_bookmarks", { query: q });
+        hits = bs.map((b) => ({ ...b, kind: "bookmark" as const }));
       } else {
         const fs = await invoke<Omit<FileHit, "kind">[]>("search_local", {
           query: q,
@@ -405,6 +421,11 @@ export default function App() {
         setLocalProgress(null);
         setLastError(e.payload);
       }),
+      listen("bookmarks-done", () => {
+        refreshStatus();
+        runSearch(queryRef.current, sourceRef.current);
+      }),
+      listen<string>("bookmarks-error", (e) => setLastError(e.payload)),
       listen("model-status", () => refreshStatus()),
       listen("embed-caught-up", () => {
         refreshStatus();
@@ -462,9 +483,31 @@ export default function App() {
     try {
       if (hit.kind === "repo") {
         await invoke("open_repo", { url: hit.html_url });
+      } else if (hit.kind === "bookmark") {
+        await invoke("open_repo", { url: hit.url });
       } else {
         await invoke("open_file", { path: hit.path });
       }
+      await getCurrentWindow().hide();
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, []);
+
+  // Ctrl/Cmd+Enter hands the raw query to the default browser: a URL-looking
+  // input opens directly, anything else becomes a web search
+  const openWeb = useCallback(async () => {
+    const q = queryRef.current.trim();
+    if (!q) return;
+    const hasProto = /^https?:\/\//i.test(q);
+    const urlish = /^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/i.test(q);
+    const url = hasProto
+      ? q
+      : urlish
+        ? `https://${q}`
+        : `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+    try {
+      await invoke("open_repo", { url });
       await getCurrentWindow().hide();
     } catch (e) {
       setLastError(String(e));
@@ -506,7 +549,11 @@ export default function App() {
           break;
         case "Enter":
           e.preventDefault();
-          openHit(results[selected]);
+          if (e.ctrlKey || e.metaKey) {
+            openWeb();
+          } else {
+            openHit(results[selected]);
+          }
           break;
         case "Escape":
           e.preventDefault();
@@ -522,10 +569,16 @@ export default function App() {
           e.preventDefault();
           if (showSettings) break;
           if (e.shiftKey) {
-            // Shift+Tab cycles the local search scope
+            // Shift+Tab cycles the right-hand mode of the active source:
+            // local scope, or star sort order
             if (source === "local") {
               const i = SCOPES.findIndex((s) => s.id === localScope);
               setScope(SCOPES[(i + 1) % SCOPES.length].id);
+            } else if (source === "github-stars") {
+              const i = SORTS.findIndex((s) => s.id === repoSort);
+              const next = SORTS[(i + 1) % SORTS.length].id;
+              setRepoSort(next);
+              localStorage.setItem("magpie.sort", next);
             }
           } else {
             switchSource((sourceIdx + 1) % SOURCES.length);
@@ -533,13 +586,19 @@ export default function App() {
           break;
       }
     },
-    [results, selected, sourceIdx, imageQuery, showSettings, source, localScope, openHit, switchSource, setScope],
+    [results, selected, sourceIdx, imageQuery, showSettings, source, localScope, repoSort, openHit, openWeb, switchSource, setScope],
   );
 
   const refresh = useCallback(async () => {
     setLastError(null);
     try {
-      await invoke(source === "github-stars" ? "start_sync" : "index_local");
+      const cmd =
+        source === "github-stars"
+          ? "start_sync"
+          : source === "bookmarks"
+            ? "sync_bookmarks_now"
+            : "index_local";
+      await invoke(cmd);
       refreshStatus();
     } catch (e) {
       setLastError(String(e));
@@ -693,7 +752,9 @@ export default function App() {
           : status
             ? source === "github-stars"
               ? `${status.repo_count} repos indexed`
-              : `${status.file_count} files indexed`
+              : source === "bookmarks"
+                ? `${status.bookmark_count} bookmarks indexed`
+                : `${status.file_count} files indexed`
             : "";
 
   // progress is scoped to the active source: stars sync details only show on
@@ -793,6 +854,10 @@ export default function App() {
           placeholder={
             imageQuery
               ? "Searching by image similarity"
+              : source === "bookmarks"
+              ? status && status.bookmark_count > 0
+                ? `Search ${status.bookmark_count} bookmarks`
+                : "Search browser bookmarks"
               : source === "github-stars"
                 ? status && status.repo_count > 0
                   ? `Search ${status.repo_count} starred repos`
@@ -1112,7 +1177,28 @@ export default function App() {
                 onMouseMove={() => setSelected(i)}
                 onClick={() => openHit(r)}
               >
-                {r.kind === "repo" ? (
+                {r.kind === "bookmark" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title">{r.title}</span>
+                      <span className="row-sub">
+                        {r.folder && <span className="dim-prefix">{r.folder} · </span>}
+                        {r.url}
+                      </span>
+                    </div>
+                    <div className="row-meta">
+                      {r.added_at != null && relTimeUnix(r.added_at) && (
+                        <span
+                          className="mono"
+                          title={`added ${new Date(r.added_at * 1000).toISOString().slice(0, 10)}`}
+                        >
+                          {relTimeUnix(r.added_at)}
+                        </span>
+                      )}
+                      <span>{r.browser}</span>
+                    </div>
+                  </>
+                ) : r.kind === "repo" ? (
                   <>
                     <div className="row-main">
                       <span className="row-title">
@@ -1192,11 +1278,14 @@ export default function App() {
           <span>
             <kbd>tab</kbd> source
           </span>
-          {source === "local" && (
+          {source !== "bookmarks" && (
             <span>
-              <kbd>⇧tab</kbd> scope
+              <kbd>⇧tab</kbd> {source === "local" ? "scope" : "sort"}
             </span>
           )}
+          <span>
+            <kbd>ctrl⏎</kbd> web
+          </span>
           <span>
             <kbd>esc</kbd> hide
           </span>
