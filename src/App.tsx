@@ -765,10 +765,17 @@ export default function App() {
               ✕
             </button>
           </div>
-          <p className="card-title">GitHub</p>
+          <div className="section-head">
+            <p className="card-title">GitHub</p>
+            {status?.has_token && status.username ? (
+              <span className="conn-badge ok">connected · {status.username}</span>
+            ) : (
+              <span className="conn-badge">not connected</span>
+            )}
+          </div>
           <p className="card-body">
-            {status?.has_token && status.username
-              ? `Connected as ${status.username}. Paste a new token to replace it.`
+            {status?.has_token
+              ? "Paste a new token to replace the current one."
               : "Paste a personal access token. No scopes needed, it only reads your public stars."}
           </p>
           <div className="token-row">
