@@ -531,21 +531,48 @@ input.query:active {
 
 .conn-badge {
   flex-shrink: 0;
-  font-size: 11.5px;
-  padding: 2px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 4px 12px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 55%;
+  max-width: 60%;
 }
 
 .conn-badge.ok {
   color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+
+.conn-badge.ok strong {
+  font-weight: 700;
+}
+
+.conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.ver {
+  margin-left: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.self-end {
+  align-self: flex-end;
 }
 
 .model-status {

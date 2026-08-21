@@ -54,6 +54,7 @@ interface Status {
   max_file_mb: number;
   hotkey: string;
   hf_endpoint: string;
+  version: string;
 }
 
 interface StarsProgress {
@@ -767,7 +768,10 @@ export default function App() {
       {showSettings ? (
         <div className="card settings-page">
           <div className="card-head" data-tauri-drag-region>
-            <p className="card-title settings-title">Settings</p>
+            <p className="card-title settings-title">
+              Settings
+              {status?.version && <span className="ver">v{status.version}</span>}
+            </p>
             <button
               className="icon-btn"
               onClick={() => setShowSettings(false)}
@@ -780,7 +784,10 @@ export default function App() {
           <div className="section-head">
             <p className="card-title">GitHub</p>
             {status?.has_token && status.username ? (
-              <span className="conn-badge ok">connected · {status.username}</span>
+              <span className="conn-badge ok">
+                <span className="conn-dot" aria-hidden="true" /> connected as{" "}
+                <strong>{status.username}</strong>
+              </span>
             ) : (
               <span className="conn-badge">not connected</span>
             )}
@@ -845,7 +852,7 @@ export default function App() {
               ))}
             </div>
           )}
-          <button className="primary-btn self-start" onClick={addFolder}>
+          <button className="primary-btn self-end" onClick={addFolder}>
             Add folder
           </button>
 

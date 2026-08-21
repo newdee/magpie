@@ -99,6 +99,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         .map_err(err_str)?
         .unwrap_or_else(|| "https://huggingface.co".to_string());
     Ok(json!({
+        "version": env!("CARGO_PKG_VERSION"),
         "repo_count": count,
         "file_count": file_count,
         "max_file_mb": max_file_mb,

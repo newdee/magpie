@@ -69,7 +69,22 @@ topics、README。自动检测取消 star，README 用 ETag 增量拉取，只�
 - 浅色/深色/跟随系统主题；索引进行时搜索框下有进度提示；托盘图标带快捷操作。
 - 设置面板集中管理一切：GitHub token、索引文件夹、主题、快捷键、文件大小上限。
 
-## 安装与构建
+## 安装
+
+从 [Releases](https://github.com/newdee/magpie/releases) 下载：Windows NSIS
+安装包、macOS dmg（Apple Silicon）、Linux AppImage/deb/rpm。
+
+**macOS 提示**——构建未签名，浏览器下载的 dmg 会触发 Gatekeeper。用 curl 安装
+可完全跳过隔离标记：
+
+```sh
+curl -L https://github.com/newdee/magpie/releases/latest/download/magpie_aarch64.app.tar.gz | tar xz -C /Applications
+```
+
+（或者：右键 app → 打开；若提示"已损坏"，执行
+`xattr -cr /Applications/magpie.app`。）
+
+## 从源码构建
 
 ```sh
 pnpm install

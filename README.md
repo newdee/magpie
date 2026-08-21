@@ -84,7 +84,22 @@ what is *in* it:
 - Settings panel holds everything: GitHub token, indexed folders, theme,
   hotkey, file-size cap.
 
-## Install & build
+## Install
+
+Grab the latest build from [Releases](https://github.com/newdee/magpie/releases):
+Windows NSIS installer, macOS dmg (Apple Silicon), Linux AppImage/deb/rpm.
+
+**macOS tip** — builds are unsigned, so a browser-downloaded dmg triggers
+Gatekeeper. Installing via curl skips the quarantine flag entirely:
+
+```sh
+curl -L https://github.com/newdee/magpie/releases/latest/download/magpie_aarch64.app.tar.gz | tar xz -C /Applications
+```
+
+(Or: right-click the app → Open; if it says "damaged", run
+`xattr -cr /Applications/magpie.app`.)
+
+## Build from source
 
 ```sh
 pnpm install
