@@ -1,6 +1,6 @@
 [package]
 name = "magpie"
-version = "0.1.0"
+version = "0.1.1"
 description = "Spotlight-style search over things you saved and forgot: GitHub stars, local folders"
 authors = ["kian"]
 edition = "2021"
