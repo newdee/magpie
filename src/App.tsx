@@ -629,12 +629,16 @@ export default function App() {
               : `${status.file_count} files indexed`
             : "";
 
-  const indexHint = [
-    localProgress ? localProgressLabel(localProgress) : null,
-    starsProgress ? starsProgressLabel(starsProgress) : null,
-  ]
-    .filter(Boolean)
-    .join("  ·  ");
+  // progress is scoped to the active source: stars sync details only show on
+  // the GitHub Stars tab, local indexing only on Local Files
+  const indexHint =
+    source === "github-stars"
+      ? starsProgress
+        ? starsProgressLabel(starsProgress)
+        : null
+      : localProgress
+        ? localProgressLabel(localProgress)
+        : null;
 
   return (
     <div
