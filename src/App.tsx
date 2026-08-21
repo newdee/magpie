@@ -159,23 +159,24 @@ function renderSnippet(s: string): React.ReactNode[] {
   return nodes;
 }
 
-function starsProgressLabel(p: StarsProgress): string {
+// null = nothing worth showing (an idle pipeline must not render a hint)
+function starsProgressLabel(p: StarsProgress): string | null {
   switch (p.stage) {
     case "listing":
       return `listing stars… ${p.total}`;
     case "readmes":
-      return p.total === 0 ? "readmes up to date" : `readmes ${p.done}/${p.total}`;
+      return p.total === 0 ? null : `readmes ${p.done}/${p.total}`;
     case "embedding":
-      return p.total === 0 ? "index up to date" : `indexing ${p.done}/${p.total}`;
+      return p.total === 0 ? null : `indexing stars ${p.done}/${p.total}`;
   }
 }
 
-function localProgressLabel(p: LocalProgress): string {
+function localProgressLabel(p: LocalProgress): string | null {
   if (p.stage === "scan") return `scanning files… ${p.done}`;
-  if ((p.total ?? 0) === 0) return "index up to date";
+  if ((p.total ?? 0) === 0) return null;
   return p.stage === "embed-images"
     ? `indexing images ${p.done}/${p.total}`
-    : `indexing ${p.done}/${p.total}`;
+    : `indexing files ${p.done}/${p.total}`;
 }
 
 export default function App() {
