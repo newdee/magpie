@@ -185,15 +185,29 @@ pub fn search(
     Ok(results)
 }
 
+/// What a local search may return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalScope {
+    /// Text files and images mixed (default).
+    All,
+    /// Text files only.
+    Text,
+    /// Images only.
+    Images,
+}
+
 /// Hybrid search over local files: filename/content FTS + e5 text vectors +
 /// SigLIP image vectors, all fused by rank. The two vector spaces cover
 /// disjoint id sets (text files vs images), so their similarities never mix.
+/// `scope` restricts which kinds of files come back.
 pub fn search_files(
     conn: &Connection,
     store: &VectorStore,
     query: &str,
     qvec: Option<&[f32]>,
     image_qvec: Option<&[f32]>,
+    scope: LocalScope,
     limit: usize,
 ) -> Result<Vec<crate::files::FileHit>> {
     use crate::files;
@@ -208,21 +222,32 @@ pub fn search_files(
         .collect();
     let fts: Vec<i64> = fts_hits.into_iter().map(|(id, _)| id).collect();
     let mut vecs = Vec::new();
-    if let Some(qvec) = qvec {
-        // a file ranks by its best chunk
-        vecs.push(top_similar_grouped(
-            &store.file_chunks,
-            qvec,
-            CANDIDATES_PER_LIST,
-        ));
+    if scope != LocalScope::Images {
+        if let Some(qvec) = qvec {
+            // a file ranks by its best chunk
+            vecs.push(top_similar_grouped(
+                &store.file_chunks,
+                qvec,
+                CANDIDATES_PER_LIST,
+            ));
+        }
     }
-    if let Some(image_qvec) = image_qvec {
-        vecs.push(top_similar(&store.images, image_qvec, CANDIDATES_PER_LIST));
+    if scope != LocalScope::Text {
+        if let Some(image_qvec) = image_qvec {
+            vecs.push(top_similar(&store.images, image_qvec, CANDIDATES_PER_LIST));
+        }
     }
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
-    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
+    // fetch the full candidate set, filter by scope, then truncate
+    let ids: Vec<i64> = fused.iter().map(|(id, _)| *id).collect();
     let mut hits = files::files_by_ids(conn, &ids, &scores)?;
+    match scope {
+        LocalScope::All => {}
+        LocalScope::Text => hits.retain(|h| !files::is_image_ext(h.ext.as_deref())),
+        LocalScope::Images => hits.retain(|h| files::is_image_ext(h.ext.as_deref())),
+    }
+    hits.truncate(limit);
     for h in &mut hits {
         h.snippet = snippets.get(&h.id).cloned();
     }

@@ -155,8 +155,10 @@ fn open_repo(app: AppHandle, url: String) -> Result<(), String> {
 async fn search_local(
     state: State<'_, AppState>,
     query: String,
+    scope: Option<search::LocalScope>,
     limit: Option<usize>,
 ) -> Result<Vec<FileHit>, String> {
+    let scope = scope.unwrap_or(search::LocalScope::All);
     let limit = limit.unwrap_or(30).min(100);
     let (qvec, image_qvec) = if query.trim().is_empty() {
         (None, None)
@@ -191,6 +193,7 @@ async fn search_local(
         &query,
         qvec.as_deref(),
         image_qvec.as_deref(),
+        scope,
         limit,
     )
     .map_err(err_str)

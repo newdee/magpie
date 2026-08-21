@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
     let store = magpie_core::search::VectorStore::empty();
 
     // 2. keyword path
-    let hits = magpie_core::search::search_files(&conn, &store, "embedding", None, None, 10)?;
+    let hits = magpie_core::search::search_files(&conn, &store, "embedding", None, None, magpie_core::search::LocalScope::All, 10)?;
     println!("fts 'embedding': {} hits", hits.len());
     for h in hits.iter().take(3) {
         println!("  {}  score={:.4}", h.name, h.score);
@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
     std::fs::write(docs_dir.join("long-report.txt"), &long)?;
     magpie_core::files::add_folder(&conn, docs_dir.to_str().unwrap())?;
     magpie_core::files::index_folders(&conn, |_| {})?;
-    let hits = magpie_core::search::search_files(&conn, &store, "pelican", None, None, 5)?;
+    let hits = magpie_core::search::search_files(&conn, &store, "pelican", None, None, magpie_core::search::LocalScope::All, 5)?;
     assert_eq!(hits[0].name, "long-report.txt", "full-text FTS must reach 130K deep");
     let snip = hits[0].snippet.as_deref().expect("keyword hit must carry a snippet");
     assert!(snip.contains('\u{1}') && snip.contains("pelican"), "snippet highlights the match");
@@ -76,10 +76,10 @@ fn main() -> anyhow::Result<()> {
     let qvec = embedder.embed_query(query)?;
     println!("query embed in {:?}", t.elapsed());
     assert!(
-        magpie_core::search::search_files(&conn, &store, query, None, None, 5)?.is_empty(),
+        magpie_core::search::search_files(&conn, &store, query, None, None, magpie_core::search::LocalScope::All, 5)?.is_empty(),
         "sanity: keyword-only must find nothing for a Chinese query"
     );
-    let hits = magpie_core::search::search_files(&conn, &store, query, Some(&qvec), None, 5)?;
+    let hits = magpie_core::search::search_files(&conn, &store, query, Some(&qvec), None, magpie_core::search::LocalScope::All, 5)?;
     println!("hybrid zh query '{query}': {} hits", hits.len());
     for h in &hits {
         println!("  {}  score={:.4}", h.name, h.score);
@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     // 4. determinism: identical input, byte-identical vector, identical ranking
     let qvec2 = embedder.embed_query(query)?;
     assert_eq!(qvec, qvec2, "query embedding must be byte-identical across runs");
-    let hits2 = magpie_core::search::search_files(&conn, &store, query, Some(&qvec2), None, 5)?;
+    let hits2 = magpie_core::search::search_files(&conn, &store, query, Some(&qvec2), None, magpie_core::search::LocalScope::All, 5)?;
     let a: Vec<i64> = hits.iter().map(|h| h.id).collect();
     let b: Vec<i64> = hits2.iter().map(|h| h.id).collect();
     assert_eq!(a, b, "ranking must be deterministic");
@@ -123,10 +123,10 @@ fn main() -> anyhow::Result<()> {
     let iq_text = "一只白色的鸟的标志";
     let iq = siglip.embed_query(iq_text)?;
     assert!(
-        magpie_core::search::search_files(&conn, &store, iq_text, None, None, 5)?.is_empty(),
+        magpie_core::search::search_files(&conn, &store, iq_text, None, None, magpie_core::search::LocalScope::All, 5)?.is_empty(),
         "sanity: keyword-only must find nothing for the Chinese image query"
     );
-    let hits = magpie_core::search::search_files(&conn, &store, iq_text, None, Some(&iq), 5)?;
+    let hits = magpie_core::search::search_files(&conn, &store, iq_text, None, Some(&iq), magpie_core::search::LocalScope::All, 5)?;
     println!("image query '{iq_text}': {} hits", hits.len());
     for h in &hits {
         println!("  {}  score={:.4}", h.name, h.score);

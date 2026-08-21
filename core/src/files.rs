@@ -226,18 +226,7 @@ pub fn index_folders(
                 continue;
             }
             let path = entry.path();
-            if !is_indexable(path) {
-                continue;
-            }
             let Ok(meta) = entry.metadata() else { continue };
-            let size_cap = if is_pdf(path) || is_office(path) {
-                limits.doc_bytes
-            } else {
-                limits.file_bytes
-            };
-            if meta.len() > size_cap {
-                continue;
-            }
             let path_str = path.to_string_lossy().to_string();
             let mtime = meta
                 .modified()
@@ -258,18 +247,25 @@ pub fn index_folders(
                     continue; // unchanged
                 }
             }
+            // every file is indexed by name; content is extracted only for
+            // types we understand and only under the size cap. Anything else
+            // (binaries, video, oversized files) stays findable by filename.
             let content = if is_image(path) {
                 None // pixels are indexed via SigLIP, not as text
             } else if is_pdf(path) {
-                // scanned / garbled PDFs stay findable by name, content-less
-                extract_pdf_text(path, limits.char_cap)
+                (meta.len() <= limits.doc_bytes)
+                    .then(|| extract_pdf_text(path, limits.char_cap))
+                    .flatten()
             } else if is_office(path) {
-                extract_office_text(path, limits.char_cap)
+                (meta.len() <= limits.doc_bytes)
+                    .then(|| extract_office_text(path, limits.char_cap))
+                    .flatten()
+            } else if is_text_ext(path) {
+                (meta.len() <= limits.file_bytes)
+                    .then(|| read_text_full(path, limits))
+                    .flatten()
             } else {
-                match read_text_full(path, limits) {
-                    Some(text) => Some(text),
-                    None => continue, // binary or unreadable
-                }
+                None // unknown type: name-only
             };
             let name = path
                 .file_name()
@@ -314,6 +310,11 @@ fn is_image(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Scope filtering helper for retrieval.
+pub fn is_image_ext(ext: Option<&str>) -> bool {
+    ext.map(|e| IMAGE_EXTS.contains(&e)).unwrap_or(false)
+}
+
 fn is_pdf(path: &Path) -> bool {
     path.extension()
         .map(|e| e.to_string_lossy().eq_ignore_ascii_case("pdf"))
@@ -326,16 +327,10 @@ fn is_office(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_indexable(path: &Path) -> bool {
+fn is_text_ext(path: &Path) -> bool {
     match path.extension() {
-        Some(ext) => {
-            let ext = ext.to_string_lossy().to_lowercase();
-            TEXT_EXTS.contains(&ext.as_str())
-                || IMAGE_EXTS.contains(&ext.as_str())
-                || OFFICE_EXTS.contains(&ext.as_str())
-                || ext == "pdf"
-        }
-        // extensionless: allow well-known text files by name
+        Some(ext) => TEXT_EXTS.contains(&ext.to_string_lossy().to_lowercase().as_str()),
+        // extensionless: treat well-known text files as text
         None => {
             let name = path
                 .file_name()
@@ -830,16 +825,19 @@ mod tests {
         write(&tmp, "notes.md", "meeting notes about quarterly search index");
         write(&tmp, "code.rs", "fn main() { println!(\"scraper\"); }");
         write(&tmp, "image.png", "\u{0}\u{0}fakebinary");
+        write(&tmp, "holiday-video.mp4", "\u{0}\u{0}moviebytes");
         write(&tmp, ".gitignore", "secret/\n");
         write(&tmp, "secret/token.txt", "super secret credentials");
 
         let conn = open_in_memory().unwrap();
         add_folder(&conn, tmp.to_str().unwrap()).unwrap();
         let report = index_folders(&conn, |_| {}).unwrap();
-        assert_eq!(report.indexed, 3, "md + rs + png (image, by name); secret/ gitignored");
-        // the image is findable by filename but its bytes are not text-indexed
+        assert_eq!(report.indexed, 4, "md + rs + png + mp4; secret/ gitignored");
+        // images and unknown types are findable by filename, never by bytes
         assert_eq!(files_fts_search(&conn, "image", 10).unwrap().len(), 1);
+        assert_eq!(files_fts_search(&conn, "holiday", 10).unwrap().len(), 1);
         assert!(files_fts_search(&conn, "fakebinary", 10).unwrap().is_empty());
+        assert!(files_fts_search(&conn, "moviebytes", 10).unwrap().is_empty());
 
         let hits = files_fts_search(&conn, "quarterly", 10).unwrap();
         assert_eq!(hits.len(), 1);

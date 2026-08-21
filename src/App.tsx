@@ -95,6 +95,13 @@ const SORTS: { id: RepoSort; label: string }[] = [
   { id: "stars", label: "stars" },
 ];
 
+type LocalScope = "all" | "text" | "images";
+const SCOPES: { id: LocalScope; label: string }[] = [
+  { id: "all", label: "all" },
+  { id: "text", label: "text" },
+  { id: "images", label: "images" },
+];
+
 type Theme = "auto" | "light" | "dark";
 const THEMES: Theme[] = ["auto", "light", "dark"];
 
@@ -204,6 +211,10 @@ export default function App() {
     const saved = localStorage.getItem("magpie.sort") as RepoSort | null;
     return saved && SORTS.some((s) => s.id === saved) ? saved : "relevance";
   });
+  const [localScope, setLocalScope] = useState<LocalScope>(() => {
+    const saved = localStorage.getItem("magpie.scope") as LocalScope | null;
+    return saved && SCOPES.some((s) => s.id === saved) ? saved : "all";
+  });
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem("magpie.theme") as Theme | null;
     return saved && THEMES.includes(saved) ? saved : "auto";
@@ -262,6 +273,14 @@ export default function App() {
 
   const repoSortRef = useRef(repoSort);
   repoSortRef.current = repoSort;
+  const localScopeRef = useRef(localScope);
+  localScopeRef.current = localScope;
+
+  const setScope = useCallback((s: LocalScope) => {
+    setLocalScope(s);
+    localStorage.setItem("magpie.scope", s);
+    inputRef.current?.focus();
+  }, []);
 
   const runSearch = useCallback(async (q: string, srcIdx: number) => {
     // empty input shows nothing: the palette stays a bare search box
@@ -279,7 +298,10 @@ export default function App() {
         });
         hits = rs.map((r) => ({ ...r, kind: "repo" as const }));
       } else {
-        const fs = await invoke<Omit<FileHit, "kind">[]>("search_local", { query: q });
+        const fs = await invoke<Omit<FileHit, "kind">[]>("search_local", {
+          query: q,
+          scope: localScopeRef.current,
+        });
         hits = fs.map((f) => ({ ...f, kind: "file" as const }));
       }
       if (queryRef.current === q && sourceRef.current === srcIdx) {
@@ -317,7 +339,7 @@ export default function App() {
     }
     const t = setTimeout(() => runSearch(query, sourceIdx), 120);
     return () => clearTimeout(t);
-  }, [query, sourceIdx, imageQuery, repoSort, runSearch]);
+  }, [query, sourceIdx, imageQuery, repoSort, localScope, runSearch]);
 
   // release blob preview URLs when the image query changes or clears
   useEffect(() => {
@@ -498,13 +520,20 @@ export default function App() {
           break;
         case "Tab":
           e.preventDefault();
-          if (!showSettings) {
+          if (showSettings) break;
+          if (e.shiftKey) {
+            // Shift+Tab cycles the local search scope
+            if (source === "local") {
+              const i = SCOPES.findIndex((s) => s.id === localScope);
+              setScope(SCOPES[(i + 1) % SCOPES.length].id);
+            }
+          } else {
             switchSource((sourceIdx + 1) % SOURCES.length);
           }
           break;
       }
     },
-    [results, selected, sourceIdx, imageQuery, showSettings, openHit, switchSource],
+    [results, selected, sourceIdx, imageQuery, showSettings, source, localScope, openHit, switchSource, setScope],
   );
 
   const refresh = useCallback(async () => {
@@ -681,6 +710,21 @@ export default function App() {
             {s.label}
           </button>
         ))}
+        {source === "local" && (
+          <span className="sort-group">
+            {SCOPES.map((s) => (
+              <button
+                key={s.id}
+                className={`source ${localScope === s.id ? "active" : ""}`}
+                onClick={() => setScope(s.id)}
+                tabIndex={-1}
+                title={`Search ${s.id === "all" ? "everything" : s.id} (Shift+Tab cycles)`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </span>
+        )}
         {source === "github-stars" && (
           <span className="sort-group">
             {SORTS.map((s) => (
@@ -1118,6 +1162,11 @@ export default function App() {
           <span>
             <kbd>tab</kbd> source
           </span>
+          {source === "local" && (
+            <span>
+              <kbd>⇧tab</kbd> scope
+            </span>
+          )}
           <span>
             <kbd>esc</kbd> hide
           </span>
