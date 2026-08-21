@@ -249,6 +249,9 @@ async fn set_max_file_mb(
     state: State<'_, AppState>,
     mb: u64,
 ) -> Result<(), String> {
+    if state.local_indexing.load(Ordering::SeqCst) {
+        return Err("indexing is running; try again when it finishes".into());
+    }
     {
         let conn = state.db.lock().await;
         db::meta_set(&conn, "max_file_mb", &mb.to_string()).map_err(err_str)?;

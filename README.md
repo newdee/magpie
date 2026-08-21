@@ -49,7 +49,7 @@ last-push time so you can spot abandoned projects instantly.
 
 Add your everyday working folders and search their **full text**:
 
-- 80+ plain-text and code formats, read whole (configurable size cap,
+- ~80 plain-text and code formats, read whole (configurable size cap,
   including unlimited)
 - **PDF** via [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
   (scanned/garbled PDFs stay findable by name)

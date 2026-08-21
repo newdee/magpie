@@ -41,7 +41,7 @@ topics、README。自动检测取消 star，README 用 ETag 增量拉取，只�
 
 把日常工作目录加进来，按**全文**搜索：
 
-- 80+ 种文本/代码格式，整文件读取（大小上限可配置，支持无上限）
+- 近 80 种文本/代码格式，整文件读取（大小上限可配置，支持无上限）
 - **PDF**：经 [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
   解析（扫描版/乱码 PDF 仍可按文件名找到）
 - **Word / Excel / PowerPoint**（docx、xlsx、pptx）

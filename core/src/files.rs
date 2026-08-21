@@ -375,7 +375,7 @@ fn extract_office_text(path: &Path, char_cap: usize) -> Option<String> {
     parts.sort();
     let mut out = String::new();
     for part in parts {
-        let Ok(mut f) = archive.by_name(&part) else { continue };
+        let Ok(f) = archive.by_name(&part) else { continue };
         let mut xml = String::new();
         if f.take(MAX_PDF_SIZE).read_to_string(&mut xml).is_err() {
             continue;
@@ -515,15 +515,19 @@ pub fn embed_pending_files(
         for batch in docs.chunks(EMBED_BATCH) {
             vecs.extend(embedder.embed_passages(batch)?);
         }
-        conn.execute("DELETE FROM file_chunks WHERE file_id = ?1", [id])?;
+        // one transaction per file: a crash mid-write must never leave a file
+        // with the new hash but only some of its chunks (it would never heal)
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM file_chunks WHERE file_id = ?1", [id])?;
         for (idx, vec) in vecs.iter().enumerate() {
             let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
-            conn.execute(
+            tx.execute(
                 "INSERT INTO file_chunks(file_id, chunk_idx, doc_hash, dim, vec)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![id, idx as i64, hash, vec.len() as i64, bytes],
             )?;
         }
+        tx.commit()?;
         done += 1;
         if done % 4 == 0 || done == total {
             progress(done, total);

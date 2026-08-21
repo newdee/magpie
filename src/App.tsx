@@ -536,6 +536,13 @@ export default function App() {
     if (e.metaKey) parts.push("Super");
     let key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
     if (e.key === " ") key = "Space";
+    // Shift-only or bare chords (Shift+A, Tab…) would hijack normal typing
+    // system-wide; require Ctrl/Alt/Super for anything that is not F1-F24
+    const strongModifier = e.ctrlKey || e.altKey || e.metaKey;
+    if (!strongModifier && !/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) {
+      setHotkeyMsg("use Ctrl/Alt/Win plus a key, or an F-key");
+      return;
+    }
     parts.push(key);
     setHotkeyDraft(parts.join("+"));
     setHotkeyMsg(null);
