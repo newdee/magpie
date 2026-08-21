@@ -190,6 +190,23 @@ body {
   -webkit-text-fill-color: var(--text);
 }
 
+/* macOS WebKit paints its own textfield chrome and focus ring; kill every
+   native layer in every state */
+input.query,
+input.query:focus,
+input.query:focus-visible,
+input.query:hover,
+input.query:active {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
 .query::placeholder {
   color: var(--text-faint);
 }
