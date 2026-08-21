@@ -53,6 +53,7 @@ interface Status {
   local_indexing: boolean;
   max_file_mb: number;
   hotkey: string;
+  hf_endpoint: string;
 }
 
 interface StarsProgress {
@@ -95,6 +96,11 @@ const SORTS: { id: RepoSort; label: string }[] = [
 
 type Theme = "auto" | "light" | "dark";
 const THEMES: Theme[] = ["auto", "light", "dark"];
+
+const HF_ENDPOINTS: { url: string; label: string }[] = [
+  { url: "https://huggingface.co", label: "huggingface.co" },
+  { url: "https://hf-mirror.com", label: "hf-mirror.com (China)" },
+];
 
 const FILE_CAPS: { mb: number; label: string }[] = [
   { mb: 4, label: "4 MB" },
@@ -482,7 +488,9 @@ export default function App() {
           break;
         case "Tab":
           e.preventDefault();
-          switchSource((sourceIdx + 1) % SOURCES.length);
+          if (!showSettings) {
+            switchSource((sourceIdx + 1) % SOURCES.length);
+          }
           break;
       }
     },
@@ -590,11 +598,11 @@ export default function App() {
   const footerStatus = lastError
     ? `error: ${lastError}`
     : modelFailed
-      ? "semantic index unavailable, keyword search only"
+      ? "model download failed, keyword search only (set a mirror in settings)"
       : modelWarming
-        ? "semantic index warming up"
+        ? "preparing semantic model (first run downloads ~500 MB)"
         : source === "local" && status?.image_model === "loading"
-          ? "image search warming up"
+          ? "preparing image model (first run downloads ~200 MB)"
           : status
             ? source === "github-stars"
               ? `${status.repo_count} repos indexed`
@@ -609,8 +617,12 @@ export default function App() {
     .join("  ·  ");
 
   return (
-    <div className="panel" ref={panelRef} onKeyDown={onKeyDown}>
-      <div className="source-row">
+    <div
+      className={`panel ${showSettings ? "settings-mode" : ""}`}
+      ref={panelRef}
+      onKeyDown={onKeyDown}
+    >
+      <div className="source-row" data-tauri-drag-region>
         {SOURCES.map((s, i) => (
           <button
             key={s.id}
@@ -745,20 +757,19 @@ export default function App() {
       )}
 
       {showSettings ? (
-        <div className="card">
-          <div className="card-head">
-            <p className="card-title">GitHub</p>
+        <div className="card settings-page">
+          <div className="card-head" data-tauri-drag-region>
+            <p className="card-title settings-title">Settings</p>
             <button
               className="icon-btn"
               onClick={() => setShowSettings(false)}
-              title="Close settings"
+              title="Back to search (Esc)"
               aria-label="Close settings"
             >
-              <svg className="chevron up" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              ✕
             </button>
           </div>
+          <p className="card-title">GitHub</p>
           <p className="card-body">
             {status?.has_token && status.username
               ? `Connected as ${status.username}. Paste a new token to replace it.`
@@ -857,6 +868,30 @@ export default function App() {
           {hotkeyMsg && (
             <p className={hotkeyMsg === "saved" ? "card-body" : "error-line"}>{hotkeyMsg}</p>
           )}
+
+          <p className="card-title settings-gap">Model download source</p>
+          <p className="card-body">
+            Embedding models download once from this host. Pick the mirror if
+            huggingface.co is unreachable from your network.
+          </p>
+          <div className="pill-row">
+            {HF_ENDPOINTS.map((e) => (
+              <button
+                key={e.url}
+                className={`source ${status?.hf_endpoint === e.url ? "active" : ""}`}
+                onClick={async () => {
+                  try {
+                    await invoke("set_hf_endpoint", { endpoint: e.url });
+                    await refreshStatus();
+                  } catch (er) {
+                    setLastError(String(er));
+                  }
+                }}
+              >
+                {e.label}
+              </button>
+            ))}
+          </div>
 
           <p className="card-title settings-gap">Max file size</p>
           <p className="card-body">

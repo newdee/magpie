@@ -95,11 +95,15 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let hotkey = db::meta_get(&conn, "hotkey")
         .map_err(err_str)?
         .unwrap_or_else(|| DEFAULT_HOTKEY.to_string());
+    let hf_endpoint = db::meta_get(&conn, "hf_endpoint")
+        .map_err(err_str)?
+        .unwrap_or_else(|| "https://huggingface.co".to_string());
     Ok(json!({
         "repo_count": count,
         "file_count": file_count,
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
+        "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
         "last_sync": last_sync,
         "username": username,
@@ -271,6 +275,35 @@ fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
         }
     })
     .map_err(err_str)
+}
+
+/// Switch the model download endpoint (e.g. hf-mirror.com for regions where
+/// huggingface.co is unreachable). Retries any failed model init immediately.
+#[tauri::command]
+async fn set_hf_endpoint(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    endpoint: String,
+) -> Result<(), String> {
+    let endpoint = endpoint.trim().trim_end_matches('/').to_string();
+    if !endpoint.starts_with("https://") {
+        return Err("endpoint must be an https:// URL".into());
+    }
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "hf_endpoint", &endpoint).map_err(err_str)?;
+    }
+    std::env::set_var("HF_ENDPOINT", &endpoint);
+    // a failed first download can now succeed: retry model init
+    let retry_text = state.model_status.lock().unwrap().starts_with("failed");
+    let retry_image = state.siglip_status.lock().unwrap().starts_with("failed");
+    if retry_text {
+        spawn_model_init(app.clone());
+    }
+    if retry_image {
+        spawn_siglip_init(app);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -604,6 +637,15 @@ fn toggle_window(app: &AppHandle) {
 
 fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        // launcher position: horizontally centered, upper fifth (Spotlight
+        // convention). Re-applied on every summon, so a dragged-away window
+        // always comes back to a predictable spot.
+        if let (Ok(Some(monitor)), Ok(size)) = (w.current_monitor(), w.outer_size()) {
+            let m = monitor.size();
+            let x = ((m.width as i32 - size.width as i32) / 2).max(0);
+            let y = (m.height as f64 * 0.22) as i32;
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("palette-shown", ());
@@ -621,6 +663,12 @@ pub fn run() {
             let model_dir = data_dir.join("models");
             let conn = db::open(&db_path)?;
             sync::ensure_embed_model(&conn)?;
+            // must be set before model init spawns: hf-hub reads HF_ENDPOINT
+            if let Ok(Some(ep)) = db::meta_get(&conn, "hf_endpoint") {
+                if !ep.is_empty() {
+                    std::env::set_var("HF_ENDPOINT", ep);
+                }
+            }
             let store = VectorStore::load(&conn).unwrap_or_else(|_| VectorStore::empty());
 
             app.manage(AppState {
@@ -709,6 +757,7 @@ pub fn run() {
             preview_thumb,
             set_max_file_mb,
             set_hotkey,
+            set_hf_endpoint,
             list_folders,
             add_folder,
             remove_folder,

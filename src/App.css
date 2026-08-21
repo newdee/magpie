@@ -480,6 +480,31 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* settings is its own page: everything palette-related disappears */
+.settings-mode .source-row,
+.settings-mode .input-row,
+.settings-mode .index-hint,
+.settings-mode .collapse-bar,
+.settings-mode .results,
+.settings-mode .empty,
+.settings-mode .footer {
+  display: none;
+}
+
+.settings-page {
+  border-top: none;
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.settings-title {
+  font-size: 16px;
+}
+
+.settings-page .card-head {
+  margin-bottom: 4px;
+}
+
 .card-title {
   font-weight: 600;
   font-size: 15px;
