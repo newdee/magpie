@@ -303,9 +303,12 @@ async fn set_hf_endpoint(
         db::meta_set(&conn, "hf_endpoint", &endpoint).map_err(err_str)?;
     }
     std::env::set_var("HF_ENDPOINT", &endpoint);
-    // a failed first download can now succeed: retry model init
-    let retry_text = state.model_status.lock().unwrap().starts_with("failed");
-    let retry_image = state.siglip_status.lock().unwrap().starts_with("failed");
+    // retry model init unless the model is already usable: a download that
+    // hangs against a blackholed host sits in "loading" forever, so treat
+    // that the same as "failed" — a stale hung attempt that later resolves
+    // is simply overwritten by whichever init finishes last
+    let retry_text = *state.model_status.lock().unwrap() != "ready";
+    let retry_image = *state.siglip_status.lock().unwrap() != "ready";
     if retry_text {
         spawn_model_init(app.clone());
     }
