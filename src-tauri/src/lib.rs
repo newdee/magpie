@@ -87,7 +87,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let last_sync = db::meta_get(&conn, "last_sync").map_err(err_str)?;
     let username = db::meta_get(&conn, "username").map_err(err_str)?;
     let has_token = db::meta_get(&conn, "token").map_err(err_str)?.is_some();
-    let embedded = db::all_embedding_hashes(&conn).map_err(err_str)?.len();
+    let embedded = db::repo_chunk_hashes(&conn).map_err(err_str)?.len();
     let max_file_mb = db::meta_get(&conn, "max_file_mb")
         .map_err(err_str)?
         .and_then(|s| s.parse::<u64>().ok())

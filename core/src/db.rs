@@ -98,11 +98,17 @@ fn migrate(conn: &Connection) -> Result<()> {
             VALUES (new.id, new.full_name, new.description, new.topics, new.readme);
         END;
 
-        CREATE TABLE IF NOT EXISTS embeddings (
-            repo_id  INTEGER PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
-            doc_hash TEXT NOT NULL,
-            dim      INTEGER NOT NULL,
-            vec      BLOB NOT NULL
+        -- pre-1.0 schema step: repo single-vector embeddings replaced by
+        -- chunked ones; dropped vectors rebuild on the next embed pass
+        DROP TABLE IF EXISTS embeddings;
+
+        CREATE TABLE IF NOT EXISTS repo_chunks (
+            repo_id   INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+            chunk_idx INTEGER NOT NULL,
+            doc_hash  TEXT NOT NULL,
+            dim       INTEGER NOT NULL,
+            vec       BLOB NOT NULL,
+            PRIMARY KEY (repo_id, chunk_idx)
         );
 
         CREATE INDEX IF NOT EXISTS idx_repos_starred_at ON repos(starred_at DESC);
@@ -370,43 +376,45 @@ pub fn embed_candidates(conn: &Connection) -> Result<Vec<EmbedCandidate>> {
     Ok(rows)
 }
 
-/// repo_id -> doc_hash for every stored embedding, in one query.
-pub fn all_embedding_hashes(conn: &Connection) -> Result<std::collections::HashMap<i64, String>> {
-    let mut stmt = conn.prepare("SELECT repo_id, doc_hash FROM embeddings")?;
+/// repo_id -> per-repo doc_hash (identical across a repo's chunks).
+pub fn repo_chunk_hashes(conn: &Connection) -> Result<std::collections::HashMap<i64, String>> {
+    let mut stmt = conn.prepare("SELECT DISTINCT repo_id, doc_hash FROM repo_chunks")?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
     Ok(rows)
 }
 
-pub fn clear_embeddings(conn: &Connection) -> Result<()> {
-    conn.execute("DELETE FROM embeddings", [])?;
+pub fn clear_repo_chunks(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM repo_chunks", [])?;
     Ok(())
 }
 
-pub fn embedding_hash(conn: &Connection, repo_id: i64) -> Result<Option<String>> {
-    Ok(conn
-        .query_row(
-            "SELECT doc_hash FROM embeddings WHERE repo_id = ?1",
-            [repo_id],
-            |r| r.get(0),
-        )
-        .optional()?)
-}
-
-pub fn put_embedding(conn: &Connection, repo_id: i64, doc_hash: &str, vec: &[f32]) -> Result<()> {
-    let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
-    conn.execute(
-        "INSERT INTO embeddings(repo_id, doc_hash, dim, vec) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(repo_id) DO UPDATE SET doc_hash = excluded.doc_hash,
-                                            dim = excluded.dim, vec = excluded.vec",
-        params![repo_id, doc_hash, vec.len() as i64, bytes],
-    )?;
+/// Replace a repo's chunk vectors atomically (a crash must never leave the
+/// new hash with a partial chunk set).
+pub fn put_repo_chunks(
+    conn: &Connection,
+    repo_id: i64,
+    doc_hash: &str,
+    vecs: &[Vec<f32>],
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM repo_chunks WHERE repo_id = ?1", [repo_id])?;
+    for (idx, vec) in vecs.iter().enumerate() {
+        let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+        tx.execute(
+            "INSERT INTO repo_chunks(repo_id, chunk_idx, doc_hash, dim, vec)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![repo_id, idx as i64, doc_hash, vec.len() as i64, bytes],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
-pub fn all_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
-    let mut stmt = conn.prepare("SELECT repo_id, dim, vec FROM embeddings")?;
+/// All repo chunk vectors as (repo_id, vec); repo_id repeats across chunks.
+pub fn all_repo_chunk_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
+    let mut stmt = conn.prepare("SELECT repo_id, dim, vec FROM repo_chunks")?;
     let rows = stmt
         .query_map([], |r| {
             let id: i64 = r.get(0)?;
@@ -491,11 +499,11 @@ mod tests {
         assert!(fts_search(&conn, "json", 10).unwrap().is_empty());
 
         // unstar removes from repos + FTS + embeddings
-        put_embedding(&conn, 1, "h", &[0.1, 0.2]).unwrap();
+        put_repo_chunks(&conn, 1, "h", &[vec![0.1, 0.2]]).unwrap();
         let removed = delete_repos_not_in(&mut conn, &[2]).unwrap();
         assert_eq!(removed, 1);
         assert!(fts_search(&conn, "scraping", 10).unwrap().is_empty());
-        assert!(all_embeddings(&conn).unwrap().is_empty());
+        assert!(all_repo_chunk_embeddings(&conn).unwrap().is_empty());
     }
 
     #[test]
@@ -503,12 +511,16 @@ mod tests {
         let conn = open_in_memory().unwrap();
         upsert_repo(&conn, &sample(7, "x/y", "d")).unwrap();
         let v = vec![0.25f32, -1.5, 3.75];
-        put_embedding(&conn, 7, "abc", &v).unwrap();
-        let all = all_embeddings(&conn).unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].0, 7);
-        assert_eq!(all[0].1, v); // byte-exact roundtrip
-        assert_eq!(embedding_hash(&conn, 7).unwrap().as_deref(), Some("abc"));
+        let v2 = vec![9.0f32, 8.0, 7.0];
+        put_repo_chunks(&conn, 7, "abc", &[v.clone(), v2.clone()]).unwrap();
+        let all = all_repo_chunk_embeddings(&conn).unwrap();
+        assert_eq!(all.len(), 2, "two chunks stored");
+        assert_eq!(all[0], (7, v.clone())); // byte-exact roundtrip
+        assert_eq!(all[1], (7, v2));
+        assert_eq!(repo_chunk_hashes(&conn).unwrap().get(&7).map(String::as_str), Some("abc"));
+        // replacing swaps the whole chunk set atomically
+        put_repo_chunks(&conn, 7, "def", std::slice::from_ref(&v)).unwrap();
+        assert_eq!(all_repo_chunk_embeddings(&conn).unwrap().len(), 1);
     }
 
     #[test]

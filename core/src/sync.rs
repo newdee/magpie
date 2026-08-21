@@ -39,7 +39,7 @@ pub struct SyncReport {
 pub fn ensure_embed_model(conn: &Connection) -> Result<()> {
     let stored = db::meta_get(conn, "embed_model")?;
     if stored.as_deref() != Some(EMBED_MODEL_ID) {
-        db::clear_embeddings(conn)?;
+        db::clear_repo_chunks(conn)?;
         db::meta_set(conn, "embed_model", EMBED_MODEL_ID)?;
     }
     Ok(())
@@ -139,24 +139,45 @@ fn stale_readme_targets(
         .collect()
 }
 
-/// Embed every repo whose composed doc changed. Blocking; run via spawn_blocking.
-/// Returns the number of repos (re-)embedded.
+/// Per-repo chunk documents: every chunk carries the repo header (name,
+/// description, topics, language) so isolated README chunks stay attributable.
+/// Returns (per-repo hash, chunk docs). No README still yields the header doc.
+fn repo_chunk_docs(c: &crate::db::EmbedCandidate) -> (String, Vec<String>) {
+    let header = embed::compose_repo_header(c);
+    let cleaned = c
+        .readme
+        .as_deref()
+        .map(embed::clean_markdown)
+        .unwrap_or_default();
+    let hash = embed::doc_hash(&format!("{header}\n{cleaned}"));
+    let mut chunks = crate::files::chunk_text(&cleaned);
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+    let docs = chunks
+        .iter()
+        .map(|chunk| format!("{header}\n{chunk}"))
+        .collect();
+    (hash, docs)
+}
+
+/// Embed every repo whose composed content changed, one vector per README
+/// chunk. Blocking; run via spawn_blocking. Returns repos (re-)embedded.
 pub fn embed_pending(
     conn: &Connection,
     embedder: &mut Embedder,
     progress: impl Fn(Progress),
 ) -> Result<usize> {
     ensure_embed_model(conn)?;
-    let hashes = db::all_embedding_hashes(conn)?;
-    let pending: Vec<(i64, String, String)> = db::embed_candidates(conn)?
+    let hashes = db::repo_chunk_hashes(conn)?;
+    let pending: Vec<(i64, String, Vec<String>)> = db::embed_candidates(conn)?
         .iter()
         .filter_map(|c| {
-            let doc = embed::compose_doc(c);
-            let hash = embed::doc_hash(&doc);
+            let (hash, docs) = repo_chunk_docs(c);
             if hashes.get(&c.id) == Some(&hash) {
                 None
             } else {
-                Some((c.id, doc, hash))
+                Some((c.id, hash, docs))
             }
         })
         .collect();
@@ -164,15 +185,22 @@ pub fn embed_pending(
     let total = pending.len();
     progress(Progress::Embedding { done: 0, total });
     let mut done = 0usize;
-    for chunk in pending.chunks(EMBED_BATCH) {
-        let docs: Vec<String> = chunk.iter().map(|(_, d, _)| d.clone()).collect();
-        let vecs = embedder.embed_passages(&docs)?;
-        for ((id, _, hash), vec) in chunk.iter().zip(vecs) {
-            db::put_embedding(conn, *id, hash, &vec)?;
+    for (id, hash, docs) in &pending {
+        let mut vecs = Vec::with_capacity(docs.len());
+        for batch in docs.chunks(EMBED_BATCH) {
+            vecs.extend(embedder.embed_passages(batch)?);
         }
-        done += chunk.len();
-        progress(Progress::Embedding { done, total });
+        db::put_repo_chunks(conn, *id, hash, &vecs)?;
+        done += 1;
+        if done.is_multiple_of(4) || done == total {
+            progress(Progress::Embedding { done, total });
+        }
     }
+    // drop chunks for unstarred repos
+    conn.execute(
+        "DELETE FROM repo_chunks WHERE repo_id NOT IN (SELECT id FROM repos)",
+        [],
+    )?;
     Ok(total)
 }
 
@@ -243,6 +271,41 @@ mod tests {
     }
 
     #[test]
+    fn repo_chunk_docs_cover_whole_readme() {
+        let mut readme = String::new();
+        for i in 0..500 {
+            readme.push_str(&format!("paragraph {i} describing a feature in detail\n"));
+        }
+        readme.push_str("FINAL-README-MARKER\n");
+        let c = db::EmbedCandidate {
+            id: 1,
+            full_name: "a/b".into(),
+            description: Some("desc".into()),
+            topics: vec!["cli".into()],
+            language: Some("Rust".into()),
+            readme: Some(readme),
+        };
+        let (hash, docs) = repo_chunk_docs(&c);
+        assert!(docs.len() > 5, "a ~20K README must split into many chunks");
+        // every chunk is attributable: carries the repo header
+        for d in &docs {
+            assert!(d.starts_with("a/b\ndesc\nTopics: cli\nLanguage: Rust\n"));
+        }
+        // the tail of the README is embedded, not just the head
+        assert!(docs.last().unwrap().contains("FINAL-README-MARKER"));
+        // deterministic
+        let (hash2, docs2) = repo_chunk_docs(&c);
+        assert_eq!(hash, hash2);
+        assert_eq!(docs, docs2);
+
+        // no README -> exactly one header-only doc
+        let bare = db::EmbedCandidate { readme: None, ..c };
+        let (_, docs) = repo_chunk_docs(&bare);
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].starts_with("a/b\ndesc"));
+    }
+
+    #[test]
     fn model_change_invalidates_vectors() {
         let conn = db::open_in_memory().unwrap();
         db::upsert_repo(
@@ -263,19 +326,19 @@ mod tests {
             },
         )
         .unwrap();
-        db::put_embedding(&conn, 1, "h", &[1.0]).unwrap();
+        db::put_repo_chunks(&conn, 1, "h", &[vec![1.0]]).unwrap();
         db::meta_set(&conn, "embed_model", "old-model").unwrap();
 
         ensure_embed_model(&conn).unwrap();
-        assert!(db::all_embeddings(&conn).unwrap().is_empty());
+        assert!(db::all_repo_chunk_embeddings(&conn).unwrap().is_empty());
         assert_eq!(
             db::meta_get(&conn, "embed_model").unwrap().as_deref(),
             Some(EMBED_MODEL_ID)
         );
 
         // second call is a no-op (vectors survive)
-        db::put_embedding(&conn, 1, "h", &[1.0]).unwrap();
+        db::put_repo_chunks(&conn, 1, "h", &[vec![1.0]]).unwrap();
         ensure_embed_model(&conn).unwrap();
-        assert_eq!(db::all_embeddings(&conn).unwrap().len(), 1);
+        assert_eq!(db::all_repo_chunk_embeddings(&conn).unwrap().len(), 1);
     }
 }

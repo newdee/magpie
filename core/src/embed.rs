@@ -9,9 +9,6 @@ use std::path::Path;
 
 use crate::db::EmbedCandidate;
 
-/// Max chars of composed doc fed to the tokenizer (model truncates at 512 tokens anyway).
-const DOC_CHAR_BUDGET: usize = 2000;
-
 pub struct Embedder {
     model: TextEmbedding,
 }
@@ -58,9 +55,9 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// Compose the searchable document for one repo.
-pub fn compose_doc(c: &EmbedCandidate) -> String {
-    let mut doc = String::with_capacity(DOC_CHAR_BUDGET + 256);
+/// Repo identity header prepended to every README chunk before embedding.
+pub fn compose_repo_header(c: &EmbedCandidate) -> String {
+    let mut doc = String::with_capacity(256);
     doc.push_str(&c.full_name);
     doc.push('\n');
     if let Some(d) = &c.description {
@@ -75,14 +72,8 @@ pub fn compose_doc(c: &EmbedCandidate) -> String {
     if let Some(l) = &c.language {
         doc.push_str("Language: ");
         doc.push_str(l);
-        doc.push('\n');
     }
-    if let Some(readme) = &c.readme {
-        let cleaned = clean_markdown(readme);
-        let budget = DOC_CHAR_BUDGET.saturating_sub(doc.len());
-        doc.push_str(truncate_chars(&cleaned, budget));
-    }
-    doc
+    doc.trim_end().to_string()
 }
 
 /// Strip markdown noise: badges, images, HTML tags, link targets, code fences.
@@ -106,9 +97,6 @@ pub fn clean_markdown(md: &str) -> String {
         }
         out.push_str(&s);
         out.push('\n');
-        if out.len() > 8 * 1024 {
-            break; // enough signal; keep cleanup O(small)
-        }
     }
     out
 }
@@ -187,13 +175,6 @@ fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
     None
 }
 
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((idx, _)) => &s[..idx],
-        None => s,
-    }
-}
-
 /// FNV-1a 64-bit hex hash — cheap change detector for embedding staleness.
 pub fn doc_hash(doc: &str) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -243,24 +224,18 @@ mod tests {
     }
 
     #[test]
-    fn compose_doc_truncates() {
+    fn repo_header_shape() {
         let c = crate::db::EmbedCandidate {
             id: 1,
             full_name: "a/b".into(),
             description: Some("desc".into()),
             topics: vec!["t1".into(), "t2".into()],
             language: Some("Rust".into()),
-            readme: Some("x".repeat(100_000)),
+            readme: Some("ignored here".into()),
         };
-        let doc = compose_doc(&c);
-        assert!(doc.chars().count() <= 2100);
-        assert!(doc.starts_with("a/b\ndesc\nTopics: t1, t2\nLanguage: Rust\n"));
-    }
-
-    #[test]
-    fn truncate_respects_utf8() {
-        let s = "héllo 世界";
-        assert_eq!(truncate_chars(s, 7), "héllo 世");
-        assert_eq!(truncate_chars(s, 100), s);
+        assert_eq!(
+            compose_repo_header(&c),
+            "a/b\ndesc\nTopics: t1, t2\nLanguage: Rust"
+        );
     }
 }

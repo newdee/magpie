@@ -38,6 +38,7 @@ pub fn rrf_fuse(lists: &[Vec<i64>]) -> Vec<(i64, f32)> {
 /// sync pass; per-query loading from SQLite does not survive chunk-scale
 /// corpora (tens of MB per keystroke).
 pub struct VectorStore {
+    /// (repo_id, chunk vector); repo_id repeats across a repo's README chunks.
     pub repos: Vec<(i64, Vec<f32>)>,
     /// (file_id, chunk vector); file_id repeats across a file's chunks.
     pub file_chunks: Vec<(i64, Vec<f32>)>,
@@ -47,7 +48,7 @@ pub struct VectorStore {
 impl VectorStore {
     pub fn load(conn: &Connection) -> Result<Self> {
         Ok(Self {
-            repos: db::all_embeddings(conn)?,
+            repos: db::all_repo_chunk_embeddings(conn)?,
             file_chunks: crate::files::all_file_chunk_embeddings(conn)?,
             images: crate::files::all_image_embeddings(conn)?,
         })
@@ -149,7 +150,8 @@ pub fn search(
 
     let fts = db::fts_search(conn, query, CANDIDATES_PER_LIST)?;
     let vecs = match qvec {
-        Some(qvec) => vec![top_similar(&store.repos, qvec, CANDIDATES_PER_LIST)],
+        // a repo ranks by its best README chunk
+        Some(qvec) => vec![top_similar_grouped(&store.repos, qvec, CANDIDATES_PER_LIST)],
         None => vec![],
     };
     let fused = rank_hybrid(fts, vecs);
@@ -285,9 +287,9 @@ mod tests {
             )
             .unwrap();
         }
-        crate::db::put_embedding(&conn, 1, "h", &[1.0, 0.0]).unwrap();
-        crate::db::put_embedding(&conn, 2, "h", &[0.0, 1.0]).unwrap();
-        crate::db::put_embedding(&conn, 3, "h", &[0.7, 0.7]).unwrap();
+        crate::db::put_repo_chunks(&conn, 1, "h", &[vec![1.0, 0.0]]).unwrap();
+        crate::db::put_repo_chunks(&conn, 2, "h", &[vec![0.0, 1.0]]).unwrap();
+        crate::db::put_repo_chunks(&conn, 3, "h", &[vec![0.7, 0.7]]).unwrap();
         let store = VectorStore::load(&conn).unwrap();
         let hits: Vec<i64> = top_similar(&store.repos, &[1.0, 0.0], 3)
             .into_iter()
@@ -331,8 +333,8 @@ mod tests {
             )
             .unwrap();
         }
-        crate::db::put_embedding(&conn, 1, "h", &[1.0, 0.0]).unwrap();
-        crate::db::put_embedding(&conn, 2, "h", &[0.0, 1.0]).unwrap();
+        crate::db::put_repo_chunks(&conn, 1, "h", &[vec![1.0, 0.0]]).unwrap();
+        crate::db::put_repo_chunks(&conn, 2, "h", &[vec![0.0, 1.0]]).unwrap();
 
         let store = VectorStore::load(&conn).unwrap();
         // both match FTS equally on "tool"; the query vector must break the tie
