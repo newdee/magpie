@@ -1,6 +1,6 @@
 [package]
 name = "magpie"
-version = "0.1.10"
+version = "0.1.11"
 description = "Spotlight-style search over things you saved and forgot: GitHub stars, local folders"
 authors = ["kian"]
 edition = "2021"
@@ -23,3 +23,5 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 base64 = "0.22"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"

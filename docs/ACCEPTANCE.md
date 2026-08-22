@@ -1,3 +1,26 @@
+# 验收记录 2026-08-22（自动更新，v0.1.11）
+
+方案：tauri-plugin-updater，GitHub Releases 当更新源（latest.json 固定地址），
+minisign 签名验证（公钥编译进 app，私钥+口令在 GH secrets 与本机
+~/.tauri/magpie.key）。设置页手动检查 + 启动后 15s 静默检查；下载带百分比；
+Windows installMode=quiet 全静默装。
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 真机 E2E | 默认 passive 装载模式弹 UI，安装器挂在会话里等交互，更新永不落地 | installMode: quiet |
+
+## 本地全链路验证（真机，先验证后出包）
+
+本机 8787 起静态服务器伪装更新源，构建 A(0.1.10)/B(0.1.11) 双签名安装包：
+A 装机运行 → 15s 自动发现 → A 内置公钥验 B 的 minisign 签名 → 下载 12.7MB
+→ 静默安装 → 自动重启，进程实测 FileVersion 0.1.11。服务器日志见
+latest.json 与安装包各被拉取；签名/下载/安装/重启四环节零人工干预。
+测试补丁（localhost 端点、发现即安装钩子）已全部回滚，不入库。
+
+---
+
 # 验收记录 2026-08-21（模型下载镜像兼容 + 进度，拟 v0.1.10）
 
 症状（用户国内机器）：e5 报 "huggingface api error: header etag is missing"、

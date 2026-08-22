@@ -128,7 +128,8 @@ GitHub token (with connection badge) · indexed folders (add / remove /
 rebuild) · appearance (auto / light / dark) · summon shortcut (recordable) ·
 model download source (huggingface.co or **hf-mirror.com** for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · model
-download status · app version.
+download status · one-click in-place updates (signed, verified) · app
+version.
 
 ## Install
 

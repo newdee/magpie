@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
 
 interface RepoHit {
@@ -215,6 +217,14 @@ export default function App() {
   const [starsProgress, setStarsProgress] = useState<StarsProgress | null>(null);
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  // auto-update: idle -> checking -> available -> downloading -> done|error
+  const [updPhase, setUpdPhase] = useState<
+    "idle" | "checking" | "none" | "available" | "downloading" | "error"
+  >("idle");
+  const [updVersion, setUpdVersion] = useState<string | null>(null);
+  const [updPct, setUpdPct] = useState(0);
+  const [updError, setUpdError] = useState<string | null>(null);
+  const updRef = useRef<Update | null>(null);
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [showSettings, setShowSettings] = useState(!!import.meta.env.VITE_DEMO);
   const [tokenInput, setTokenInput] = useState("");
@@ -726,6 +736,57 @@ export default function App() {
     [refreshFolders],
   );
 
+  const doCheckUpdate = useCallback(async (silent: boolean) => {
+    setUpdError(null);
+    if (!silent) setUpdPhase("checking");
+    try {
+      const u = await checkUpdate();
+      if (u) {
+        updRef.current = u;
+        setUpdVersion(u.version);
+        setUpdPhase("available");
+      } else if (!silent) {
+        setUpdPhase("none");
+      }
+    } catch (e) {
+      if (!silent) {
+        setUpdPhase("error");
+        setUpdError(String(e));
+      }
+    }
+  }, []);
+
+  const doInstallUpdate = useCallback(async () => {
+    const u = updRef.current;
+    if (!u) return;
+    setUpdPhase("downloading");
+    setUpdPct(0);
+    try {
+      let total = 0;
+      let done = 0;
+      await u.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = ev.data.contentLength ?? 0;
+        } else if (ev.event === "Progress") {
+          done += ev.data.chunkLength;
+          if (total > 0) setUpdPct(Math.min(100, Math.round((done * 100) / total)));
+        } else if (ev.event === "Finished") {
+          setUpdPct(100);
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      setUpdPhase("error");
+      setUpdError(String(e));
+    }
+  }, []);
+
+  // quiet startup check, delayed so it never competes with model init
+  useEffect(() => {
+    const t = setTimeout(() => doCheckUpdate(true), 15_000);
+    return () => clearTimeout(t);
+  }, [doCheckUpdate]);
+
   const rebuildStars = useCallback(async () => {
     setLastError(null);
     try {
@@ -1174,6 +1235,35 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          <p className="card-title settings-gap">Updates</p>
+          <p className="card-body">
+            {updPhase === "available" || updPhase === "downloading"
+              ? `Version ${updVersion} is available.`
+              : updPhase === "none"
+                ? "You are on the latest version."
+                : "Updates install in place and keep your index and settings."}
+          </p>
+          <div className="token-row">
+            {updPhase === "available" ? (
+              <button className="primary-btn" onClick={doInstallUpdate}>
+                Update &amp; restart
+              </button>
+            ) : updPhase === "downloading" ? (
+              <button className="primary-btn" disabled>
+                Downloading… {updPct}%
+              </button>
+            ) : (
+              <button
+                className="primary-btn"
+                onClick={() => doCheckUpdate(false)}
+                disabled={updPhase === "checking"}
+              >
+                {updPhase === "checking" ? "Checking…" : "Check for updates"}
+              </button>
+            )}
+          </div>
+          {updError && <p className="error-line">{updError}</p>}
 
           {lastError && <p className="error-line settings-gap">{lastError}</p>}
         </div>

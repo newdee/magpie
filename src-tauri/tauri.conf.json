@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "magpie",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "identifier": "com.dfine.magpie",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -38,6 +38,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -45,5 +46,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDczRDc4MDM5ODZDRDk3N0IKUldSN2w4MkdPWURYY3oxOUtsdUpsTzZlY1B4VFMxNmk2QWZyNDBWdFRlVEM5eWZ5a2xLalc0T0sK",
+      "endpoints": [
+        "https://github.com/newdee/magpie/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
+      }
+    }
   }
 }
