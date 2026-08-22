@@ -98,6 +98,14 @@ profile layout — plus Firefox. Read directly from local stores (all
 profiles), searchable by title, URL, and folder path, with semantic matching
 on top. `Enter` opens the bookmark in your default browser.
 
+### Quick web launcher
+
+magpie also doubles as the fastest route to the web. Summon the palette from
+inside any app, type a URL or whatever you want to look up, and hit
+`Ctrl+Enter`: URL-looking input opens directly in your default browser,
+anything else becomes a web search. No switching windows, no reaching for
+the browser's address bar first.
+
 ## Keyboard
 
 | Key | Action |
