@@ -1,3 +1,36 @@
+# 验收记录 2026-08-21（模型下载镜像兼容 + 进度，拟 v0.1.10）
+
+症状（用户国内机器）：e5 报 "huggingface api error: header etag is missing"、
+SigLIP 报 "io: unexpected end of file"。根因：hf-hub 协议强依赖响应 ETag 头
+（镜像 CDN 与干扰性中间盒常剥掉它），且元数据往返多失败面。
+
+方案：hf-hub 保持首选（离线缓存零回归）；失败即回退自研纯 GET 下载器
+（`{endpoint}/{repo}/resolve/main/{path}` 直链、Range 断点续传、.part+rename
+原子落盘、4 次重试、连接 20s/响应头 60s 超时）。进度百分比经 model-status
+直达设置页。切镜像重试加 in-flight 守卫 + reinit 排队防并发写 .part。
+
+## 发现并修复（计数清零轮）
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 单测抓获 | 测试服务器只匹配大写 Range 头，ureq 发小写，续传未生效 | 大小写不敏感解析 |
+| 2 | 单测暴露 | 客户端盲信 206：服务器 Content-Range 起点与请求不符时会拼接出损坏文件 | 校验起点，失配删 .part 重下 |
+| 3 | 逻辑 | 切镜像重试原条件仅 "failed"，挂死的 "loading" 永不重试 | != "ready" 即重试，配守卫与排队 |
+
+## 连续三轮干净
+
+- R1（单测+静态）：27/27 通过，含截断-续传字节级校验与原子重命名断言；
+  clippy -D warnings 双 crate 0 告警
+- R2（真网机制存活）：verify_download 例程对 hf-mirror.com 全量真下载
+  （e5 五文件 + SigLIP 全套，SigLIP 39.8s），回退与主路径同文本嵌入
+  余弦 = 1.000000（两模型均是）——pooling/max_length 配置等价实证
+- R3（边界+一致性复查）：dest 复用仅发生在完整 rename 之后；reinit 重试
+  有界（失败一次额外尝试后止）；known-length 短读必 bail 保 .part 续传；
+  复跑 27/27 + clippy（含新 example）全绿。已知限缺口：响应无
+  Content-Length 时无法校验完整性（resolve 端点实测均带长度）
+
+---
+
 # 验收记录 2026-08-21（设置页文件夹列表不可见，v0.1.9）
 
 症状（mac 与 Windows 同现）：设置页 folder 计数徽章=1，但列表区完全空白，

@@ -32,6 +32,13 @@ struct AppState {
     store: Arc<StdMutex<VectorStore>>,
     sync_running: Arc<AtomicBool>,
     local_indexing: Arc<AtomicBool>,
+    /// One model init at a time: concurrent inits would race on the same
+    /// .part download files. The reinit flag queues one follow-up attempt
+    /// (used when the mirror changes while an init is already running).
+    model_initing: Arc<AtomicBool>,
+    model_reinit: Arc<AtomicBool>,
+    siglip_initing: Arc<AtomicBool>,
+    siglip_reinit: Arc<AtomicBool>,
 }
 
 /// Reload the resident vector store from the database.
@@ -303,16 +310,15 @@ async fn set_hf_endpoint(
         db::meta_set(&conn, "hf_endpoint", &endpoint).map_err(err_str)?;
     }
     std::env::set_var("HF_ENDPOINT", &endpoint);
-    // retry model init unless the model is already usable: a download that
-    // hangs against a blackholed host sits in "loading" forever, so treat
-    // that the same as "failed" — a stale hung attempt that later resolves
-    // is simply overwritten by whichever init finishes last
-    let retry_text = *state.model_status.lock().unwrap() != "ready";
-    let retry_image = *state.siglip_status.lock().unwrap() != "ready";
-    if retry_text {
+    // retry model init unless the model is already usable. If an init is
+    // still running (e.g. wedged against the old endpoint), the spawn guard
+    // skips and the reinit flag queues one fresh attempt for when it ends.
+    if *state.model_status.lock().unwrap() != "ready" {
+        state.model_reinit.store(true, Ordering::SeqCst);
         spawn_model_init(app.clone());
     }
-    if retry_image {
+    if *state.siglip_status.lock().unwrap() != "ready" {
+        state.siglip_reinit.store(true, Ordering::SeqCst);
         spawn_siglip_init(app);
     }
     Ok(())
@@ -621,17 +627,34 @@ async fn run_sync(
 /// Load the embedding model in the background, then embed anything pending.
 fn spawn_model_init(app: AppHandle) {
     let state = app.state::<AppState>();
+    if state.model_initing.swap(true, Ordering::SeqCst) {
+        return; // an init is already running; model_reinit may queue a rerun
+    }
     let embedder = state.embedder.clone();
     let status = state.model_status.clone();
     let model_dir = state.model_dir.clone();
     let db_path = state.db_path.clone();
     let store = state.store.clone();
+    let initing = state.model_initing.clone();
+    let reinit = state.model_reinit.clone();
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let _ = app.emit("model-status", "loading");
         let init = tokio::task::spawn_blocking({
             let model_dir = model_dir.clone();
-            move || Embedder::new(&model_dir)
+            let status = status.clone();
+            let app = app.clone();
+            move || {
+                let mut last = String::new();
+                Embedder::new_with_fallback(&model_dir, &mut |msg| {
+                    // percent strings repeat per read; only surface changes
+                    if msg != last {
+                        last = msg.clone();
+                        *status.lock().unwrap() = msg.clone();
+                        let _ = app.emit("model-status", msg);
+                    }
+                })
+            }
         })
         .await;
         match init {
@@ -675,16 +698,24 @@ fn spawn_model_init(app: AppHandle) {
                         let _ = app.emit("embed-caught-up", n);
                     }
                 }
+                initing.store(false, Ordering::SeqCst);
+                reinit.store(false, Ordering::SeqCst); // succeeded: nothing queued matters
             }
             Ok(Err(e)) => {
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg.clone();
                 let _ = app.emit("model-status", msg);
+                initing.store(false, Ordering::SeqCst);
+                if reinit.swap(false, Ordering::SeqCst) {
+                    // the mirror changed while this attempt ran; try once more
+                    spawn_model_init(app.clone());
+                }
             }
             Err(e) => {
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg.clone();
                 let _ = app.emit("model-status", msg);
+                initing.store(false, Ordering::SeqCst);
             }
         }
     });
@@ -693,16 +724,32 @@ fn spawn_model_init(app: AppHandle) {
 /// Load SigLIP in the background, then embed any images that are waiting.
 fn spawn_siglip_init(app: AppHandle) {
     let state = app.state::<AppState>();
+    if state.siglip_initing.swap(true, Ordering::SeqCst) {
+        return; // an init is already running; siglip_reinit may queue a rerun
+    }
     let siglip = state.siglip.clone();
     let status = state.siglip_status.clone();
     let model_dir = state.model_dir.clone();
     let db_path = state.db_path.clone();
     let store = state.store.clone();
+    let initing = state.siglip_initing.clone();
+    let reinit = state.siglip_reinit.clone();
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let init = tokio::task::spawn_blocking({
             let model_dir = model_dir.clone();
-            move || Siglip::new(&model_dir)
+            let status = status.clone();
+            let app = app.clone();
+            move || {
+                let mut last = String::new();
+                Siglip::new_with_progress(&model_dir, &mut |msg| {
+                    if msg != last {
+                        last = msg.clone();
+                        *status.lock().unwrap() = msg.clone();
+                        let _ = app.emit("model-status", msg);
+                    }
+                })
+            }
         })
         .await;
         match init {
@@ -734,16 +781,23 @@ fn spawn_siglip_init(app: AppHandle) {
                         let _ = app.emit("embed-caught-up", n);
                     }
                 }
+                initing.store(false, Ordering::SeqCst);
+                reinit.store(false, Ordering::SeqCst);
             }
             Ok(Err(e)) => {
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg;
                 let _ = app.emit("model-status", "image-failed");
+                initing.store(false, Ordering::SeqCst);
+                if reinit.swap(false, Ordering::SeqCst) {
+                    spawn_siglip_init(app.clone());
+                }
             }
             Err(e) => {
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg;
                 let _ = app.emit("model-status", "image-failed");
+                initing.store(false, Ordering::SeqCst);
             }
         }
     });
@@ -812,6 +866,10 @@ pub fn run() {
                 siglip_status: Arc::new(StdMutex::new("loading".into())),
                 sync_running: Arc::new(AtomicBool::new(false)),
                 local_indexing: Arc::new(AtomicBool::new(false)),
+                model_initing: Arc::new(AtomicBool::new(false)),
+                model_reinit: Arc::new(AtomicBool::new(false)),
+                siglip_initing: Arc::new(AtomicBool::new(false)),
+                siglip_reinit: Arc::new(AtomicBool::new(false)),
             });
 
             // tray: Show / Sync / Settings / Quit

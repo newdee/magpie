@@ -4,7 +4,7 @@
 //! SigLIP breaks (MAP-head pooling, no CLS token) — so this module owns the
 //! ONNX sessions, preprocessing, and output selection itself.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use image::imageops::FilterType;
 use ndarray::{Array2, Array4};
 use ort::session::Session;
@@ -35,24 +35,101 @@ pub struct Siglip {
     resample: FilterType,
 }
 
+/// Everything Siglip needs on disk, however it was downloaded.
+struct ModelPaths {
+    text: std::path::PathBuf,
+    vision: std::path::PathBuf,
+    tokenizer: std::path::PathBuf,
+    preprocessor: std::path::PathBuf,
+    tokenizer_config: Option<std::path::PathBuf>,
+}
+
 impl Siglip {
     /// Downloads (or reuses) the model files, then loads both sessions.
     /// Blocking; call off the UI thread.
     pub fn new(cache_dir: &Path) -> Result<Self> {
+        Self::new_with_progress(cache_dir, &mut |_| {})
+    }
+
+    /// hf-hub first (reuses existing caches); on failure the files are pulled
+    /// as plain static downloads, which survive mirrors and middleboxes that
+    /// strip the ETag headers hf-hub's protocol requires.
+    pub fn new_with_progress(
+        cache_dir: &Path,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<Self> {
+        let paths = match Self::hf_hub_paths(cache_dir) {
+            Ok(p) => p,
+            Err(primary) => Self::direct_paths(cache_dir, progress)
+                .with_context(|| format!("direct download (hf-hub failed first: {primary})"))?,
+        };
+        progress("loading".to_string());
+        Self::from_paths(paths)
+    }
+
+    /// The fallback path on its own: plain static downloads, no hf-hub.
+    pub fn new_direct(cache_dir: &Path, progress: &mut dyn FnMut(String)) -> Result<Self> {
+        let paths = Self::direct_paths(cache_dir, progress)?;
+        progress("loading".to_string());
+        Self::from_paths(paths)
+    }
+
+    fn hf_hub_paths(cache_dir: &Path) -> Result<ModelPaths> {
         let api = hf_hub::api::sync::ApiBuilder::new()
             .with_cache_dir(cache_dir.to_path_buf())
             .build()?;
         let repo = api.model(REPO.to_string());
-        let text_path = repo.get(TEXT_ONNX)?;
-        let vision_path = repo.get(VISION_ONNX)?;
-        let tokenizer_path = repo.get("tokenizer.json")?;
-        let pre_path = repo.get("preprocessor_config.json")?;
+        Ok(ModelPaths {
+            text: repo.get(TEXT_ONNX)?,
+            vision: repo.get(VISION_ONNX)?,
+            tokenizer: repo.get("tokenizer.json")?,
+            preprocessor: repo.get("preprocessor_config.json")?,
+            tokenizer_config: repo.get("tokenizer_config.json").ok(),
+        })
+    }
 
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
+    fn direct_paths(
+        cache_dir: &Path,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<ModelPaths> {
+        let manual = cache_dir.join("manual-siglip");
+        let endpoint = crate::download::hf_endpoint();
+        // (remote repo path, local name, required)
+        let files = [
+            (TEXT_ONNX, "text_model.onnx", true),
+            (VISION_ONNX, "vision_model.onnx", true),
+            ("tokenizer.json", "tokenizer.json", true),
+            ("preprocessor_config.json", "preprocessor_config.json", true),
+            ("tokenizer_config.json", "tokenizer_config.json", false),
+        ];
+        for (remote, local, required) in files {
+            let url = crate::download::file_url(&endpoint, REPO, remote);
+            let res = crate::download::fetch_file(&url, &manual.join(local), &mut |done, total| {
+                progress(match total {
+                    Some(t) if t > 0 => format!("downloading {local} {}%", done * 100 / t),
+                    _ => format!("downloading {local}"),
+                });
+            });
+            if required {
+                res?;
+            }
+        }
+        let tok_cfg = manual.join("tokenizer_config.json");
+        Ok(ModelPaths {
+            text: manual.join("text_model.onnx"),
+            vision: manual.join("vision_model.onnx"),
+            tokenizer: manual.join("tokenizer.json"),
+            preprocessor: manual.join("preprocessor_config.json"),
+            tokenizer_config: tok_cfg.is_file().then_some(tok_cfg),
+        })
+    }
+
+    fn from_paths(paths: ModelPaths) -> Result<Self> {
+        let tokenizer = Tokenizer::from_file(&paths.tokenizer)
             .map_err(|e| anyhow!("load tokenizer: {e}"))?;
-        let pad_token = repo
-            .get("tokenizer_config.json")
-            .ok()
+        let pad_token = paths
+            .tokenizer_config
+            .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| pad_token_name(&v))
@@ -62,7 +139,8 @@ impl Siglip {
             .ok_or_else(|| anyhow!("pad token {pad_token:?} not in vocab"))?
             as i64;
 
-        let pre: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pre_path)?)?;
+        let pre: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&paths.preprocessor)?)?;
         let img_size = pre["size"]["height"]
             .as_u64()
             .or_else(|| pre["size"]["shortest_edge"].as_u64())
@@ -75,8 +153,8 @@ impl Siglip {
             _ => FilterType::CatmullRom, // bicubic
         };
 
-        let text = Session::builder()?.commit_from_file(&text_path)?;
-        let vision = Session::builder()?.commit_from_file(&vision_path)?;
+        let text = Session::builder()?.commit_from_file(&paths.text)?;
+        let vision = Session::builder()?.commit_from_file(&paths.vision)?;
         Ok(Self {
             text,
             vision,

@@ -23,6 +23,7 @@ tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 image = "0.25"
 ndarray = "0.17"
 hf-hub = { version = "0.5", default-features = false, features = ["ureq", "native-tls"] }
+ureq = { version = "3.4", default-features = false, features = ["native-tls"] }
 base64 = "0.22"
 pdf-inspector = "1.15.0"
 # deflate-flate2 (miniz_oxide) instead of default zlib-rs: zlib-rs 0.6 hits a

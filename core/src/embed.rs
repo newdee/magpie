@@ -3,11 +3,25 @@
 //! E5 models require "query: " / "passage: " prefixes; vectors are L2-normalized
 //! at creation so similarity is a plain dot product.
 
-use anyhow::Result;
-use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
+use anyhow::{Context, Result};
+use fastembed::{
+    EmbeddingModel, InitOptionsUserDefined, Pooling, TextEmbedding, TextInitOptions,
+    TokenizerFiles, UserDefinedEmbeddingModel,
+};
 use std::path::Path;
 
 use crate::db::EmbedCandidate;
+use crate::download;
+
+const E5_REPO: &str = "intfloat/multilingual-e5-small";
+/// (remote path in the repo, local file name in the manual cache)
+const E5_FILES: [(&str, &str); 5] = [
+    ("onnx/model.onnx", "model.onnx"),
+    ("tokenizer.json", "tokenizer.json"),
+    ("config.json", "config.json"),
+    ("special_tokens_map.json", "special_tokens_map.json"),
+    ("tokenizer_config.json", "tokenizer_config.json"),
+];
 
 pub struct Embedder {
     model: TextEmbedding,
@@ -20,6 +34,59 @@ impl Embedder {
             TextInitOptions::new(EmbeddingModel::MultilingualE5Small)
                 .with_cache_dir(cache_dir.to_path_buf())
                 .with_show_download_progress(false),
+        )?;
+        Ok(Self { model })
+    }
+
+    /// Like [`Self::new`], but when the hf-hub download protocol fails (its
+    /// ETag/metadata round-trips break behind mirrors and interfering
+    /// middleboxes) the model files are fetched as plain static downloads and
+    /// fed to fastembed from bytes. `progress` receives display strings.
+    pub fn new_with_fallback(
+        cache_dir: &Path,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<Self> {
+        let primary = match Self::new(cache_dir) {
+            Ok(s) => return Ok(s),
+            Err(e) => e,
+        };
+        Self::new_direct(cache_dir, progress)
+            .with_context(|| format!("direct download (hf-hub failed first: {primary})"))
+    }
+
+    /// The fallback path on its own: plain static downloads, no hf-hub.
+    pub fn new_direct(cache_dir: &Path, progress: &mut dyn FnMut(String)) -> Result<Self> {
+        let manual = cache_dir.join("manual-e5");
+        let endpoint = download::hf_endpoint();
+        for (remote, local) in E5_FILES {
+            let url = download::file_url(&endpoint, E5_REPO, remote);
+            download::fetch_file(&url, &manual.join(local), &mut |done, total| {
+                progress(match total {
+                    Some(t) if t > 0 => {
+                        format!("downloading {local} {}%", done * 100 / t)
+                    }
+                    _ => format!("downloading {local}"),
+                });
+            })?;
+        }
+        progress("loading".to_string());
+        let read = |name: &str| {
+            std::fs::read(manual.join(name)).with_context(|| format!("read {name}"))
+        };
+        let user_model = UserDefinedEmbeddingModel::new(
+            read("model.onnx")?,
+            TokenizerFiles {
+                tokenizer_file: read("tokenizer.json")?,
+                config_file: read("config.json")?,
+                special_tokens_map_file: read("special_tokens_map.json")?,
+                tokenizer_config_file: read("tokenizer_config.json")?,
+            },
+        )
+        // must match what fastembed's built-in MultilingualE5Small uses
+        .with_pooling(Pooling::Mean);
+        let model = TextEmbedding::try_new_from_user_defined(
+            user_model,
+            InitOptionsUserDefined::new().with_max_length(512),
         )?;
         Ok(Self { model })
     }
