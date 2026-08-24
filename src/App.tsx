@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -121,12 +121,41 @@ interface LocalProgress {
 const PAGE = 8;
 const WINDOW_WIDTH = 720;
 
-const SOURCES = [
+const ALL_SOURCES = [
   { id: "local", label: "Local Files" },
   { id: "github-stars", label: "GitHub Stars" },
   { id: "web", label: "Web" },
   { id: "clips", label: "Clipboard" },
 ] as const;
+type SourceDef = (typeof ALL_SOURCES)[number];
+const DEFAULT_ORDER = ALL_SOURCES.map((s) => s.id);
+
+// Order the tabs by a saved id list, dropping unknowns and appending any
+// canonical source the saved list is missing (e.g. after an app update adds one).
+function orderedSources(saved: string[]): SourceDef[] {
+  const byId = new Map<string, SourceDef>(ALL_SOURCES.map((s) => [s.id, s]));
+  const seen = new Set<string>();
+  const out: SourceDef[] = [];
+  for (const id of saved) {
+    const s = byId.get(id);
+    if (s && !seen.has(id)) {
+      out.push(s);
+      seen.add(id);
+    }
+  }
+  for (const s of ALL_SOURCES) if (!seen.has(s.id)) out.push(s);
+  return out;
+}
+
+function loadTabOrder(): string[] {
+  try {
+    const raw = localStorage.getItem("magpie.taborder");
+    if (raw) return orderedSources(JSON.parse(raw)).map((s) => s.id);
+  } catch {
+    /* fall through to default */
+  }
+  return DEFAULT_ORDER;
+}
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|bmp|gif)$/i;
 
@@ -250,11 +279,19 @@ export default function App() {
   const [selected, setSelected] = useState(0);
   // shift+arrows extend a range from this anchor (clips only); null = single
   const [selAnchor, setSelAnchor] = useState<number | null>(null);
-  // default to local files; remember the last used source across restarts
+  // user-customizable tab order and which tab opens on launch
+  const [sourceOrder, setSourceOrder] = useState<string[]>(loadTabOrder);
+  const sources = useMemo(() => orderedSources(sourceOrder), [sourceOrder]);
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
+  const [defaultTab, setDefaultTab] = useState<string>(
+    () => localStorage.getItem("magpie.defaulttab") || "local",
+  );
   const [sourceIdx, setSourceIdx] = useState(() => {
-    const saved = localStorage.getItem("magpie.source");
-    const idx = SOURCES.findIndex((s) => s.id === saved);
-    return idx >= 0 ? idx : SOURCES.findIndex((s) => s.id === "local");
+    const order = loadTabOrder();
+    const want = localStorage.getItem("magpie.defaulttab") || "local";
+    const idx = order.indexOf(want);
+    return idx >= 0 ? idx : 0;
   });
   const [status, setStatus] = useState<Status | null>(null);
   const [starsProgress, setStarsProgress] = useState<StarsProgress | null>(null);
@@ -313,7 +350,7 @@ export default function App() {
   const imageQueryRef = useRef<ImageQuery | null>(null);
   imageQueryRef.current = imageQuery;
 
-  const source = SOURCES[sourceIdx].id;
+  const source = (sources[sourceIdx] ?? sources[0]).id;
   const needsToken = source === "github-stars" && status !== null && !status.has_token;
   needsTokenRef.current = status !== null && !status.has_token;
 
@@ -365,26 +402,27 @@ export default function App() {
     // empty input shows nothing: the palette stays a bare search box.
     // Clipboard is the exception — its whole point is "what did I just copy",
     // so an empty query lists the most recent clips.
-    if (q.trim() === "" && SOURCES[srcIdx].id !== "clips") {
+    const srcId = (sourcesRef.current[srcIdx] ?? sourcesRef.current[0]).id;
+    if (q.trim() === "" && srcId !== "clips") {
       setResults([]);
       setSelected(0);
       return;
     }
     try {
       let hits: Hit[];
-      if (SOURCES[srcIdx].id === "github-stars") {
+      if (srcId === "github-stars") {
         const rs = await invoke<Omit<RepoHit, "kind">[]>("search_stars", {
           query: q,
           sort: repoSortRef.current,
         });
         hits = rs.map((r) => ({ ...r, kind: "repo" as const }));
-      } else if (SOURCES[srcIdx].id === "web") {
+      } else if (srcId === "web") {
         // backend already tags each hit's kind ("bookmark" | "history")
         hits = await invoke<Hit[]>("search_web", {
           query: q,
           scope: webScopeRef.current,
         });
-      } else if (SOURCES[srcIdx].id === "clips") {
+      } else if (srcId === "clips") {
         const cs = await invoke<Omit<ClipHit, "kind">[]>("search_clips", { query: q });
         hits = cs.map((c) => ({ ...c, kind: "clip" as const }));
       } else {
@@ -602,11 +640,35 @@ export default function App() {
 
   const switchSource = useCallback((idx: number) => {
     setSourceIdx(idx);
-    localStorage.setItem("magpie.source", SOURCES[idx].id);
     setSelected(0);
     setSelAnchor(null);
     setShowSettings(false);
     inputRef.current?.focus();
+  }, []);
+
+  // move a tab one slot left/right; keeps the active tab selected by id
+  const moveTab = useCallback(
+    (id: string, dir: -1 | 1) => {
+      setSourceOrder((prev) => {
+        const order: string[] = orderedSources(prev).map((s) => s.id);
+        const i = order.indexOf(id);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= order.length) return prev;
+        [order[i], order[j]] = [order[j], order[i]];
+        localStorage.setItem("magpie.taborder", JSON.stringify(order));
+        // keep the currently active source visually selected after a reorder
+        const activeId = (sourcesRef.current[sourceIdx] ?? sourcesRef.current[0]).id;
+        const nextIdx = order.indexOf(activeId);
+        if (nextIdx >= 0) setSourceIdx(nextIdx);
+        return order;
+      });
+    },
+    [sourceIdx],
+  );
+
+  const chooseDefaultTab = useCallback((id: string) => {
+    setDefaultTab(id);
+    localStorage.setItem("magpie.defaulttab", id);
   }, []);
 
   const selLo = selAnchor == null ? selected : Math.min(selAnchor, selected);
@@ -713,12 +775,12 @@ export default function App() {
               localStorage.setItem("magpie.sort", next);
             }
           } else {
-            switchSource((sourceIdx + 1) % SOURCES.length);
+            switchSource((sourceIdx + 1) % sources.length);
           }
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, imageQuery, showSettings, source, localScope, webScope, repoSort, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips],
   );
 
   const refresh = useCallback(async () => {
@@ -962,7 +1024,7 @@ export default function App() {
       onKeyDown={onKeyDown}
     >
       <div className="source-row" data-tauri-drag-region>
-        {SOURCES.map((s, i) => (
+        {sources.map((s, i) => (
           <button
             key={s.id}
             className={`source ${i === sourceIdx ? "active" : ""}`}
@@ -1145,7 +1207,45 @@ export default function App() {
               ✕
             </button>
           </div>
-          <div className="section-head">
+
+          <p className="card-title">Tabs</p>
+          <p className="card-body">
+            Drag the order with the arrows; the star marks the tab that opens
+            when you summon magpie.
+          </p>
+          <div className="tab-order">
+            {sources.map((s, i) => (
+              <div key={s.id} className="tab-row">
+                <button
+                  className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
+                  onClick={() => chooseDefaultTab(s.id)}
+                  title={defaultTab === s.id ? "Opens on launch" : "Make this the launch tab"}
+                  aria-label={`Make ${s.label} the default tab`}
+                >
+                  {defaultTab === s.id ? "★" : "☆"}
+                </button>
+                <span className="tab-name">{s.label}</span>
+                <button
+                  className="tab-move"
+                  onClick={() => moveTab(s.id, -1)}
+                  disabled={i === 0}
+                  aria-label={`Move ${s.label} up`}
+                >
+                  ↑
+                </button>
+                <button
+                  className="tab-move"
+                  onClick={() => moveTab(s.id, 1)}
+                  disabled={i === sources.length - 1}
+                  aria-label={`Move ${s.label} down`}
+                >
+                  ↓
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="section-head settings-gap">
             <p className="card-title">GitHub</p>
             {status?.has_token && status.username ? (
               <span className="conn-badge ok">

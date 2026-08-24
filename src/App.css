@@ -700,6 +700,53 @@ input.query:active {
   text-align: left;
 }
 
+.tab-order {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tab-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--field-bg);
+}
+
+.tab-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.star-btn,
+.tab-move {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.star-btn.on {
+  color: var(--accent);
+}
+
+.tab-move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.star-btn:hover:not(.on),
+.tab-move:hover:not(:disabled) {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
 .app-badge {
   font-size: 10px;
   font-weight: 600;
