@@ -29,3 +29,7 @@ pdf-inspector = "1.15.0"
 # deflate-flate2 (miniz_oxide) instead of default zlib-rs: zlib-rs 0.6 hits a
 # const-eval ICE on rustc 1.89 under the release LTO profile
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
+arboard = "3.6.1"
+
+[target."cfg(windows)".dependencies]
+clipboard-win = "5.4.1"

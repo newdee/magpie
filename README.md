@@ -106,6 +106,17 @@ inside any app, type a URL or whatever you want to look up, and hit
 anything else becomes a web search. No switching windows, no reaching for
 the browser's address bar first.
 
+### Clipboard History
+
+Off by default. When you enable it in Settings, copied text is recorded to a
+local database (not the system clipboard history) and searchable from the
+Clipboard tab — the one source where an empty query is useful, listing what
+you most recently copied. `Enter` copies an entry back; `Ctrl+Delete` removes
+the selected entries; `Shift`+arrows multi-select (and `Enter` then copies
+them joined). Text marked confidential by password managers is never
+recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
+/ forever), or clear it entirely.
+
 ## Keyboard
 
 | Key | Action |

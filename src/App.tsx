@@ -45,7 +45,17 @@ interface BookmarkHit {
   score: number;
 }
 
-type Hit = RepoHit | FileHit | BookmarkHit;
+interface ClipHit {
+  kind: "clip";
+  id: number;
+  content: string;
+  first_copied: number;
+  last_copied: number;
+  copy_count: number;
+  score: number;
+}
+
+type Hit = RepoHit | FileHit | BookmarkHit | ClipHit;
 
 interface FolderInfo {
   id: number;
@@ -58,6 +68,10 @@ interface Status {
   file_count: number;
   folder_count: number;
   bookmark_count: number;
+  clip_count: number;
+  clipboard_enabled: boolean;
+  clip_retention_days: number;
+  clip_max_entries: number;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -92,6 +106,7 @@ const SOURCES = [
   { id: "local", label: "Local Files" },
   { id: "github-stars", label: "GitHub Stars" },
   { id: "bookmarks", label: "Bookmarks" },
+  { id: "clips", label: "Clipboard" },
 ] as const;
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|bmp|gif)$/i;
@@ -207,6 +222,8 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Hit[]>([]);
   const [selected, setSelected] = useState(0);
+  // shift+arrows extend a range from this anchor (clips only); null = single
+  const [selAnchor, setSelAnchor] = useState<number | null>(null);
   // default to local files; remember the last used source across restarts
   const [sourceIdx, setSourceIdx] = useState(() => {
     const saved = localStorage.getItem("magpie.source");
@@ -308,8 +325,10 @@ export default function App() {
   }, []);
 
   const runSearch = useCallback(async (q: string, srcIdx: number) => {
-    // empty input shows nothing: the palette stays a bare search box
-    if (q.trim() === "") {
+    // empty input shows nothing: the palette stays a bare search box.
+    // Clipboard is the exception — its whole point is "what did I just copy",
+    // so an empty query lists the most recent clips.
+    if (q.trim() === "" && SOURCES[srcIdx].id !== "clips") {
       setResults([]);
       setSelected(0);
       return;
@@ -325,6 +344,9 @@ export default function App() {
       } else if (SOURCES[srcIdx].id === "bookmarks") {
         const bs = await invoke<Omit<BookmarkHit, "kind">[]>("search_bookmarks", { query: q });
         hits = bs.map((b) => ({ ...b, kind: "bookmark" as const }));
+      } else if (SOURCES[srcIdx].id === "clips") {
+        const cs = await invoke<Omit<ClipHit, "kind">[]>("search_clips", { query: q });
+        hits = cs.map((c) => ({ ...c, kind: "clip" as const }));
       } else {
         const fs = await invoke<Omit<FileHit, "kind">[]>("search_local", {
           query: q,
@@ -335,6 +357,7 @@ export default function App() {
       if (queryRef.current === q && sourceRef.current === srcIdx) {
         setResults(hits);
         setSelected(0);
+        setSelAnchor(null);
       }
     } catch {
       /* transient: db busy during migration */
@@ -497,6 +520,8 @@ export default function App() {
         await invoke("open_repo", { url: hit.html_url });
       } else if (hit.kind === "bookmark") {
         await invoke("open_repo", { url: hit.url });
+      } else if (hit.kind === "clip") {
+        await invoke("copy_clip", { text: hit.content });
       } else {
         await invoke("open_file", { path: hit.path });
       }
@@ -530,9 +555,29 @@ export default function App() {
     setSourceIdx(idx);
     localStorage.setItem("magpie.source", SOURCES[idx].id);
     setSelected(0);
+    setSelAnchor(null);
     setShowSettings(false);
     inputRef.current?.focus();
   }, []);
+
+  const selLo = selAnchor == null ? selected : Math.min(selAnchor, selected);
+  const selHi = selAnchor == null ? selected : Math.max(selAnchor, selected);
+
+  const deleteSelectedClips = useCallback(async () => {
+    const range = results.slice(selLo, selHi + 1).filter((r) => r.kind === "clip");
+    if (range.length === 0) return;
+    try {
+      for (const r of range) {
+        await invoke("delete_clip", { clipId: r.id });
+      }
+      setResults((rs) => rs.filter((_, i) => i < selLo || i > selHi));
+      setSelected(Math.max(0, Math.min(selLo, results.length - range.length - 1)));
+      setSelAnchor(null);
+      refreshStatus();
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, [results, selLo, selHi, refreshStatus]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -542,27 +587,50 @@ export default function App() {
         e.preventDefault();
         return;
       }
+      const extend = e.shiftKey && source === "clips";
+      const move = (next: (s: number) => number) => {
+        if (extend) {
+          setSelAnchor((a) => (a == null ? selected : a));
+        } else {
+          setSelAnchor(null);
+        }
+        setSelected(next);
+      };
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setSelected((s) => Math.min(s + 1, max));
+          move((s) => Math.min(s + 1, max));
           break;
         case "ArrowUp":
           e.preventDefault();
-          setSelected((s) => Math.max(s - 1, 0));
+          move((s) => Math.max(s - 1, 0));
           break;
         case "PageDown":
           e.preventDefault();
-          setSelected((s) => Math.min(s + PAGE, max));
+          move((s) => Math.min(s + PAGE, max));
           break;
         case "PageUp":
           e.preventDefault();
-          setSelected((s) => Math.max(s - PAGE, 0));
+          move((s) => Math.max(s - PAGE, 0));
+          break;
+        case "Delete":
+          if ((e.ctrlKey || e.metaKey) && source === "clips" && max >= 0) {
+            e.preventDefault();
+            void deleteSelectedClips();
+          }
           break;
         case "Enter":
           e.preventDefault();
           if (e.ctrlKey || e.metaKey) {
             openWeb();
+          } else if (source === "clips" && selAnchor != null && selHi > selLo) {
+            // multi-select: copy every selected clip, list order, one per line
+            const joined = results
+              .slice(selLo, selHi + 1)
+              .filter((r) => r.kind === "clip")
+              .map((r) => (r as ClipHit).content)
+              .join("\n");
+            void invoke("copy_clip", { text: joined }).then(() => getCurrentWindow().hide());
           } else {
             openHit(results[selected]);
           }
@@ -598,7 +666,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, sourceIdx, imageQuery, showSettings, source, localScope, repoSort, openHit, openWeb, switchSource, setScope],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, imageQuery, showSettings, source, localScope, repoSort, openHit, openWeb, switchSource, setScope, deleteSelectedClips],
   );
 
   const refresh = useCallback(async () => {
@@ -817,7 +885,11 @@ export default function App() {
               ? `${status.repo_count} repos indexed`
               : source === "bookmarks"
                 ? `${status.bookmark_count} bookmarks indexed`
-                : `${status.file_count} files indexed`
+                : source === "clips"
+                  ? status.clipboard_enabled
+                    ? `${status.clip_count} clips recorded`
+                    : "clipboard history is off — enable it in settings"
+                  : `${status.file_count} files indexed`
             : "";
 
   // progress is scoped to the active source: stars sync details only show on
@@ -1220,6 +1292,95 @@ export default function App() {
             </span>
           </div>
 
+          <p className="card-title settings-gap">
+            Clipboard history
+            {status?.clipboard_enabled && <span className="ver">{status.clip_count}</span>}
+          </p>
+          <p className="card-body">
+            Off by default. When enabled, copied text is recorded locally and
+            searchable from the Clipboard tab; entries marked confidential by
+            password managers are never recorded.
+          </p>
+          <div className="pill-row">
+            {[
+              { label: "off", enabled: false },
+              { label: "on", enabled: true },
+            ].map((o) => (
+              <button
+                key={o.label}
+                className={`source ${status?.clipboard_enabled === o.enabled ? "active" : ""}`}
+                onClick={async () => {
+                  try {
+                    await invoke("set_clipboard_enabled", { enabled: o.enabled });
+                    await refreshStatus();
+                  } catch (e) {
+                    setLastError(String(e));
+                  }
+                }}
+              >
+                {o.label}
+              </button>
+            ))}
+            {status?.clipboard_enabled && (
+              <>
+                {[
+                  { label: "max 500", entries: 500 },
+                  { label: "2000", entries: 2000 },
+                  { label: "unlimited", entries: 0 },
+                ].map((o) => (
+                  <button
+                    key={`n${o.entries}`}
+                    className={`source ${status?.clip_max_entries === o.entries ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_clip_max_entries", { entries: o.entries });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+                {[
+                  { label: "keep 7 days", days: 7 },
+                  { label: "30 days", days: 30 },
+                  { label: "forever", days: 0 },
+                ].map((o) => (
+                  <button
+                    key={o.days}
+                    className={`source ${status?.clip_retention_days === o.days ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_clip_retention", { days: o.days });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+                <button
+                  className="source"
+                  onClick={async () => {
+                    try {
+                      await invoke("clear_clips_now");
+                      await refreshStatus();
+                    } catch (e) {
+                      setLastError(String(e));
+                    }
+                  }}
+                  title="Delete all recorded clips permanently"
+                >
+                  clear
+                </button>
+              </>
+            )}
+          </div>
+
           <p className="card-title settings-gap">Max file size</p>
           <p className="card-body">
             Files above this size are skipped. Changing it rebuilds the local index.
@@ -1274,11 +1435,32 @@ export default function App() {
               <div
                 key={`${r.kind}-${r.id}`}
                 data-idx={i}
-                className={`row ${i === selected ? "selected" : ""}`}
-                onMouseMove={() => setSelected(i)}
+                className={`row ${i >= selLo && i <= selHi ? "selected" : ""}`}
+                onMouseMove={() => {
+                  if (selAnchor == null) setSelected(i);
+                }}
                 onClick={() => openHit(r)}
               >
-                {r.kind === "bookmark" ? (
+                {r.kind === "clip" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title clip-text" title={r.content}>
+                        {r.content.split("\n")[0].slice(0, 200)}
+                      </span>
+                      {r.content.includes("\n") && (
+                        <span className="row-sub">
+                          {r.content.split("\n").filter((l) => l.trim()).length} lines
+                        </span>
+                      )}
+                    </div>
+                    <div className="row-meta">
+                      {relTimeUnix(r.last_copied) && (
+                        <span className="mono">{relTimeUnix(r.last_copied)}</span>
+                      )}
+                      {r.copy_count > 1 && <span>×{r.copy_count}</span>}
+                    </div>
+                  </>
+                ) : r.kind === "bookmark" ? (
                   <>
                     <div className="row-main">
                       <span className="row-title">{r.title}</span>
@@ -1374,12 +1556,22 @@ export default function App() {
             <kbd>↑↓</kbd> navigate
           </span>
           <span>
-            <kbd>⏎</kbd> open
+            <kbd>⏎</kbd> {source === "clips" ? "copy" : "open"}
           </span>
           <span>
             <kbd>tab</kbd> source
           </span>
-          {source !== "bookmarks" && (
+          {source === "clips" && (
+            <>
+              <span>
+                <kbd>⇧↑↓</kbd> select
+              </span>
+              <span>
+                <kbd>ctrl⌦</kbd> delete
+              </span>
+            </>
+          )}
+          {source !== "bookmarks" && source !== "clips" && (
             <span>
               <kbd>⇧tab</kbd> {source === "local" ? "scope" : "sort"}
             </span>

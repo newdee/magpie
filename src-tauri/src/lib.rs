@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
 use magpie_core::bookmarks::{self, BookmarkHit};
+use magpie_core::clips::{self, ClipHit};
 use magpie_core::db;
 use magpie_core::embed::Embedder;
 use magpie_core::files::{self, FileHit, FolderInfo};
@@ -39,6 +40,10 @@ struct AppState {
     model_reinit: Arc<AtomicBool>,
     siglip_initing: Arc<AtomicBool>,
     siglip_reinit: Arc<AtomicBool>,
+    /// Desired state of the clipboard watcher; the thread exits when false.
+    clip_watch: Arc<AtomicBool>,
+    /// Liveness guard so toggling can't stack watcher threads.
+    clip_thread_alive: Arc<AtomicBool>,
 }
 
 /// Reload the resident vector store from the database.
@@ -94,6 +99,15 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let file_count = files::file_count(&conn).map_err(err_str)?;
     let folder_count = files::folder_count(&conn).map_err(err_str)?;
     let bookmark_count = bookmarks::bookmark_count(&conn).map_err(err_str)?;
+    let clip_count = clips::clip_count(&conn).map_err(err_str)?;
+    let clip_retention_days = db::meta_get(&conn, "clip_retention_days")
+        .map_err(err_str)?
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(30);
+    let clip_max_entries = db::meta_get(&conn, "clip_max_entries")
+        .map_err(err_str)?
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
     let last_sync = db::meta_get(&conn, "last_sync").map_err(err_str)?;
     let username = db::meta_get(&conn, "username").map_err(err_str)?;
     let has_token = db::meta_get(&conn, "token").map_err(err_str)?.is_some();
@@ -114,6 +128,10 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "file_count": file_count,
         "folder_count": folder_count,
         "bookmark_count": bookmark_count,
+        "clip_count": clip_count,
+        "clipboard_enabled": state.clip_watch.load(Ordering::SeqCst),
+        "clip_retention_days": clip_retention_days,
+        "clip_max_entries": clip_max_entries,
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
         "hf_endpoint": hf_endpoint,
@@ -405,6 +423,151 @@ async fn rebuild_folder(
     Ok(())
 }
 
+// ---------- clipboard history ----------
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+async fn search_clips(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<ClipHit>, String> {
+    let limit = limit.unwrap_or(50);
+    let qvec = if query.trim().is_empty() {
+        None
+    } else {
+        match state.embedder.try_lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                Some(e) => e.embed_query(&query).ok(),
+                None => None,
+            },
+            Err(_) => None, // bulk embed in progress; keyword-only is fine
+        }
+    };
+    let conn = state.db.lock().await;
+    let store = state.store.lock().unwrap();
+    search::search_clips(&conn, &store, &query, qvec.as_deref(), limit).map_err(err_str)
+}
+
+#[tauri::command]
+async fn set_clipboard_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "clipboard_enabled", if enabled { "1" } else { "0" })
+            .map_err(err_str)?;
+    }
+    state.clip_watch.store(enabled, Ordering::SeqCst);
+    if enabled {
+        spawn_clip_watcher(app);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_clip_retention(state: State<'_, AppState>, days: u32) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, "clip_retention_days", &days.to_string()).map_err(err_str)?;
+    let now = unix_now();
+    clips::prune_clips(&conn, days, now).map_err(err_str)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_clip_max_entries(state: State<'_, AppState>, entries: u32) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, "clip_max_entries", &entries.to_string()).map_err(err_str)?;
+    clips::prune_clips_to_count(&conn, entries).map_err(err_str)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_clip(state: State<'_, AppState>, clip_id: i64) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    clips::delete_clip(&conn, clip_id).map_err(err_str)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_clips_now(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    clips::clear_clips(&conn).map_err(err_str)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn copy_clip(text: String) -> Result<(), String> {
+    clips::set_clipboard_text(&text).map_err(err_str)
+}
+
+/// Poll the clipboard once a second while enabled; embed new clips inline
+/// when the model is free. Owns its DB connection.
+fn spawn_clip_watcher(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.clip_thread_alive.swap(true, Ordering::SeqCst) {
+        return; // already running; it reads clip_watch every tick
+    }
+    let run = state.clip_watch.clone();
+    let alive = state.clip_thread_alive.clone();
+    let db_path = state.db_path.clone();
+    let embedder = state.embedder.clone();
+    let store = state.store.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<()> {
+            let conn = db::open(&db_path)?;
+            let mut watcher = clips::ClipboardWatcher::new()?;
+            let mut ticks: u64 = 0;
+            while run.load(Ordering::SeqCst) {
+                if let Some(text) = watcher.poll() {
+                    let now = unix_now();
+                    if clips::record_clip(&conn, &text, now, clips::DEFAULT_MAX_LEN)
+                        .unwrap_or(false)
+                    {
+                        let cap = db::meta_get(&conn, "clip_max_entries")
+                            .ok()
+                            .flatten()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0u32);
+                        let _ = clips::prune_clips_to_count(&conn, cap);
+                        // embed immediately when the model isn't busy
+                        if let Ok(mut guard) = embedder.try_lock() {
+                            if let Some(e) = guard.as_mut() {
+                                let _ = clips::embed_pending_clips(&conn, e, |_, _| {});
+                                drop(guard);
+                                reload_store(&db_path, &store);
+                            }
+                        }
+                    }
+                }
+                ticks += 1;
+                if ticks.is_multiple_of(3600) {
+                    let days = db::meta_get(&conn, "clip_retention_days")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(30u32);
+                    let _ = clips::prune_clips(&conn, days, unix_now());
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            Ok(())
+        })();
+        if let Err(e) = result {
+            eprintln!("clipboard watcher stopped: {e}");
+        }
+        alive.store(false, Ordering::SeqCst);
+    });
+}
+
 // ---------- bookmarks ----------
 
 #[tauri::command]
@@ -682,7 +845,8 @@ fn spawn_model_init(app: AppHandle) {
                                 }
                             })?;
                             let bm = bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?;
-                            Ok(repos + files_n + bm)
+                            let cl = clips::embed_pending_clips(&conn, e, |_, _| {})?;
+                            Ok(repos + files_n + bm + cl)
                         }
                         None => Ok(0),
                     }
@@ -855,6 +1019,26 @@ pub fn run() {
                     std::env::set_var("HF_ENDPOINT", ep);
                 }
             }
+            let clipboard_enabled = db::meta_get(&conn, "clipboard_enabled")
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("1");
+            // clip housekeeping on every launch: retention window + count cap
+            {
+                let days = db::meta_get(&conn, "clip_retention_days")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(30u32);
+                let _ = clips::prune_clips(&conn, days, unix_now());
+                let cap = db::meta_get(&conn, "clip_max_entries")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0u32);
+                let _ = clips::prune_clips_to_count(&conn, cap);
+            }
             let store = VectorStore::load(&conn).unwrap_or_else(|_| VectorStore::empty());
 
             app.manage(AppState {
@@ -872,7 +1056,12 @@ pub fn run() {
                 model_reinit: Arc::new(AtomicBool::new(false)),
                 siglip_initing: Arc::new(AtomicBool::new(false)),
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
+                clip_watch: Arc::new(AtomicBool::new(clipboard_enabled)),
+                clip_thread_alive: Arc::new(AtomicBool::new(false)),
             });
+            if clipboard_enabled {
+                spawn_clip_watcher(app.handle().clone());
+            }
 
             // tray: Show / Sync / Settings / Quit
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
@@ -958,6 +1147,13 @@ pub fn run() {
             rebuild_stars,
             search_bookmarks,
             sync_bookmarks_now,
+            search_clips,
+            set_clipboard_enabled,
+            set_clip_retention,
+            set_clip_max_entries,
+            delete_clip,
+            clear_clips_now,
+            copy_clip,
             open_file
         ])
         .run(tauri::generate_context!())

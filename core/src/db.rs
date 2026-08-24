@@ -202,6 +202,41 @@ fn migrate(conn: &Connection) -> Result<()> {
             vec         BLOB NOT NULL
         );
 
+        -- clipboard history (opt-in; text only). content_hash dedupes repeats.
+        CREATE TABLE IF NOT EXISTS clips (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            content      TEXT NOT NULL,
+            content_hash TEXT NOT NULL UNIQUE,
+            first_copied INTEGER NOT NULL,
+            last_copied  INTEGER NOT NULL,
+            copy_count   INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts USING fts5(
+            content,
+            content='clips', content_rowid='id', tokenize='unicode61'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS clips_ai AFTER INSERT ON clips BEGIN
+            INSERT INTO clips_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS clips_ad AFTER DELETE ON clips BEGIN
+            INSERT INTO clips_fts(clips_fts, rowid, content)
+            VALUES ('delete', old.id, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS clips_au AFTER UPDATE ON clips BEGIN
+            INSERT INTO clips_fts(clips_fts, rowid, content)
+            VALUES ('delete', old.id, old.content);
+            INSERT INTO clips_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+
+        CREATE TABLE IF NOT EXISTS clip_vecs (
+            clip_id  INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+            doc_hash TEXT NOT NULL,
+            dim      INTEGER NOT NULL,
+            vec      BLOB NOT NULL
+        );
+
         -- SigLIP space for images; separate from the e5 text space by design.
         -- dim = 0 marks "tried and failed" (corrupt file), so it is not retried.
         CREATE TABLE IF NOT EXISTS image_embeddings (

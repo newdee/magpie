@@ -1,3 +1,31 @@
+# 验收记录 2026-08-22（剪贴板历史第四源，拟 v0.1.12）
+
+功能：opt-in（默认关）文本剪贴板历史。常驻线程 1s 轮询，变化才落库，
+按内容去重（同文本 bump last_copied+copy_count），Windows 尊重密码管理器的
+ExcludeClipboardContentFromMonitorProcessing / CF_CLIPBOARD_VIEWER_IGNORE
+标记不记录。第 4 个 tab；空查询例外地展示最近复制（剪贴板本能形态）；
+Enter=复制回；Ctrl+Del 删选中；Shift+↑↓ 多选（多选 Enter=合并复制）。
+设置：开关 + 保留条数（500/2000/无限）+ 保留天数（7/30/永久）+ clear。
+超上限“每次打开时清理”（启动 housekeeping）+ 记录时即时裁剪。存自家
+SQLite，不依赖系统剪贴板历史。
+
+## 连续三轮干净
+
+- R1（真机 E2E）：桌面会话注入剪贴板文本，dbtool 查真库——捕获成功
+  （bilibili URL + 注入 marker），去重实证：重复复制同文本 count 1→2、
+  last_copied 刷新、不新增行；不同文本独立成行。OS 剪贴板→轮询→record→库
+  全链路通。
+- R2（单测+静态）：30/30 通过（新增 count_cap_drops_oldest / dedup /
+  retention 三测），clippy -D warnings 双 crate 0 告警
+- R3（顺序+边界+并发复查）：看守线程 record→按条数裁剪→嵌入→reload 顺序
+  正确（新 clip last_copied 最新必留存）；开关 off 后线程 ≤1s 退出、
+  clip_thread_alive 守卫防叠线程、快速 off/on 不泄漏；max_entries=条数
+  语义与用户澄清一致，DEFAULT_MAX_LEN 100k 字符仅防超大转储内部保护；
+  多选删除后本地 splice + refreshStatus 一致。无发现。
+- 清理：测试 clip 已清空（clip_count=0）、clipboard_enabled 复位 0（默认关）
+
+---
+
 # 验收记录 2026-08-22（自动更新，v0.1.11）
 
 方案：tauri-plugin-updater，GitHub Releases 当更新源（latest.json 固定地址），
