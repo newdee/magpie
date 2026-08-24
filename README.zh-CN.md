@@ -10,16 +10,16 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 小巧的桌面启动器，把它们统统找回来——按下快捷键，输入模糊的印象（或者拖进一张
 图），回车。
 
-<p align="center"><img src="docs/img/palette-stars.jpeg" width="760" alt="magpie 检索 GitHub stars"></p>
+<p align="center"><img src="docs/img/palette-local.png" width="760" alt="magpie 本地检索：应用置顶命中、全文高亮"></p>
 
 <table>
   <tr>
-    <td><img src="docs/img/image-similarity.jpeg" alt="以图搜图，显示相似度百分比"><br><sub>拖进一张图——最相似的文件按余弦相似度排列</sub></td>
-    <td><img src="docs/img/fulltext-highlight.jpeg" alt="全文检索高亮片段"><br><sub>全文命中显示高亮上下文片段</sub></td>
+    <td><img src="docs/img/palette-stars.png" alt="检索 GitHub stars"><br><sub>GitHub stars 含 README 全文检索，带排序与时间</sub></td>
+    <td><img src="docs/img/web-badges.png" alt="书签与历史合并检索"><br><sub>书签和浏览器历史合并在一个 Web tab</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/img/text-to-image.jpeg" alt="文字搜图带缩略图"><br><sub>任何语言描述画面，匹配图片直接呈现</sub></td>
-    <td><img src="docs/img/bookmarks.jpeg" alt="浏览器书签检索"><br><sub>任意 Chromium 分支与 Firefox 的书签</sub></td>
+    <td><img src="docs/img/clipboard.png" alt="剪贴板历史"><br><sub>剪贴板历史：复制回、多选、删除</sub></td>
+    <td><img src="docs/img/image-similarity.jpeg" alt="以图搜图，显示相似度百分比"><br><sub>拖进一张图——最相似的文件按相似度排列</sub></td>
   </tr>
 </table>
 
