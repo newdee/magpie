@@ -44,6 +44,7 @@ pub struct VectorStore {
     pub file_chunks: Vec<(i64, Vec<f32>)>,
     pub images: Vec<(i64, Vec<f32>)>,
     pub bookmarks: Vec<(i64, Vec<f32>)>,
+    pub history: Vec<(i64, Vec<f32>)>,
     pub clips: Vec<(i64, Vec<f32>)>,
 }
 
@@ -54,6 +55,7 @@ impl VectorStore {
             file_chunks: crate::files::all_file_chunk_embeddings(conn)?,
             images: crate::files::all_image_embeddings(conn)?,
             bookmarks: crate::bookmarks::all_bookmark_embeddings(conn)?,
+            history: crate::history::all_history_embeddings(conn)?,
             clips: crate::clips::all_clip_embeddings(conn)?,
         })
     }
@@ -64,6 +66,7 @@ impl VectorStore {
             file_chunks: Vec::new(),
             images: Vec::new(),
             bookmarks: Vec::new(),
+            history: Vec::new(),
             clips: Vec::new(),
         }
     }
@@ -282,6 +285,37 @@ pub fn search_bookmarks(
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
     let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
     bookmarks::bookmarks_by_ids(conn, &ids, &scores)
+}
+
+/// Hybrid search over browser history: title/url FTS + one e5 vector each,
+/// with a visit-count boost so frequently-visited pages float up.
+pub fn search_history(
+    conn: &Connection,
+    store: &VectorStore,
+    query: &str,
+    qvec: Option<&[f32]>,
+    limit: usize,
+) -> Result<Vec<crate::history::HistoryHit>> {
+    use crate::history;
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let fts = history::history_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let vecs = match qvec {
+        Some(qvec) => vec![top_similar(&store.history, qvec, CANDIDATES_PER_LIST)],
+        None => vec![],
+    };
+    let fused = rank_hybrid(fts, vecs);
+    let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
+    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
+    let mut hits = history::history_by_ids(conn, &ids, &scores)?;
+    // light visit-count boost: log-scaled so a popular page nudges ahead of a
+    // once-visited one at similar relevance, without dominating the ranking
+    for h in &mut hits {
+        h.score += 0.001 * ((h.visit_count.max(1) as f32).ln());
+    }
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    Ok(hits)
 }
 
 /// Hybrid search over clipboard history; empty query shows most recent clips.

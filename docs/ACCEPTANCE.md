@@ -1,3 +1,36 @@
+# 验收记录 2026-08-22（浏览器历史 + 应用启动器，拟 v0.1.12）
+
+两块：
+1. 浏览器历史并入书签源 → 统一 "Web" 源，Shift+Tab 切 全部/书签/历史。
+   history 独立表（visit_count/last_visit 排序信号，按访问量取每 profile
+   top 3000），读 Chromium `History` SQLite + Firefox moz_places（temp copy
+   避锁）。search_web 合并 bookmarks+history 按分排序，书签 +0.05 curated
+   加权，历史加 log(visit_count) 访问量微调。标题+URL 双字段可搜。
+2. 应用启动器：枚举开始菜单 .lnk / mac .app / linux .desktop，名字匹配
+   （精确>前缀>子串>首字母缩写），Enter 启动；作为本地源置顶命中，不占
+   tab。启动时扫描一次常驻。
+
+## 发现并修复（计数清零）
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 真机噪声 | 松散子序列匹配把 "code" 匹到 "RecoveryDrive" 等垃圾，且 app 置顶会污染本地结果 | 改首字母缩写匹配（vsc→Visual Studio Code），拒散落子序列 |
+| 2 | 编译 | history embed_pending 单行 collect 导致 stmt 借用未活够久 | 绑定 rows 变量 |
+
+## 连续三轮干净（末次修复后）
+
+- R1（真机数据）：sync_history 读 chrome+edge 共 **1515 条**历史落库，
+  FTS "github" 命中真实记录带 visit_count（24×github.com）+ 标题
+  （openai/codex 全标题）——证标题可搜非仅 URL；list_apps 枚举 **137** 个
+  应用，"chr"→Google Chrome(0.60 子串)、"code"→0 命中(无垃圾)、缩写测试通过
+- R2（单测+clippy）：35/35 通过（新增 history roundtrip、apps 缩写/前缀/
+  空查询 4 测），clippy -D warnings 双 crate 0 告警
+- R3（静态集成复查）：旧 localStorage source="bookmarks" findIndex=-1 自动
+  回退 local；web 空查询双 guard 返回空；refresh 走 sync_bookmarks_now 同步
+  书签+历史；launch_app 后隐藏窗口；无阻断发现
+
+---
+
 # 验收记录 2026-08-22（剪贴板历史第四源，拟 v0.1.12）
 
 功能：opt-in（默认关）文本剪贴板历史。常驻线程 1s 轮询，变化才落库，

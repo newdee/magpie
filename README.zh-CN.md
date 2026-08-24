@@ -75,9 +75,18 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 有变化的内容才重新嵌入。结果可按相关度 / 收藏时间 / 星数排序（点选或
 `Shift+Tab`），每行显示最后 push 时间，一眼识别弃坑项目。
 
-### 浏览器书签
+### 应用启动
 
-**任意 Chromium 内核浏览器**的书签——Chrome、Edge、Brave、Vivaldi、Arc 及
+在「本地」tab 输入时，匹配的已装应用作为置顶命中出现（标 `App` 徽章），
+`Enter` 启动。名字支持前缀、子串、首字母缩写匹配（`vsc` → Visual Studio
+Code）。应用来源：Windows 开始菜单、macOS `/Applications`、Linux `.desktop`。
+
+### Web（书签 + 历史）
+
+「Web」tab 同时检索**浏览器书签和历史**；`Shift+Tab` 切换 全部 / 书签 /
+历史。历史覆盖页面标题和 URL（不只网址），按访问次数加权——常开的页面排
+更前；每个 profile 只保留访问最多的页面。书签来自**任意 Chromium 内核
+浏览器**——Chrome、Edge、Brave、Vivaldi、Arc 及
 各种小众分支，按磁盘上的 profile 结构自动发现——外加 Firefox。直接读浏览器
 本地存储（全部 profile），按标题、URL、文件夹路径检索并叠加语义匹配。
 `Enter` 在默认浏览器打开。

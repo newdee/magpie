@@ -45,6 +45,24 @@ interface BookmarkHit {
   score: number;
 }
 
+interface HistoryHit {
+  kind: "history";
+  id: number;
+  url: string;
+  title: string;
+  browser: string;
+  visit_count: number;
+  last_visit: number | null;
+  score: number;
+}
+
+interface AppHit {
+  kind: "app";
+  name: string;
+  target: string;
+  score: number;
+}
+
 interface ClipHit {
   kind: "clip";
   id: number;
@@ -55,7 +73,7 @@ interface ClipHit {
   score: number;
 }
 
-type Hit = RepoHit | FileHit | BookmarkHit | ClipHit;
+type Hit = RepoHit | FileHit | BookmarkHit | HistoryHit | ClipHit | AppHit;
 
 interface FolderInfo {
   id: number;
@@ -68,6 +86,7 @@ interface Status {
   file_count: number;
   folder_count: number;
   bookmark_count: number;
+  history_count: number;
   clip_count: number;
   clipboard_enabled: boolean;
   clip_retention_days: number;
@@ -105,7 +124,7 @@ const WINDOW_WIDTH = 720;
 const SOURCES = [
   { id: "local", label: "Local Files" },
   { id: "github-stars", label: "GitHub Stars" },
-  { id: "bookmarks", label: "Bookmarks" },
+  { id: "web", label: "Web" },
   { id: "clips", label: "Clipboard" },
 ] as const;
 
@@ -131,6 +150,13 @@ const SCOPES: { id: LocalScope; label: string }[] = [
   { id: "all", label: "all" },
   { id: "text", label: "text" },
   { id: "images", label: "images" },
+];
+
+type WebScope = "all" | "bookmarks" | "history";
+const WEB_SCOPES: { id: WebScope; label: string }[] = [
+  { id: "all", label: "all" },
+  { id: "bookmarks", label: "bookmarks" },
+  { id: "history", label: "history" },
 ];
 
 type Theme = "auto" | "light" | "dark";
@@ -252,6 +278,9 @@ export default function App() {
     const saved = localStorage.getItem("magpie.sort") as RepoSort | null;
     return saved && SORTS.some((s) => s.id === saved) ? saved : "relevance";
   });
+  const [webScope, setWebScopeState] = useState<WebScope>(
+    () => (localStorage.getItem("magpie.webscope") as WebScope) || "all",
+  );
   const [localScope, setLocalScope] = useState<LocalScope>(() => {
     const saved = localStorage.getItem("magpie.scope") as LocalScope | null;
     return saved && SCOPES.some((s) => s.id === saved) ? saved : "all";
@@ -317,10 +346,18 @@ export default function App() {
   repoSortRef.current = repoSort;
   const localScopeRef = useRef(localScope);
   localScopeRef.current = localScope;
+  const webScopeRef = useRef(webScope);
+  webScopeRef.current = webScope;
 
   const setScope = useCallback((s: LocalScope) => {
     setLocalScope(s);
     localStorage.setItem("magpie.scope", s);
+    inputRef.current?.focus();
+  }, []);
+
+  const setWebScope = useCallback((s: WebScope) => {
+    setWebScopeState(s);
+    localStorage.setItem("magpie.webscope", s);
     inputRef.current?.focus();
   }, []);
 
@@ -341,18 +378,28 @@ export default function App() {
           sort: repoSortRef.current,
         });
         hits = rs.map((r) => ({ ...r, kind: "repo" as const }));
-      } else if (SOURCES[srcIdx].id === "bookmarks") {
-        const bs = await invoke<Omit<BookmarkHit, "kind">[]>("search_bookmarks", { query: q });
-        hits = bs.map((b) => ({ ...b, kind: "bookmark" as const }));
+      } else if (SOURCES[srcIdx].id === "web") {
+        // backend already tags each hit's kind ("bookmark" | "history")
+        hits = await invoke<Hit[]>("search_web", {
+          query: q,
+          scope: webScopeRef.current,
+        });
       } else if (SOURCES[srcIdx].id === "clips") {
         const cs = await invoke<Omit<ClipHit, "kind">[]>("search_clips", { query: q });
         hits = cs.map((c) => ({ ...c, kind: "clip" as const }));
       } else {
-        const fs = await invoke<Omit<FileHit, "kind">[]>("search_local", {
-          query: q,
-          scope: localScopeRef.current,
-        });
-        hits = fs.map((f) => ({ ...f, kind: "file" as const }));
+        // local: matching apps surface as top hits, then files
+        const [apps, fs] = await Promise.all([
+          invoke<Omit<AppHit, "kind">[]>("search_apps", { query: q }),
+          invoke<Omit<FileHit, "kind">[]>("search_local", {
+            query: q,
+            scope: localScopeRef.current,
+          }),
+        ]);
+        hits = [
+          ...apps.map((a) => ({ ...a, kind: "app" as const })),
+          ...fs.map((f) => ({ ...f, kind: "file" as const })),
+        ];
       }
       if (queryRef.current === q && sourceRef.current === srcIdx) {
         setResults(hits);
@@ -390,7 +437,7 @@ export default function App() {
     }
     const t = setTimeout(() => runSearch(query, sourceIdx), 120);
     return () => clearTimeout(t);
-  }, [query, sourceIdx, imageQuery, repoSort, localScope, runSearch]);
+  }, [query, sourceIdx, imageQuery, repoSort, localScope, webScope, runSearch]);
 
   // release blob preview URLs when the image query changes or clears
   useEffect(() => {
@@ -518,8 +565,10 @@ export default function App() {
     try {
       if (hit.kind === "repo") {
         await invoke("open_repo", { url: hit.html_url });
-      } else if (hit.kind === "bookmark") {
+      } else if (hit.kind === "bookmark" || hit.kind === "history") {
         await invoke("open_repo", { url: hit.url });
+      } else if (hit.kind === "app") {
+        await invoke("launch_app", { target: hit.target });
       } else if (hit.kind === "clip") {
         await invoke("copy_clip", { text: hit.content });
       } else {
@@ -654,6 +703,9 @@ export default function App() {
             if (source === "local") {
               const i = SCOPES.findIndex((s) => s.id === localScope);
               setScope(SCOPES[(i + 1) % SCOPES.length].id);
+            } else if (source === "web") {
+              const i = WEB_SCOPES.findIndex((s) => s.id === webScope);
+              setWebScope(WEB_SCOPES[(i + 1) % WEB_SCOPES.length].id);
             } else if (source === "github-stars") {
               const i = SORTS.findIndex((s) => s.id === repoSort);
               const next = SORTS[(i + 1) % SORTS.length].id;
@@ -666,7 +718,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, imageQuery, showSettings, source, localScope, repoSort, openHit, openWeb, switchSource, setScope, deleteSelectedClips],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, imageQuery, showSettings, source, localScope, webScope, repoSort, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips],
   );
 
   const refresh = useCallback(async () => {
@@ -675,7 +727,7 @@ export default function App() {
       const cmd =
         source === "github-stars"
           ? "start_sync"
-          : source === "bookmarks"
+          : source === "web"
             ? "sync_bookmarks_now"
             : "index_local";
       await invoke(cmd);
@@ -883,8 +935,8 @@ export default function App() {
           : status
             ? source === "github-stars"
               ? `${status.repo_count} repos indexed`
-              : source === "bookmarks"
-                ? `${status.bookmark_count} bookmarks indexed`
+              : source === "web"
+                ? `${status.bookmark_count} bookmarks · ${status.history_count} history`
                 : source === "clips"
                   ? status.clipboard_enabled
                     ? `${status.clip_count} clips recorded`
@@ -929,6 +981,21 @@ export default function App() {
                 onClick={() => setScope(s.id)}
                 tabIndex={-1}
                 title={`Search ${s.id === "all" ? "everything" : s.id} (Shift+Tab cycles)`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </span>
+        )}
+        {source === "web" && (
+          <span className="sort-group">
+            {WEB_SCOPES.map((s) => (
+              <button
+                key={s.id}
+                className={`source ${webScope === s.id ? "active" : ""}`}
+                onClick={() => setWebScope(s.id)}
+                tabIndex={-1}
+                title={`Search ${s.id} (Shift+Tab cycles)`}
               >
                 {s.label}
               </button>
@@ -989,10 +1056,10 @@ export default function App() {
           placeholder={
             imageQuery
               ? "Searching by image similarity"
-              : source === "bookmarks"
-              ? status && status.bookmark_count > 0
-                ? `Search ${status.bookmark_count} bookmarks`
-                : "Search browser bookmarks"
+              : source === "web"
+              ? "Search bookmarks and browser history"
+              : source === "clips"
+              ? "Search your clipboard history"
               : source === "github-stars"
                 ? status && status.repo_count > 0
                   ? `Search ${status.repo_count} starred repos`
@@ -1433,7 +1500,7 @@ export default function App() {
           <div className="results" ref={listRef}>
             {results.map((r, i) => (
               <div
-                key={`${r.kind}-${r.id}`}
+                key={`${r.kind}-${r.kind === "app" ? r.target : r.id}`}
                 data-idx={i}
                 className={`row ${i >= selLo && i <= selHi ? "selected" : ""}`}
                 onMouseMove={() => {
@@ -1460,6 +1527,16 @@ export default function App() {
                       {r.copy_count > 1 && <span>×{r.copy_count}</span>}
                     </div>
                   </>
+                ) : r.kind === "app" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title">{r.name}</span>
+                      <span className="row-sub">Application</span>
+                    </div>
+                    <div className="row-meta">
+                      <span className="app-badge">App</span>
+                    </div>
+                  </>
                 ) : r.kind === "bookmark" ? (
                   <>
                     <div className="row-main">
@@ -1479,6 +1556,19 @@ export default function App() {
                         </span>
                       )}
                       <span>{r.browser}</span>
+                    </div>
+                  </>
+                ) : r.kind === "history" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title">{r.title || r.url}</span>
+                      <span className="row-sub">{r.url}</span>
+                    </div>
+                    <div className="row-meta">
+                      {r.last_visit != null && relTimeUnix(r.last_visit) && (
+                        <span className="mono">{relTimeUnix(r.last_visit)}</span>
+                      )}
+                      <span>{r.visit_count}×</span>
                     </div>
                   </>
                 ) : r.kind === "repo" ? (
@@ -1546,7 +1636,13 @@ export default function App() {
 
       {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && (
         <div className="empty">
-          {source === "github-stars" ? "No matches in your stars" : "No matches in indexed folders"}
+          {source === "github-stars"
+            ? "No matches in your stars"
+            : source === "web"
+              ? "No matching bookmarks or history"
+              : source === "clips"
+                ? "No matching clips"
+                : "No matches in indexed folders"}
         </div>
       )}
 
@@ -1571,9 +1667,9 @@ export default function App() {
               </span>
             </>
           )}
-          {source !== "bookmarks" && source !== "clips" && (
+          {(source === "local" || source === "web" || source === "github-stars") && (
             <span>
-              <kbd>⇧tab</kbd> {source === "local" ? "scope" : "sort"}
+              <kbd>⇧tab</kbd> {source === "github-stars" ? "sort" : "scope"}
             </span>
           )}
           <span>

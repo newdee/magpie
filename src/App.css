@@ -700,6 +700,18 @@ input.query:active {
   text-align: left;
 }
 
+.app-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+}
+
 .clip-text {
   font-family: var(--font-mono);
   font-size: 12.5px;

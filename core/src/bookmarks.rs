@@ -139,6 +139,13 @@ fn scan_chromium_forks(
     }
 }
 
+/// Same profile discovery as [`discover`], exposed for the history module so
+/// it can locate profile dirs (Chromium `History` lives beside `Bookmarks`;
+/// Firefox history shares `places.sqlite`).
+pub(crate) fn discover_history_sources() -> Vec<(String, PathBuf, bool)> {
+    discover()
+}
+
 fn push_firefox(out: &mut Vec<(String, PathBuf, bool)>, profiles: PathBuf) {
     if let Ok(entries) = std::fs::read_dir(&profiles) {
         for e in entries.flatten() {

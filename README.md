@@ -90,9 +90,20 @@ content re-embeds. Sort matches by relevance, starred date, or star count
 (pills or `Shift+Tab`); every row shows last-push time so abandoned projects
 are obvious.
 
-### Bookmarks
+### Applications
 
-Bookmarks from **any Chromium-based browser** — Chrome, Edge, Brave,
+Typing in the Local tab surfaces matching installed apps as top hits (an
+`App` badge marks them) — `Enter` launches. Names match by prefix, substring,
+or acronym (`vsc` → Visual Studio Code). Apps come from the Start Menu on
+Windows, `/Applications` on macOS, and `.desktop` entries on Linux.
+
+### Web (bookmarks + history)
+
+The Web tab searches **browser bookmarks and history together**; `Shift+Tab`
+narrows to all / bookmarks / history. History covers page titles and URLs
+(not just addresses) with a visit-count boost so pages you open often rank
+higher; only the most-visited pages per profile are kept. Bookmarks come from
+**any Chromium-based browser** — Chrome, Edge, Brave,
 Vivaldi, Arc, and lesser-known forks are auto-discovered by their on-disk
 profile layout — plus Firefox. Read directly from local stores (all
 profiles), searchable by title, URL, and folder path, with semantic matching

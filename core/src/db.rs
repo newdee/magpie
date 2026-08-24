@@ -202,6 +202,42 @@ fn migrate(conn: &Connection) -> Result<()> {
             vec         BLOB NOT NULL
         );
 
+        -- browser history, mirrored from local history stores (top pages only)
+        CREATE TABLE IF NOT EXISTS history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            url         TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            browser     TEXT NOT NULL,
+            visit_count INTEGER NOT NULL DEFAULT 1,
+            last_visit  INTEGER,
+            UNIQUE(browser, url)
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
+            title, url,
+            content='history', content_rowid='id', tokenize='unicode61'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
+            INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+        END;
+        CREATE TRIGGER IF NOT EXISTS history_ad AFTER DELETE ON history BEGIN
+            INSERT INTO history_fts(history_fts, rowid, title, url)
+            VALUES ('delete', old.id, old.title, old.url);
+        END;
+        CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE ON history BEGIN
+            INSERT INTO history_fts(history_fts, rowid, title, url)
+            VALUES ('delete', old.id, old.title, old.url);
+            INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+        END;
+
+        CREATE TABLE IF NOT EXISTS history_vecs (
+            history_id INTEGER PRIMARY KEY REFERENCES history(id) ON DELETE CASCADE,
+            doc_hash   TEXT NOT NULL,
+            dim        INTEGER NOT NULL,
+            vec        BLOB NOT NULL
+        );
+
         -- clipboard history (opt-in; text only). content_hash dedupes repeats.
         CREATE TABLE IF NOT EXISTS clips (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,

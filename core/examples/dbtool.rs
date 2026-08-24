@@ -39,6 +39,24 @@ fn main() -> anyhow::Result<()> {
             magpie_core::clips::clear_clips(&conn)?;
             println!("cleared");
         }
+        Some("sync-history") => {
+            let r = magpie_core::history::sync_history(&conn)?;
+            println!("browsers={:?} total={} removed={}", r.browsers, r.total, r.removed);
+            for h in magpie_core::history::history_by_ids(
+                &conn,
+                &magpie_core::history::history_fts_search(&conn, args.get(2).map(String::as_str).unwrap_or("a"), 5)?,
+                &Default::default(),
+            )? {
+                println!("  {}x {} — {}", h.visit_count, h.title, h.url);
+            }
+        }
+        Some("apps") => {
+            let apps = magpie_core::apps::list_apps();
+            println!("app_count={}", apps.len());
+            for a in magpie_core::apps::match_apps(&apps, args.get(2).map(String::as_str).unwrap_or(""), 8) {
+                println!("  {:.2} {} — {}", a.score, a.name, a.target);
+            }
+        }
         _ => eprintln!("usage: dbtool <db> meta-get|meta-set|clips|clips-clear ..."),
     }
     Ok(())

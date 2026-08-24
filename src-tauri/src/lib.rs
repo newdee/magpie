@@ -17,6 +17,7 @@ use magpie_core::db;
 use magpie_core::embed::Embedder;
 use magpie_core::files::{self, FileHit, FolderInfo};
 use magpie_core::github::GithubClient;
+use magpie_core::history;
 use magpie_core::search::{self, SearchResult, VectorStore};
 use magpie_core::siglip::Siglip;
 use magpie_core::sync;
@@ -40,6 +41,8 @@ struct AppState {
     model_reinit: Arc<AtomicBool>,
     siglip_initing: Arc<AtomicBool>,
     siglip_reinit: Arc<AtomicBool>,
+    /// Installed-app list, enumerated once at startup, refreshable on demand.
+    apps: Arc<StdMutex<Vec<magpie_core::apps::AppEntry>>>,
     /// Desired state of the clipboard watcher; the thread exits when false.
     clip_watch: Arc<AtomicBool>,
     /// Liveness guard so toggling can't stack watcher threads.
@@ -99,6 +102,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let file_count = files::file_count(&conn).map_err(err_str)?;
     let folder_count = files::folder_count(&conn).map_err(err_str)?;
     let bookmark_count = bookmarks::bookmark_count(&conn).map_err(err_str)?;
+    let history_count = history::history_count(&conn).map_err(err_str)?;
     let clip_count = clips::clip_count(&conn).map_err(err_str)?;
     let clip_retention_days = db::meta_get(&conn, "clip_retention_days")
         .map_err(err_str)?
@@ -128,6 +132,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "file_count": file_count,
         "folder_count": folder_count,
         "bookmark_count": bookmark_count,
+        "history_count": history_count,
         "clip_count": clip_count,
         "clipboard_enabled": state.clip_watch.load(Ordering::SeqCst),
         "clip_retention_days": clip_retention_days,
@@ -423,6 +428,36 @@ async fn rebuild_folder(
     Ok(())
 }
 
+// ---------- application launcher ----------
+
+#[tauri::command]
+fn search_apps(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
+    let apps = state.apps.lock().unwrap();
+    Ok(magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(4)))
+}
+
+#[tauri::command]
+fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
+    magpie_core::apps::launch_app(&target).map_err(err_str)?;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    Ok(())
+}
+
+/// Re-enumerate installed apps (e.g. after installing something new).
+fn spawn_app_scan(app: AppHandle) {
+    let apps = app.state::<AppState>().apps.clone();
+    std::thread::spawn(move || {
+        let list = magpie_core::apps::list_apps();
+        *apps.lock().unwrap() = list;
+    });
+}
+
 // ---------- clipboard history ----------
 
 fn unix_now() -> i64 {
@@ -597,7 +632,52 @@ async fn search_bookmarks(
     search::search_bookmarks(&conn, &store, &query, qvec.as_deref(), limit).map_err(err_str)
 }
 
-/// Re-read every browser's bookmark store and refresh vectors.
+/// Unified web search over bookmarks and/or history. `scope` is one of
+/// "all" | "bookmarks" | "history"; results are tagged and merged by score.
+#[tauri::command]
+async fn search_web(
+    state: State<'_, AppState>,
+    query: String,
+    scope: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let scope = scope.unwrap_or_else(|| "all".into());
+    let limit = limit.unwrap_or(40);
+    let qvec = if query.trim().is_empty() {
+        None
+    } else {
+        match state.embedder.try_lock() {
+            Ok(mut g) => g.as_mut().and_then(|e| e.embed_query(&query).ok()),
+            Err(_) => None,
+        }
+    };
+    let conn = state.db.lock().await;
+    let store = state.store.lock().unwrap();
+    let mut out: Vec<(f32, serde_json::Value)> = Vec::new();
+    if scope != "history" {
+        for b in search::search_bookmarks(&conn, &store, &query, qvec.as_deref(), limit)
+            .map_err(err_str)?
+        {
+            // curated bookmarks get a small edge over raw history at a tie
+            let mut v = serde_json::to_value(&b).map_err(err_str)?;
+            v["kind"] = json!("bookmark");
+            out.push((b.score + 0.05, v));
+        }
+    }
+    if scope != "bookmarks" {
+        for h in search::search_history(&conn, &store, &query, qvec.as_deref(), limit)
+            .map_err(err_str)?
+        {
+            let mut v = serde_json::to_value(&h).map_err(err_str)?;
+            v["kind"] = json!("history");
+            out.push((h.score, v));
+        }
+    }
+    out.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Ok(out.into_iter().take(limit).map(|(_, v)| v).collect())
+}
+
+/// Re-read every browser's bookmark and history store and refresh vectors.
 fn spawn_bookmark_sync(app: AppHandle) {
     let state = app.state::<AppState>();
     let embedder = state.embedder.clone();
@@ -606,14 +686,19 @@ fn spawn_bookmark_sync(app: AppHandle) {
         let outcome = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
             let conn = db::open(&db_path)?;
             let report = bookmarks::sync_bookmarks(&conn)?;
+            let hist_report = history::sync_history(&conn)?;
             let embedded = match embedder.try_lock() {
                 Ok(mut guard) => match guard.as_mut() {
-                    Some(e) => bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?,
+                    Some(e) => {
+                        let b = bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?;
+                        let h = history::embed_pending_history(&conn, e, |_, _| {})?;
+                        b + h
+                    }
                     None => 0, // model not ready; catch-up covers it
                 },
                 Err(_) => 0, // busy embedding elsewhere; next sync catches up
             };
-            Ok(json!({ "report": report, "embedded": embedded }))
+            Ok(json!({ "report": report, "history": hist_report, "embedded": embedded }))
         })
         .await;
         match outcome {
@@ -845,8 +930,9 @@ fn spawn_model_init(app: AppHandle) {
                                 }
                             })?;
                             let bm = bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?;
+                            let hi = history::embed_pending_history(&conn, e, |_, _| {})?;
                             let cl = clips::embed_pending_clips(&conn, e, |_, _| {})?;
-                            Ok(repos + files_n + bm + cl)
+                            Ok(repos + files_n + bm + hi + cl)
                         }
                         None => Ok(0),
                     }
@@ -1056,12 +1142,14 @@ pub fn run() {
                 model_reinit: Arc::new(AtomicBool::new(false)),
                 siglip_initing: Arc::new(AtomicBool::new(false)),
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
+                apps: Arc::new(StdMutex::new(Vec::new())),
                 clip_watch: Arc::new(AtomicBool::new(clipboard_enabled)),
                 clip_thread_alive: Arc::new(AtomicBool::new(false)),
             });
             if clipboard_enabled {
                 spawn_clip_watcher(app.handle().clone());
             }
+            spawn_app_scan(app.handle().clone());
 
             // tray: Show / Sync / Settings / Quit
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
@@ -1146,6 +1234,9 @@ pub fn run() {
             rebuild_folder,
             rebuild_stars,
             search_bookmarks,
+            search_web,
+            search_apps,
+            launch_app,
             sync_bookmarks_now,
             search_clips,
             set_clipboard_enabled,
