@@ -512,6 +512,14 @@ export default function App() {
   }, [acceptImageQuery]);
 
   // backend events
+  // suppress the native right-click menu everywhere (keyboard copy/paste
+  // still works in inputs); a launcher has no use for the browser context menu
+  useEffect(() => {
+    const block = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", block);
+    return () => document.removeEventListener("contextmenu", block);
+  }, []);
+
   useEffect(() => {
     refreshStatus();
     refreshFolders();
