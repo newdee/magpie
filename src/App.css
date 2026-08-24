@@ -298,6 +298,29 @@ input.query:active {
   gap: 6px;
 }
 
+/* settings: pills read as a right-aligned segmented control, larger hit area */
+.set-row .pill-row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.set-row.stack .pill-row {
+  justify-content: flex-start;
+}
+
+.set-row .source,
+.set-head .source {
+  font-size: 12px;
+  padding: 4px 11px;
+  border-radius: 7px;
+}
+
+.set-head .pill-row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .index-hint {
   border-top: 1px solid var(--border);
   padding: 6px 16px;
@@ -510,8 +533,169 @@ input.query:active {
 
 .settings-page {
   border-top: none;
-  max-height: 560px;
+  max-height: 580px;
   overflow-y: auto;
+  gap: 0;
+  padding: 18px;
+}
+
+/* grouped settings: an uppercase eyebrow over a quiet surface card,
+   rows inside separated by whitespace and one hairline, not per-item dividers */
+.set-eyebrow {
+  margin: 22px 2px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.set-eyebrow:first-child {
+  margin-top: 6px;
+}
+
+.set-group {
+  display: flex;
+  flex-direction: column;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px 14px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 0;
+  border-top: 1px solid var(--border);
+}
+
+.set-row:first-child {
+  border-top: none;
+}
+
+.set-row.stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/* the label/badge header inside a stacked row */
+.set-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.set-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.set-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.set-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  text-wrap: pretty;
+  max-width: 44ch;
+}
+
+.set-desc kbd {
+  font-size: 11px;
+}
+
+.set-value {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.set-empty {
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.set-links {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* small count chip next to a setting name */
+.count-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-dim);
+  background: var(--row-hover);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 7px;
+  background: var(--text-faint);
+  vertical-align: middle;
+}
+
+.status-dot.ok {
+  background: var(--accent);
+}
+
+/* neutral secondary button (Check now) and destructive (Clear) */
+.ghost-btn,
+.danger-btn {
+  border-radius: 8px;
+  padding: 7px 14px;
+  font: inherit;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.ghost-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--row-hover);
+}
+
+.ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.danger-btn {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 35%, transparent);
+}
+
+.danger-btn:hover {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.ghost-btn:active:not(:disabled),
+.danger-btn:active {
+  transform: scale(0.97);
 }
 
 .settings-title {
@@ -534,15 +718,20 @@ input.query:active {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
-  padding: 4px 12px;
+  font-size: 12px;
+  padding: 3px 11px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 60%;
+  max-width: 50%;
+}
+
+.conn-badge.ok strong,
+.conn-badge.ok {
+  font-weight: 600;
 }
 
 .conn-badge.ok {
@@ -578,10 +767,12 @@ input.query:active {
 .model-status {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  font-family: var(--font-mono);
+  gap: 5px;
   font-size: 11.5px;
   color: var(--text-dim);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--row-hover);
 }
 
 .card-title {
@@ -683,9 +874,9 @@ input.query:active {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 10px;
+  padding: 7px 10px;
   border-radius: 8px;
-  background: var(--field-bg);
+  background: var(--row-hover);
 }
 
 .folder-path {
@@ -710,9 +901,31 @@ input.query:active {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
+  padding: 6px 10px;
   border-radius: 8px;
-  background: var(--field-bg);
+  background: var(--row-hover);
+  border: 1px solid transparent;
+  transition: opacity 0.12s, border-color 0.12s;
+}
+
+.tab-row.dragging {
+  opacity: 0.4;
+}
+
+.tab-row.drop-target {
+  border-color: var(--accent-border);
+}
+
+.drag-handle {
+  cursor: grab;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+}
+
+.tab-row:active .drag-handle {
+  cursor: grabbing;
 }
 
 .tab-name {
@@ -782,8 +995,11 @@ input.query:active {
 
 .folder-count {
   flex-shrink: 0;
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--text-faint);
+  min-width: 2ch;
+  text-align: right;
 }
 
 .folder-remove {

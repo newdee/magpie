@@ -1,17 +1,31 @@
 // Dev-only IPC mock: lets the real UI run in a plain browser (no Tauri shell)
 // with fixture data mirroring a real backend. Loaded only when VITE_DEMO=1.
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+
+// stub the Tauri window/webview singletons so getCurrentWindow()/
+// getCurrentWebview() don't throw in a plain browser
+mockWindows("main");
+const internals = (window as unknown as { __TAURI_INTERNALS__?: Record<string, unknown> })
+  .__TAURI_INTERNALS__;
+if (internals && typeof internals.invoke !== "function") {
+  internals.invoke = () => Promise.resolve();
+}
 
 const folders = [
   { id: 1, path: "C:\\Users\\stebe\\Documents\\dfine\\prompt-shelf", file_count: 190 },
 ];
 
 const status = {
-  version: "0.1.8-demo",
+  version: "0.1.13-demo",
   repo_count: 1778,
   file_count: 190,
   folder_count: 1,
   bookmark_count: 2,
+  history_count: 1515,
+  clip_count: 42,
+  clipboard_enabled: true,
+  clip_retention_days: 30,
+  clip_max_entries: 2000,
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",

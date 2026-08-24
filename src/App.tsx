@@ -679,6 +679,29 @@ export default function App() {
     localStorage.setItem("magpie.defaulttab", id);
   }, []);
 
+  // drag-to-reorder tabs; dragId is the tab being dragged, dropId the hovered slot
+  const [dragTab, setDragTab] = useState<string | null>(null);
+  const [dropTab, setDropTab] = useState<string | null>(null);
+
+  const commitDrag = useCallback(
+    (fromId: string, toId: string) => {
+      if (fromId === toId) return;
+      setSourceOrder((prev) => {
+        const order: string[] = orderedSources(prev).map((s) => s.id);
+        const from = order.indexOf(fromId);
+        const to = order.indexOf(toId);
+        if (from < 0 || to < 0) return prev;
+        order.splice(to, 0, order.splice(from, 1)[0]);
+        localStorage.setItem("magpie.taborder", JSON.stringify(order));
+        const activeId = (sourcesRef.current[sourceIdx] ?? sourcesRef.current[0]).id;
+        const nextIdx = order.indexOf(activeId);
+        if (nextIdx >= 0) setSourceIdx(nextIdx);
+        return order;
+      });
+    },
+    [sourceIdx],
+  );
+
   const selLo = selAnchor == null ? selected : Math.min(selAnchor, selected);
   const selHi = selAnchor == null ? selected : Math.max(selAnchor, selected);
 
@@ -1216,392 +1239,497 @@ export default function App() {
             </button>
           </div>
 
-          <p className="card-title">Tabs</p>
-          <p className="card-body">
-            Drag the order with the arrows; the star marks the tab that opens
-            when you summon magpie.
-          </p>
-          <div className="tab-order">
-            {sources.map((s, i) => (
-              <div key={s.id} className="tab-row">
-                <button
-                  className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
-                  onClick={() => chooseDefaultTab(s.id)}
-                  title={defaultTab === s.id ? "Opens on launch" : "Make this the launch tab"}
-                  aria-label={`Make ${s.label} the default tab`}
-                >
-                  {defaultTab === s.id ? "★" : "☆"}
-                </button>
-                <span className="tab-name">{s.label}</span>
-                <button
-                  className="tab-move"
-                  onClick={() => moveTab(s.id, -1)}
-                  disabled={i === 0}
-                  aria-label={`Move ${s.label} up`}
-                >
-                  ↑
-                </button>
-                <button
-                  className="tab-move"
-                  onClick={() => moveTab(s.id, 1)}
-                  disabled={i === sources.length - 1}
-                  aria-label={`Move ${s.label} down`}
-                >
-                  ↓
+          {/* CONNECTION */}
+          <p className="set-eyebrow">Connection</p>
+          <div className="set-group">
+            <div className="set-row stack">
+              <div className="set-head">
+                <div className="set-label">
+                  <span className="set-name">GitHub</span>
+                  <span className="set-desc">
+                    {status?.has_token
+                      ? "Paste a new token to replace the current one."
+                      : "A personal access token, no scopes needed — it only reads your public stars."}
+                  </span>
+                </div>
+                {status?.has_token && status.username ? (
+                  <span className="conn-badge ok">
+                    <span className="conn-dot" aria-hidden="true" /> {status.username}
+                  </span>
+                ) : (
+                  <span className="conn-badge">not connected</span>
+                )}
+              </div>
+              <div className="token-row">
+                <input
+                  className="token-input"
+                  type="password"
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.stopPropagation();
+                      submitToken();
+                    }
+                  }}
+                  placeholder="ghp_…"
+                  spellCheck={false}
+                />
+                <button className="primary-btn" onClick={submitToken} disabled={tokenBusy}>
+                  {tokenBusy ? "Checking" : "Connect"}
                 </button>
               </div>
-            ))}
-          </div>
-
-          <div className="section-head settings-gap">
-            <p className="card-title">GitHub</p>
-            {status?.has_token && status.username ? (
-              <span className="conn-badge ok">
-                <span className="conn-dot" aria-hidden="true" /> connected as{" "}
-                <strong>{status.username}</strong>
-              </span>
-            ) : (
-              <span className="conn-badge">not connected</span>
-            )}
-          </div>
-          <p className="card-body">
-            {status?.has_token
-              ? "Paste a new token to replace the current one."
-              : "Paste a personal access token. No scopes needed, it only reads your public stars."}
-          </p>
-          <div className="token-row">
-            <input
-              className="token-input"
-              type="password"
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.stopPropagation();
-                  submitToken();
-                }
-              }}
-              placeholder="ghp_…"
-              spellCheck={false}
-            />
-            <button className="primary-btn" onClick={submitToken} disabled={tokenBusy}>
-              {tokenBusy ? "Checking" : "Connect"}
-            </button>
-          </div>
-          {tokenError && <p className="error-line">{tokenError}</p>}
-          <button
-            className="link-btn"
-            onClick={() =>
-              invoke("open_repo", {
-                url: "https://github.com/settings/tokens/new?description=magpie",
-              })
-            }
-          >
-            Create one on github.com
-          </button>
-          {status?.has_token && (
-            <button
-              className="link-btn"
-              onClick={rebuildStars}
-              title="Wipe the star index and sync everything from scratch"
-            >
-              Rebuild star index from scratch
-            </button>
-          )}
-
-          <p className="card-title settings-gap">
-            Indexed folders
-            {status != null && <span className="ver">{status.folder_count}</span>}
-          </p>
-          <p className="card-body">
-            Only folders you add are scanned, recursively (subfolders included). Hidden
-            files and gitignored paths are skipped.
-          </p>
-          {folders.length === 0 &&
-            (status != null && status.folder_count > 0 ? (
-              <p className="error-line">
-                {status.folder_count} folder(s) are indexed but the list failed to load —
-                please report this together with the error shown below.
-              </p>
-            ) : (
-              <p className="card-body">No folders indexed yet.</p>
-            ))}
-          {folders.length > 0 && (
-            <div className="folder-list">
-              {folders.map((f) => (
-                <div key={f.id} className="folder-row">
-                  <span className="folder-path" title={f.path}>
-                    {f.path}
-                  </span>
-                  <span className="folder-count">{f.file_count} files</span>
+              {tokenError && <p className="error-line">{tokenError}</p>}
+              <div className="set-links">
+                <button
+                  className="link-btn"
+                  onClick={() =>
+                    invoke("open_repo", {
+                      url: "https://github.com/settings/tokens/new?description=magpie",
+                    })
+                  }
+                >
+                  Create one on github.com
+                </button>
+                {status?.has_token && (
                   <button
-                    className="folder-remove"
-                    onClick={() => rebuildFolder(f.id)}
-                    title="Rebuild this folder's index from scratch"
-                    aria-label={`Rebuild index for ${f.path}`}
+                    className="link-btn"
+                    onClick={rebuildStars}
+                    title="Wipe the star index and sync everything from scratch"
                   >
-                    ↻
+                    Rebuild star index
                   </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* INDEXING */}
+          <p className="set-eyebrow">Indexing</p>
+          <div className="set-group">
+            <div className="set-row stack">
+              <div className="set-head">
+                <div className="set-label">
+                  <span className="set-name">
+                    Indexed folders
+                    {status != null && status.folder_count > 0 && (
+                      <span className="count-pill">{status.folder_count}</span>
+                    )}
+                  </span>
+                  <span className="set-desc">
+                    Scanned recursively; hidden and gitignored paths are skipped.
+                  </span>
+                </div>
+                <button className="primary-btn" onClick={addFolder}>
+                  Add folder
+                </button>
+              </div>
+              {folders.length === 0 &&
+                (status != null && status.folder_count > 0 ? (
+                  <p className="error-line">
+                    {status.folder_count} folder(s) indexed but the list failed to load —
+                    please report this with the error below.
+                  </p>
+                ) : (
+                  <p className="set-empty">No folders yet.</p>
+                ))}
+              {folders.length > 0 && (
+                <div className="folder-list">
+                  {folders.map((f) => (
+                    <div key={f.id} className="folder-row">
+                      <span className="folder-path" title={f.path}>
+                        {f.path}
+                      </span>
+                      <span className="folder-count">{f.file_count}</span>
+                      <button
+                        className="folder-remove"
+                        onClick={() => rebuildFolder(f.id)}
+                        title="Rebuild this folder's index from scratch"
+                        aria-label={`Rebuild index for ${f.path}`}
+                      >
+                        ↻
+                      </button>
+                      <button
+                        className="folder-remove"
+                        onClick={() => removeFolder(f.id)}
+                        title="Remove from index"
+                        aria-label={`Remove ${f.path}`}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">Max file size</span>
+                <span className="set-desc">Larger files index by name only. Changing rebuilds.</span>
+              </div>
+              <div className="pill-row">
+                {FILE_CAPS.map((c) => (
                   <button
-                    className="folder-remove"
-                    onClick={() => removeFolder(f.id)}
-                    title="Remove from index"
-                    aria-label={`Remove ${f.path}`}
+                    key={c.mb}
+                    className={`source ${status?.max_file_mb === c.mb ? "active" : ""}`}
+                    onClick={() => applyFileCap(c.mb)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-head">
+                <div className="set-label">
+                  <span className="set-name">Model download source</span>
+                  <span className="set-desc">
+                    Pick the mirror if huggingface.co is unreachable from your network.
+                  </span>
+                </div>
+                <div className="pill-row">
+                  {HF_ENDPOINTS.map((e) => (
+                    <button
+                      key={e.url}
+                      className={`source ${status?.hf_endpoint === e.url ? "active" : ""}`}
+                      onClick={async () => {
+                        try {
+                          await invoke("set_hf_endpoint", { endpoint: e.url });
+                          await refreshStatus();
+                        } catch (er) {
+                          setLastError(String(er));
+                        }
+                      }}
+                    >
+                      {e.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="model-status">
+                <span>
+                  <span className={`status-dot ${status?.model === "ready" ? "ok" : ""}`} />
+                  Semantic model —{" "}
+                  {status?.model === "ready"
+                    ? "ready"
+                    : status?.model === "loading"
+                      ? "downloading (~500 MB, first run)…"
+                      : (status?.model ?? "…")}
+                </span>
+                <span>
+                  <span className={`status-dot ${status?.image_model === "ready" ? "ok" : ""}`} />
+                  Image model —{" "}
+                  {status?.image_model === "ready"
+                    ? "ready"
+                    : status?.image_model === "loading"
+                      ? "downloading (~200 MB, first run)…"
+                      : (status?.image_model ?? "…")}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* APPEARANCE & BEHAVIOR */}
+          <p className="set-eyebrow">Appearance &amp; behavior</p>
+          <div className="set-group">
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">Theme</span>
+              </div>
+              <div className="pill-row">
+                {THEMES.map((t) => (
+                  <button
+                    key={t}
+                    className={`source ${theme === t ? "active" : ""}`}
+                    onClick={() => setTheme(t)}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-label">
+                <span className="set-name">Summon shortcut</span>
+                <span className="set-desc">
+                  Currently <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>. Click and press a new
+                  combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.
+                </span>
+              </div>
+              <div className="token-row">
+                <input
+                  className="token-input"
+                  value={hotkeyDraft}
+                  onChange={() => {}}
+                  onKeyDown={captureHotkey}
+                  placeholder="press keys…"
+                  spellCheck={false}
+                />
+                {hotkeyDraft && (
+                  <button
+                    className="icon-btn"
+                    onClick={() => {
+                      setHotkeyDraft("");
+                      setHotkeyMsg(null);
+                    }}
+                    title="Clear"
+                    aria-label="Clear recorded shortcut"
                   >
                     ✕
                   </button>
+                )}
+                <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
+                  Apply
+                </button>
+              </div>
+              {hotkeyMsg && (
+                <p className={hotkeyMsg === "saved" ? "set-empty" : "error-line"}>{hotkeyMsg}</p>
+              )}
+              {status?.hotkey !== "Alt+Space" && (
+                <div className="set-links">
+                  <button
+                    className="link-btn"
+                    onClick={async () => {
+                      try {
+                        await invoke("set_hotkey", { hotkey: "Alt+Space" });
+                        setHotkeyDraft("");
+                        setHotkeyMsg("saved");
+                        refreshStatus();
+                      } catch (e) {
+                        setHotkeyMsg(String(e));
+                      }
+                    }}
+                  >
+                    Reset to Alt+Space
+                  </button>
                 </div>
-              ))}
+              )}
             </div>
-          )}
-          <button className="primary-btn self-end" onClick={addFolder}>
-            Add folder
-          </button>
 
-          <p className="card-title settings-gap">Appearance</p>
-          <div className="pill-row">
-            {THEMES.map((t) => (
-              <button
-                key={t}
-                className={`source ${theme === t ? "active" : ""}`}
-                onClick={() => setTheme(t)}
-              >
-                {t}
-              </button>
-            ))}
+            <div className="set-row stack">
+              <div className="set-label">
+                <span className="set-name">Tabs</span>
+                <span className="set-desc">
+                  Reorder with the arrows; ★ marks the tab that opens on launch.
+                </span>
+              </div>
+              <div className="tab-order">
+                {sources.map((s, i) => (
+                  <div
+                    key={s.id}
+                    className={`tab-row ${dragTab === s.id ? "dragging" : ""} ${dropTab === s.id && dragTab !== s.id ? "drop-target" : ""}`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragTab(s.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dropTab !== s.id) setDropTab(s.id);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (dragTab) commitDrag(dragTab, s.id);
+                      setDragTab(null);
+                      setDropTab(null);
+                    }}
+                    onDragEnd={() => {
+                      setDragTab(null);
+                      setDropTab(null);
+                    }}
+                  >
+                    <span className="drag-handle" aria-hidden="true">
+                      ⠿
+                    </span>
+                    <button
+                      className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
+                      onClick={() => chooseDefaultTab(s.id)}
+                      title={defaultTab === s.id ? "Opens on launch" : "Make this the launch tab"}
+                      aria-label={`Make ${s.label} the default tab`}
+                    >
+                      {defaultTab === s.id ? "★" : "☆"}
+                    </button>
+                    <span className="tab-name">{s.label}</span>
+                    <button
+                      className="tab-move"
+                      onClick={() => moveTab(s.id, -1)}
+                      disabled={i === 0}
+                      aria-label={`Move ${s.label} up`}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="tab-move"
+                      onClick={() => moveTab(s.id, 1)}
+                      disabled={i === sources.length - 1}
+                      aria-label={`Move ${s.label} down`}
+                    >
+                      ↓
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
-          <p className="card-title settings-gap">Summon shortcut</p>
-          <p className="card-body">
-            Current: <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>. Click below and press a new
-            combination; Backspace clears it. Shortcuts the OS reserves (like ⌘Space for
-            Spotlight on macOS) cannot be captured — free them in system settings first.
-          </p>
-          <div className="token-row">
-            <input
-              className="token-input"
-              value={hotkeyDraft}
-              onChange={() => {}}
-              onKeyDown={captureHotkey}
-              placeholder="press keys…"
-              spellCheck={false}
-            />
-            {hotkeyDraft && (
-              <button
-                className="icon-btn"
-                onClick={() => {
-                  setHotkeyDraft("");
-                  setHotkeyMsg(null);
-                }}
-                title="Clear"
-                aria-label="Clear recorded shortcut"
-              >
-                ✕
-              </button>
-            )}
-            <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
-              Apply
-            </button>
-          </div>
-          {hotkeyMsg && (
-            <p className={hotkeyMsg === "saved" ? "card-body" : "error-line"}>{hotkeyMsg}</p>
-          )}
-          {status?.hotkey !== "Alt+Space" && (
-            <button
-              className="link-btn"
-              onClick={async () => {
-                try {
-                  await invoke("set_hotkey", { hotkey: "Alt+Space" });
-                  setHotkeyDraft("");
-                  setHotkeyMsg("saved");
-                  refreshStatus();
-                } catch (e) {
-                  setHotkeyMsg(String(e));
-                }
-              }}
-            >
-              Reset to Alt+Space
-            </button>
-          )}
+          {/* PRIVACY */}
+          <p className="set-eyebrow">Privacy</p>
+          <div className="set-group">
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">
+                  Clipboard history
+                  {status?.clipboard_enabled && (
+                    <span className="count-pill">{status.clip_count}</span>
+                  )}
+                </span>
+                <span className="set-desc">
+                  Recorded locally, searchable in the Clipboard tab. Password-manager
+                  secrets are never stored.
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", enabled: false },
+                  { label: "on", enabled: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${status?.clipboard_enabled === o.enabled ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_clipboard_enabled", { enabled: o.enabled });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-          <p className="card-title settings-gap">Model download source</p>
-          <p className="card-body">
-            Embedding models download once from this host. Pick the mirror if
-            huggingface.co is unreachable from your network.
-          </p>
-          <div className="pill-row">
-            {HF_ENDPOINTS.map((e) => (
-              <button
-                key={e.url}
-                className={`source ${status?.hf_endpoint === e.url ? "active" : ""}`}
-                onClick={async () => {
-                  try {
-                    await invoke("set_hf_endpoint", { endpoint: e.url });
-                    await refreshStatus();
-                  } catch (er) {
-                    setLastError(String(er));
-                  }
-                }}
-              >
-                {e.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="model-status">
-            <span>
-              Semantic model:{" "}
-              {status?.model === "ready"
-                ? "ready"
-                : status?.model === "loading"
-                  ? "downloading / preparing (~500 MB on first run)…"
-                  : (status?.model ?? "…")}
-            </span>
-            <span>
-              Image model:{" "}
-              {status?.image_model === "ready"
-                ? "ready"
-                : status?.image_model === "loading"
-                  ? "downloading / preparing (~200 MB on first run)…"
-                  : (status?.image_model ?? "…")}
-            </span>
-          </div>
-
-          <p className="card-title settings-gap">
-            Clipboard history
-            {status?.clipboard_enabled && <span className="ver">{status.clip_count}</span>}
-          </p>
-          <p className="card-body">
-            Off by default. When enabled, copied text is recorded locally and
-            searchable from the Clipboard tab; entries marked confidential by
-            password managers are never recorded.
-          </p>
-          <div className="pill-row">
-            {[
-              { label: "off", enabled: false },
-              { label: "on", enabled: true },
-            ].map((o) => (
-              <button
-                key={o.label}
-                className={`source ${status?.clipboard_enabled === o.enabled ? "active" : ""}`}
-                onClick={async () => {
-                  try {
-                    await invoke("set_clipboard_enabled", { enabled: o.enabled });
-                    await refreshStatus();
-                  } catch (e) {
-                    setLastError(String(e));
-                  }
-                }}
-              >
-                {o.label}
-              </button>
-            ))}
             {status?.clipboard_enabled && (
               <>
-                {[
-                  { label: "max 500", entries: 500 },
-                  { label: "2000", entries: 2000 },
-                  { label: "unlimited", entries: 0 },
-                ].map((o) => (
+                <div className="set-row">
+                  <div className="set-label">
+                    <span className="set-name">Keep at most</span>
+                  </div>
+                  <div className="pill-row">
+                    {[
+                      { label: "500", entries: 500 },
+                      { label: "2000", entries: 2000 },
+                      { label: "unlimited", entries: 0 },
+                    ].map((o) => (
+                      <button
+                        key={`n${o.entries}`}
+                        className={`source ${status?.clip_max_entries === o.entries ? "active" : ""}`}
+                        onClick={async () => {
+                          try {
+                            await invoke("set_clip_max_entries", { entries: o.entries });
+                            await refreshStatus();
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="set-row">
+                  <div className="set-label">
+                    <span className="set-name">Keep for</span>
+                  </div>
+                  <div className="pill-row">
+                    {[
+                      { label: "7 days", days: 7 },
+                      { label: "30 days", days: 30 },
+                      { label: "forever", days: 0 },
+                    ].map((o) => (
+                      <button
+                        key={o.days}
+                        className={`source ${status?.clip_retention_days === o.days ? "active" : ""}`}
+                        onClick={async () => {
+                          try {
+                            await invoke("set_clip_retention", { days: o.days });
+                            await refreshStatus();
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="set-row">
+                  <div className="set-label">
+                    <span className="set-name">Clear history</span>
+                    <span className="set-desc">Delete every recorded clip permanently.</span>
+                  </div>
                   <button
-                    key={`n${o.entries}`}
-                    className={`source ${status?.clip_max_entries === o.entries ? "active" : ""}`}
+                    className="danger-btn"
                     onClick={async () => {
                       try {
-                        await invoke("set_clip_max_entries", { entries: o.entries });
+                        await invoke("clear_clips_now");
                         await refreshStatus();
                       } catch (e) {
                         setLastError(String(e));
                       }
                     }}
                   >
-                    {o.label}
+                    Clear
                   </button>
-                ))}
-                {[
-                  { label: "keep 7 days", days: 7 },
-                  { label: "30 days", days: 30 },
-                  { label: "forever", days: 0 },
-                ].map((o) => (
-                  <button
-                    key={o.days}
-                    className={`source ${status?.clip_retention_days === o.days ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_clip_retention", { days: o.days });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-                <button
-                  className="source"
-                  onClick={async () => {
-                    try {
-                      await invoke("clear_clips_now");
-                      await refreshStatus();
-                    } catch (e) {
-                      setLastError(String(e));
-                    }
-                  }}
-                  title="Delete all recorded clips permanently"
-                >
-                  clear
-                </button>
+                </div>
               </>
             )}
           </div>
 
-          <p className="card-title settings-gap">Max file size</p>
-          <p className="card-body">
-            Files above this size are skipped. Changing it rebuilds the local index.
-          </p>
-          <div className="pill-row">
-            {FILE_CAPS.map((c) => (
-              <button
-                key={c.mb}
-                className={`source ${status?.max_file_mb === c.mb ? "active" : ""}`}
-                onClick={() => applyFileCap(c.mb)}
-              >
-                {c.label}
-              </button>
-            ))}
+          {/* SYSTEM */}
+          <p className="set-eyebrow">System</p>
+          <div className="set-group">
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">Updates</span>
+                <span className="set-desc">
+                  {updPhase === "available" || updPhase === "downloading"
+                    ? `Version ${updVersion} is available.`
+                    : updPhase === "none"
+                      ? "You are on the latest version."
+                      : "Installed in place; your index and settings are kept."}
+                </span>
+              </div>
+              {updPhase === "available" ? (
+                <button className="primary-btn" onClick={doInstallUpdate}>
+                  Update &amp; restart
+                </button>
+              ) : updPhase === "downloading" ? (
+                <button className="primary-btn" disabled>
+                  {updPct}%
+                </button>
+              ) : (
+                <button
+                  className="ghost-btn"
+                  onClick={() => doCheckUpdate(false)}
+                  disabled={updPhase === "checking"}
+                >
+                  {updPhase === "checking" ? "Checking…" : "Check now"}
+                </button>
+              )}
+            </div>
+            {updError && <p className="error-line">{updError}</p>}
           </div>
 
-          <p className="card-title settings-gap">Updates</p>
-          <p className="card-body">
-            {updPhase === "available" || updPhase === "downloading"
-              ? `Version ${updVersion} is available.`
-              : updPhase === "none"
-                ? "You are on the latest version."
-                : "Updates install in place and keep your index and settings."}
-          </p>
-          <div className="token-row">
-            {updPhase === "available" ? (
-              <button className="primary-btn" onClick={doInstallUpdate}>
-                Update &amp; restart
-              </button>
-            ) : updPhase === "downloading" ? (
-              <button className="primary-btn" disabled>
-                Downloading… {updPct}%
-              </button>
-            ) : (
-              <button
-                className="primary-btn"
-                onClick={() => doCheckUpdate(false)}
-                disabled={updPhase === "checking"}
-              >
-                {updPhase === "checking" ? "Checking…" : "Check for updates"}
-              </button>
-            )}
-          </div>
-          {updError && <p className="error-line">{updError}</p>}
-
-          {lastError && <p className="error-line settings-gap">{lastError}</p>}
+          {lastError && <p className="error-line">{lastError}</p>}
         </div>
       ) : (
         results.length > 0 && (
