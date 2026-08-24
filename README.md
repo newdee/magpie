@@ -6,9 +6,10 @@
 
 Magpies hoard shiny things and famously forget where they put them. So do we:
 GitHub stars we never open again, files buried in project folders, screenshots
-we can describe but cannot find, bookmarks lost in folder trees. **magpie** is
-a tiny desktop launcher that brings them back — press a hotkey, type what you
-vaguely remember (or drop in an image), hit Enter.
+we can describe but cannot find, bookmarks and history lost in the browser,
+that snippet we copied an hour ago, the app three menus deep. **magpie** is a
+tiny desktop launcher that brings them all back — press a hotkey, type what
+you vaguely remember (or drop in an image), hit Enter.
 
 <p align="center"><img src="docs/img/palette-stars.jpeg" width="760" alt="magpie searching GitHub stars"></p>
 
@@ -54,6 +55,24 @@ vaguely remember (or drop in an image), hit Enter.
 - Keyword hits show a highlighted context snippet with ellipsis.
 - Millisecond-fast: vectors live in memory, a query embeds in ~5 ms, and
   keyword search keeps working while models warm up.
+
+**One launcher for everything you keep.**
+
+- **Five things, one keystroke**: local files (full-text + by name), images
+  by content, GitHub stars, browser bookmarks **and** history, your clipboard,
+  and installed apps — all behind `Alt+Space`.
+- **A real app launcher**: type an app name (prefix, substring, or acronym
+  like `vsc`) and `Enter` launches it — Start Menu, `/Applications`, or Linux
+  `.desktop`.
+- **Clipboard history that respects secrets**: opt-in, stored locally, and
+  clips a password manager marks confidential are never recorded (honored on
+  Windows and macOS). Cap it by count and age, multi-select and delete.
+- **Stays current on its own**: signed, verified in-place auto-updates from
+  this version on — no reinstalling.
+- **Yours to arrange**: reorder the tabs and pick which one opens on launch.
+- **Works where the network doesn't**: one-click switch to `hf-mirror.com`
+  for the model download, with resumable transfers and live progress.
+- **Cross-platform**: Windows, macOS (Apple Silicon), and Linux.
 
 ## Sources (`Tab` cycles them)
 
@@ -132,17 +151,20 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 
 | Key | Action |
 |---|---|
-| `Alt+Space` | summon / dismiss the palette (configurable in settings) |
+| `Alt+Space` | summon / dismiss the palette (rebindable in settings) |
 | `↑` `↓` / `PgUp` `PgDn` | move / page through results |
-| `Enter` | open: repos & bookmarks in the browser, files revealed in Explorer/Finder |
-| `Ctrl+Enter` | hand the query to the browser: URL-looking input opens directly, anything else web-searches |
-| `Tab` | switch source (Local / Stars / Bookmarks) |
-| `Shift+Tab` | cycle local scope, or star sort order |
+| `Enter` | context action: open a repo/bookmark/history page in the browser, reveal a file in Explorer/Finder, launch an app, or copy a clip |
+| `Ctrl+Enter` | hand the query to the browser — URL-looking input opens directly, anything else web-searches |
+| `Tab` | next source (Local / Stars / Web / Clipboard — order set in settings) |
+| `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
+| `Shift`+`↑` `↓` | extend a multi-selection (Clipboard tab) |
+| `Ctrl+Delete` | delete the selected clips (Clipboard tab) |
 | `Esc` | clear image query → close settings → hide window |
-| drop / paste / pick an image | search by image similarity |
+| drop / paste / pick an image | search local images by similarity |
 
 The palette sits top-center, stays above every window, never hides on focus
-loss (so drag-and-drop works), and can be dragged by its tab strip.
+loss (so drag-and-drop works), and can be dragged by its tab strip. Tab order
+and the tab that opens on launch are both configurable.
 
 ## Settings (tray icon → Settings…)
 
@@ -187,8 +209,10 @@ Windows 11 and macOS).
 
 ```
 core/       Rust library: SQLite + FTS5, GitHub sync, folder indexing,
-            bookmark parsing, e5 + SigLIP embeddings, hybrid ranking
-src-tauri/  thin Tauri shell: commands, tray, global hotkey, window
+            bookmark + history + clipboard + app sources, e5 + SigLIP
+            embeddings, hybrid ranking
+src-tauri/  thin Tauri shell: commands, tray, global hotkey, window,
+            clipboard watcher, auto-updater
 src/        React palette UI (one window)
 ```
 
