@@ -679,9 +679,10 @@ export default function App() {
     localStorage.setItem("magpie.defaulttab", id);
   }, []);
 
-  // drag-to-reorder tabs; dragId is the tab being dragged, dropId the hovered slot
+  // drag-to-reorder tabs via pointer events. HTML5 drag&drop is NOT usable
+  // here: Tauri's file drag-drop handling (needed for image drops) swallows
+  // the webview's native DnD drop events on Windows.
   const [dragTab, setDragTab] = useState<string | null>(null);
-  const [dropTab, setDropTab] = useState<string | null>(null);
 
   const commitDrag = useCallback(
     (fromId: string, toId: string) => {
@@ -701,6 +702,18 @@ export default function App() {
     },
     [sourceIdx],
   );
+
+  // a drag ends on any pointer release, wherever it happens
+  useEffect(() => {
+    if (!dragTab) return;
+    const end = () => setDragTab(null);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return () => {
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+  }, [dragTab]);
 
   const selLo = selAnchor == null ? selected : Math.min(selAnchor, selected);
   const selHi = selAnchor == null ? selected : Math.max(selAnchor, selected);
@@ -1513,36 +1526,29 @@ export default function App() {
               <div className="set-label">
                 <span className="set-name">Tabs</span>
                 <span className="set-desc">
-                  Reorder with the arrows; ★ marks the tab that opens on launch.
+                  Drag the handle (or use the arrows) to reorder; ★ marks the
+                  tab that opens on launch.
                 </span>
               </div>
               <div className="tab-order">
                 {sources.map((s, i) => (
                   <div
                     key={s.id}
-                    className={`tab-row ${dragTab === s.id ? "dragging" : ""} ${dropTab === s.id && dragTab !== s.id ? "drop-target" : ""}`}
-                    draggable
-                    onDragStart={(e) => {
-                      setDragTab(s.id);
-                      e.dataTransfer.effectAllowed = "move";
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                      if (dropTab !== s.id) setDropTab(s.id);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      if (dragTab) commitDrag(dragTab, s.id);
-                      setDragTab(null);
-                      setDropTab(null);
-                    }}
-                    onDragEnd={() => {
-                      setDragTab(null);
-                      setDropTab(null);
+                    className={`tab-row ${dragTab === s.id ? "dragging" : ""}`}
+                    onPointerEnter={() => {
+                      // live reorder: while a drag is held, entering another
+                      // row moves the dragged tab into that slot
+                      if (dragTab && dragTab !== s.id) commitDrag(dragTab, s.id);
                     }}
                   >
-                    <span className="drag-handle" aria-hidden="true">
+                    <span
+                      className="drag-handle"
+                      aria-hidden="true"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        setDragTab(s.id);
+                      }}
+                    >
                       ⠿
                     </span>
                     <button

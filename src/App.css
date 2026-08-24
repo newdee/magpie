@@ -909,11 +909,9 @@ input.query:active {
 }
 
 .tab-row.dragging {
-  opacity: 0.4;
-}
-
-.tab-row.drop-target {
   border-color: var(--accent-border);
+  background: var(--accent-soft);
+  user-select: none;
 }
 
 .drag-handle {
