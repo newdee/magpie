@@ -1,0 +1,7 @@
+# winget version manifest — place under
+# manifests/n/newdee/magpie/0.1.13/ in a microsoft/winget-pkgs fork
+PackageIdentifier: newdee.magpie
+PackageVersion: 0.1.13
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

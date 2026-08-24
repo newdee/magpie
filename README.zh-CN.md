@@ -146,7 +146,14 @@ GitHub token（带连接徽章）· 索引文件夹（添加/移除/重建）· 
 
 ## 安装
 
-从 [Releases](https://github.com/newdee/magpie/releases) 下载：Windows NSIS
+**Windows** —— 用 [Scoop](https://scoop.sh)：
+
+```sh
+scoop bucket add magpie https://github.com/newdee/scoop-magpie
+scoop install magpie
+```
+
+或从 [Releases](https://github.com/newdee/magpie/releases) 下载：Windows NSIS
 安装包、macOS dmg（Apple Silicon）、Linux AppImage/deb/rpm。
 
 **macOS 提示**——构建未签名，浏览器下载的 dmg 会触发 Gatekeeper。用 curl 安装

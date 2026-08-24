@@ -177,7 +177,14 @@ app version.
 
 ## Install
 
-Grab the latest build from [Releases](https://github.com/newdee/magpie/releases):
+**Windows** — via [Scoop](https://scoop.sh):
+
+```sh
+scoop bucket add magpie https://github.com/newdee/scoop-magpie
+scoop install magpie
+```
+
+Or grab the build from [Releases](https://github.com/newdee/magpie/releases):
 Windows NSIS installer, macOS dmg (Apple Silicon), Linux AppImage/deb/rpm.
 
 **macOS tip** — builds are unsigned, so a browser-downloaded dmg triggers

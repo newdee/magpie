@@ -1,0 +1,13 @@
+PackageIdentifier: newdee.magpie
+PackageVersion: 0.1.13
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+  - silent
+  - silentWithProgress
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/newdee/magpie/releases/download/v0.1.13/magpie_0.1.13_x64-setup.exe
+    InstallerSha256: 6E264A5AFD4D8F8083D6563447B4D52C99D32D123153E6328C892B0818DE4A45
+ManifestType: installer
+ManifestVersion: 1.6.0

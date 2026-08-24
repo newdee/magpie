@@ -1,0 +1,25 @@
+PackageIdentifier: newdee.magpie
+PackageVersion: 0.1.13
+PackageLocale: en-US
+Publisher: newdee
+PublisherUrl: https://github.com/newdee
+PackageName: magpie
+PackageUrl: https://github.com/newdee/magpie
+License: MIT
+LicenseUrl: https://github.com/newdee/magpie/blob/main/LICENSE
+ShortDescription: Spotlight-style local launcher — search GitHub stars, files, images, bookmarks, history, clipboard, and apps.
+Description: |-
+  magpie is a Spotlight-style desktop launcher that finds everything you saved
+  and forgot: GitHub stars (full READMEs), local files (full-text incl. PDF and
+  Office), images by content via SigLIP, browser bookmarks and history, your
+  clipboard, and installed apps. Hybrid keyword + local semantic search runs
+  fully on-device; nothing is uploaded. Privacy-first — no full-disk scanning.
+Tags:
+  - launcher
+  - search
+  - spotlight
+  - productivity
+  - semantic-search
+  - local-first
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

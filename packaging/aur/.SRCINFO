@@ -1,0 +1,17 @@
+pkgbase = magpie-bin
+	pkgdesc = Spotlight-style local launcher: search GitHub stars, files, images, bookmarks, history, clipboard, and apps
+	pkgver = 0.1.13
+	pkgrel = 1
+	url = https://github.com/newdee/magpie
+	arch = x86_64
+	license = MIT
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libappindicator-gtk3
+	provides = magpie
+	conflicts = magpie
+	options = !strip
+	source = magpie-0.1.13.deb::https://github.com/newdee/magpie/releases/download/v0.1.13/magpie_0.1.13_amd64.deb
+	sha256sums = 3e4a53f59867d251d88ca99d1f050b7337b775eea2247f0502cb9857a67365c4
+
+pkgname = magpie-bin
