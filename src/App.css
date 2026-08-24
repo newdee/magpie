@@ -747,16 +747,31 @@ input.query:active {
   color: var(--text);
 }
 
-.app-badge {
+.app-badge,
+.web-badge {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: 5px;
+  white-space: nowrap;
+}
+
+.app-badge {
   color: var(--accent);
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);
+}
+
+/* neutral badges so they distinguish bookmark vs history without shouting */
+.web-badge {
+  color: var(--text-faint);
+  border: 1px solid var(--border-strong);
+}
+
+.web-badge.bookmark {
+  color: var(--text-dim);
 }
 
 .clip-text {

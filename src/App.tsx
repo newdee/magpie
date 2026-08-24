@@ -1655,6 +1655,9 @@ export default function App() {
                       </span>
                     </div>
                     <div className="row-meta">
+                      {webScope === "all" && (
+                        <span className="web-badge bookmark">Bookmark</span>
+                      )}
                       {r.added_at != null && relTimeUnix(r.added_at) && (
                         <span
                           className="mono"
@@ -1673,6 +1676,9 @@ export default function App() {
                       <span className="row-sub">{r.url}</span>
                     </div>
                     <div className="row-meta">
+                      {webScope === "all" && (
+                        <span className="web-badge history">History</span>
+                      )}
                       {r.last_visit != null && relTimeUnix(r.last_visit) && (
                         <span className="mono">{relTimeUnix(r.last_visit)}</span>
                       )}
