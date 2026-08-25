@@ -27,3 +27,8 @@ dist-ssr
 /target
 /mac-img
 /test.png
+
+# local agent tooling
+/.agents/
+/.claude/
+/skills-lock.json
