@@ -279,18 +279,39 @@ export default function App() {
   const [selected, setSelected] = useState(0);
   // shift+arrows extend a range from this anchor (clips only); null = single
   const [selAnchor, setSelAnchor] = useState<number | null>(null);
-  // user-customizable tab order and which tab opens on launch
+  // user-customizable tab order, visibility, and which tab opens on launch.
+  // Hidden ids are stored (not visible ones) so future sources default to shown.
   const [sourceOrder, setSourceOrder] = useState<string[]>(loadTabOrder);
-  const sources = useMemo(() => orderedSources(sourceOrder), [sourceOrder]);
+  const [hiddenTabs, setHiddenTabs] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("magpie.tabhidden");
+      if (raw) return JSON.parse(raw) as string[];
+    } catch {
+      /* default: nothing hidden */
+    }
+    return [];
+  });
+  const sources = useMemo(() => {
+    const visible = orderedSources(sourceOrder).filter((s) => !hiddenTabs.includes(s.id));
+    // never let the tab strip go empty, whatever storage says
+    return visible.length > 0 ? visible : orderedSources(sourceOrder);
+  }, [sourceOrder, hiddenTabs]);
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
   const [defaultTab, setDefaultTab] = useState<string>(
     () => localStorage.getItem("magpie.defaulttab") || "local",
   );
   const [sourceIdx, setSourceIdx] = useState(() => {
-    const order = loadTabOrder();
+    let hidden: string[] = [];
+    try {
+      hidden = JSON.parse(localStorage.getItem("magpie.tabhidden") ?? "[]") as string[];
+    } catch {
+      /* nothing hidden */
+    }
+    let visible = loadTabOrder().filter((id) => !hidden.includes(id));
+    if (visible.length === 0) visible = loadTabOrder();
     const want = localStorage.getItem("magpie.defaulttab") || "local";
-    const idx = order.indexOf(want);
+    const idx = visible.indexOf(want);
     return idx >= 0 ? idx : 0;
   });
   const [status, setStatus] = useState<Status | null>(null);
@@ -678,6 +699,27 @@ export default function App() {
     setDefaultTab(id);
     localStorage.setItem("magpie.defaulttab", id);
   }, []);
+
+  // show/hide a source tab; the last visible one can't be hidden
+  const toggleTabVisible = useCallback(
+    (id: string) => {
+      setHiddenTabs((prev) => {
+        const hiding = !prev.includes(id);
+        const allIds = orderedSources(loadTabOrder()).map((s) => s.id);
+        const visibleNow = allIds.filter((x) => !prev.includes(x));
+        if (hiding && visibleNow.length <= 1) return prev; // keep at least one
+        const next = hiding ? [...prev, id] : prev.filter((x) => x !== id);
+        localStorage.setItem("magpie.tabhidden", JSON.stringify(next));
+        // if the active tab just vanished, land on the first visible one
+        const nextVisible = allIds.filter((x) => !next.includes(x));
+        const activeId = (sourcesRef.current[sourceIdx] ?? sourcesRef.current[0]).id;
+        const idx = nextVisible.indexOf(activeId);
+        setSourceIdx(idx >= 0 ? idx : 0);
+        return next;
+      });
+    },
+    [sourceIdx],
+  );
 
   // drag-to-reorder tabs via pointer events. HTML5 drag&drop is NOT usable
   // here: Tauri's file drag-drop handling (needed for image drops) swallows
@@ -1526,58 +1568,79 @@ export default function App() {
               <div className="set-label">
                 <span className="set-name">Tabs</span>
                 <span className="set-desc">
+                  Tick which sources appear as tabs (at least one stays on).
                   Drag the handle (or use the arrows) to reorder; ★ marks the
                   tab that opens on launch.
                 </span>
               </div>
               <div className="tab-order">
-                {sources.map((s, i) => (
-                  <div
-                    key={s.id}
-                    className={`tab-row ${dragTab === s.id ? "dragging" : ""}`}
-                    onPointerEnter={() => {
-                      // live reorder: while a drag is held, entering another
-                      // row moves the dragged tab into that slot
-                      if (dragTab && dragTab !== s.id) commitDrag(dragTab, s.id);
-                    }}
-                  >
-                    <span
-                      className="drag-handle"
-                      aria-hidden="true"
-                      onPointerDown={(e) => {
-                        e.preventDefault();
-                        setDragTab(s.id);
+                {orderedSources(sourceOrder).map((s, i, all) => {
+                  const hidden = hiddenTabs.includes(s.id);
+                  const lastVisible = !hidden && all.filter((x) => !hiddenTabs.includes(x.id)).length <= 1;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`tab-row ${dragTab === s.id ? "dragging" : ""} ${hidden ? "hidden-tab" : ""}`}
+                      onPointerEnter={() => {
+                        // live reorder: while a drag is held, entering another
+                        // row moves the dragged tab into that slot
+                        if (dragTab && dragTab !== s.id) commitDrag(dragTab, s.id);
                       }}
                     >
-                      ⠿
-                    </span>
-                    <button
-                      className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
-                      onClick={() => chooseDefaultTab(s.id)}
-                      title={defaultTab === s.id ? "Opens on launch" : "Make this the launch tab"}
-                      aria-label={`Make ${s.label} the default tab`}
-                    >
-                      {defaultTab === s.id ? "★" : "☆"}
-                    </button>
-                    <span className="tab-name">{s.label}</span>
-                    <button
-                      className="tab-move"
-                      onClick={() => moveTab(s.id, -1)}
-                      disabled={i === 0}
-                      aria-label={`Move ${s.label} up`}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      className="tab-move"
-                      onClick={() => moveTab(s.id, 1)}
-                      disabled={i === sources.length - 1}
-                      aria-label={`Move ${s.label} down`}
-                    >
-                      ↓
-                    </button>
-                  </div>
-                ))}
+                      <span
+                        className="drag-handle"
+                        aria-hidden="true"
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          setDragTab(s.id);
+                        }}
+                      >
+                        ⠿
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="tab-check"
+                        checked={!hidden}
+                        disabled={lastVisible}
+                        onChange={() => toggleTabVisible(s.id)}
+                        title={
+                          lastVisible
+                            ? "At least one tab must stay visible"
+                            : hidden
+                              ? `Show ${s.label}`
+                              : `Hide ${s.label}`
+                        }
+                        aria-label={`Show ${s.label} as a tab`}
+                      />
+                      <button
+                        className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
+                        onClick={() => chooseDefaultTab(s.id)}
+                        disabled={hidden}
+                        title={defaultTab === s.id ? "Opens on launch" : "Make this the launch tab"}
+                        aria-label={`Make ${s.label} the default tab`}
+                      >
+                        {defaultTab === s.id ? "★" : "☆"}
+                      </button>
+                      <span className="tab-name">{s.label}</span>
+                      <button
+                        className="tab-move"
+                        onClick={() => moveTab(s.id, -1)}
+                        disabled={i === 0}
+                        aria-label={`Move ${s.label} up`}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="tab-move"
+                        onClick={() => moveTab(s.id, 1)}
+                        disabled={i === all.length - 1}
+                        aria-label={`Move ${s.label} down`}
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>

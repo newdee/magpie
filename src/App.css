@@ -914,6 +914,27 @@ input.query:active {
   user-select: none;
 }
 
+.tab-check {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tab-check:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.tab-row.hidden-tab .tab-name {
+  color: var(--text-faint);
+}
+
+.tab-row.hidden-tab .star-btn {
+  opacity: 0.35;
+}
+
 .drag-handle {
   cursor: grab;
   color: var(--text-faint);
