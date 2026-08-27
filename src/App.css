@@ -1095,3 +1095,117 @@ kbd {
 .alias-input::placeholder {
   color: var(--text-faint);
 }
+
+/* ---------- preview pane ---------- */
+.body-row {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+.body-row .results {
+  flex: 1;
+  min-width: 0;
+}
+.preview-pane {
+  width: 372px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  padding: 12px 14px;
+  overflow-y: auto;
+  max-height: 468px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pv-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.pv-desc {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.pv-link {
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+.pv-meta {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.mono-wrap {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.pv-text {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+.pv-text mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.pv-image {
+  max-width: 100%;
+  border-radius: 8px;
+}
+.pv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.pv-chip {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.pv-shots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.pv-shot {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  aspect-ratio: 16/10;
+  background: var(--field-bg);
+}
+.pv-shot.on {
+  border-color: var(--accent);
+}
+.pv-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pv-shot-t {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text);
+  background: rgba(10, 10, 14, 0.72);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.pv-shot-empty {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

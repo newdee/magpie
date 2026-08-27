@@ -232,6 +232,43 @@ mockIPC((cmd, args) => {
     }
     case "search_by_image":
       return imageHits;
+    case "get_preview": {
+      const a = args as { kind?: string; id?: number };
+      if (a.kind === "file" && (a.id ?? 0) > 100) {
+        return { kind: "image", image: scenePng(sunsetScene(24)) };
+      }
+      if (a.kind === "file") {
+        return {
+          kind: "text",
+          text: "# Vector search notes\n\nbrute-force dot product over L2-normalized vectors stays under 15 ms at tens of thousands of chunks — 100% recall, no ANN index to maintain.\n\nReciprocal rank fusion merges the FTS and vector candidate lists; each file ranks by its best chunk, so a sentence 100 pages deep still surfaces.\n\n## Follow-ups\n- benchmark sqlite-vec at 1M chunks\n- try int8 quantization for the resident store",
+          clipped_head: false,
+          clipped_tail: true,
+        };
+      }
+      if (a.kind === "video") {
+        return {
+          kind: "shots",
+          shots: Array.from({ length: 8 }, (_, i) => ({
+            start_ms: i * 94_000,
+            end_ms: (i + 1) * 94_000,
+            ts_ms: i * 94_000 + 47_000,
+            thumb: scenePng(i % 3 === 0 ? sunsetScene(20 + i) : i % 3 === 1 ? mountainScene : cityScene),
+          })),
+        };
+      }
+      if (a.kind === "repo") {
+        return {
+          kind: "repo",
+          description: "A machine learning-based video super resolution and frame interpolation framework.",
+          topics: JSON.stringify(["machine-learning", "video", "upscaling", "anime"]),
+          homepage: null,
+          starred_at: null,
+          readme: "# video2x\n\nA lossless video/GIF/image upscaler achieved with waifu2x, Anime4K, SRMD and RealSR.\n\n## Features\n- Multi-driver support\n- Hardware acceleration\n- Cross-platform",
+          readme_clipped: true,
+        };
+      }
+      return { kind: "none" };
+    }
     case "preview_thumb":
       return queryImageB64;
     case "search_web":

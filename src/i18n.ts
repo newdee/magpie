@@ -201,6 +201,11 @@ const ZH: Record<string, string> = {
   web: "网页",
   hide: "隐藏",
   settings: "设置",
+  preview: "预览",
+  "close preview": "收起预览",
+  "Clipboard entry": "剪贴内容",
+  Shots: "镜头",
+  "No preview": "无可预览内容",
 };
 
 export function resolveLang(pref: LangPref): Lang {

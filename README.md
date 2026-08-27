@@ -81,6 +81,10 @@ you vaguely remember (or drop in an image), hit Enter.
   Windows and macOS). Cap it by count and age, multi-select and delete.
 - **Stays current on its own**: signed, verified in-place auto-updates from
   this version on — no reinstalling.
+- **A preview pane, one keypress away**: `→` shows the selected result in
+  place — file text with your terms highlighted, full-size images, a video's
+  shot strip, README head for repos, complete clips — so you confirm before
+  you open.
 - **Yours to arrange**: reorder the tabs and pick which one opens on launch.
 - **Works where the network doesn't**: one-click switch to `hf-mirror.com`
   for the model download, with resumable transfers and live progress.
@@ -194,6 +198,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
 | `Shift`+`↑` `↓` | extend a multi-selection (Clipboard tab) |
 | `Ctrl+Delete` | delete the selected clips (Clipboard tab) |
+| `→` / `←` | open / close the preview pane (`→` with the cursor at the end of the query) |
 | `Alt+,` (or `Ctrl+,`) | toggle Settings ↔ search |
 | `Esc` | clear image query → close settings → hide window |
 | drop / paste / pick an image | search local images by similarity |

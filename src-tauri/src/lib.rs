@@ -346,6 +346,112 @@ fn preview_thumb(path: String) -> Result<Option<String>, String> {
     Ok(files::thumb_b64_for(std::path::Path::new(&path)))
 }
 
+/// Content for the preview pane. Everything comes from the local index (file
+/// text, repo metadata, video shots) or the file on disk (large image) — no
+/// network. `query` centres a text preview on its first match.
+#[tauri::command]
+async fn get_preview(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    query: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock().await;
+    match kind.as_str() {
+        "file" => {
+            let (path, ext, content): (String, Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT path, ext, content FROM files WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .map_err(err_str)?;
+            if files::is_image_ext(ext.as_deref()) {
+                // large preview rendered fresh from disk (index only keeps 96px)
+                let b64 = tokio::task::spawn_blocking(move || {
+                    files::preview_b64_for(std::path::Path::new(&path), 560)
+                })
+                .await
+                .map_err(err_str)?;
+                return Ok(json!({ "kind": "image", "image": b64 }));
+            }
+            let text = content.unwrap_or_default();
+            if text.is_empty() {
+                return Ok(json!({ "kind": "none" }));
+            }
+            // centre the window on the first query match when there is one
+            let lower = text.to_lowercase();
+            let q = query.unwrap_or_default().trim().to_lowercase();
+            let hit = if q.is_empty() { None } else { lower.find(&q) };
+            let (start, clipped_head) = match hit {
+                Some(pos) if pos > 400 => {
+                    // walk back to a char boundary near pos-400
+                    let mut s = pos - 400;
+                    while s > 0 && !text.is_char_boundary(s) {
+                        s -= 1;
+                    }
+                    (s, true)
+                }
+                _ => (0, false),
+            };
+            let mut end = (start + 2400).min(text.len());
+            while end < text.len() && !text.is_char_boundary(end) {
+                end += 1;
+            }
+            Ok(json!({
+                "kind": "text",
+                "text": &text[start..end],
+                "clipped_head": clipped_head,
+                "clipped_tail": end < text.len(),
+            }))
+        }
+        "video" => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT start_ms, end_ms, ts_ms, thumb FROM video_shots
+                     WHERE file_id = ?1 ORDER BY start_ms LIMIT 60",
+                )
+                .map_err(err_str)?;
+            let shots = stmt
+                .query_map([id], |r| {
+                    Ok(json!({
+                        "start_ms": r.get::<_, i64>(0)?,
+                        "end_ms": r.get::<_, i64>(1)?,
+                        "ts_ms": r.get::<_, i64>(2)?,
+                        "thumb": r.get::<_, Option<String>>(3)?,
+                    }))
+                })
+                .map_err(err_str)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(err_str)?;
+            Ok(json!({ "kind": "shots", "shots": shots }))
+        }
+        "repo" => {
+            let row = conn
+                .query_row(
+                    "SELECT description, topics, homepage, starred_at,
+                            substr(COALESCE(readme, ''), 1, 2400), length(COALESCE(readme, ''))
+                     FROM repos WHERE id = ?1",
+                    [id],
+                    |r| {
+                        Ok(json!({
+                            "kind": "repo",
+                            "description": r.get::<_, Option<String>>(0)?,
+                            "topics": r.get::<_, Option<String>>(1)?,
+                            "homepage": r.get::<_, Option<String>>(2)?,
+                            "starred_at": r.get::<_, Option<String>>(3)?,
+                            "readme": r.get::<_, String>(4)?,
+                            "readme_clipped": r.get::<_, i64>(5)? > 2400,
+                        }))
+                    },
+                )
+                .map_err(err_str)?;
+            Ok(row)
+        }
+        _ => Ok(json!({ "kind": "none" })),
+    }
+}
+
 // ---------- settings ----------
 
 const DEFAULT_HOTKEY: &str = "Alt+Space";
@@ -1548,6 +1654,7 @@ pub fn run() {
             set_app_aliases,
             set_video_indexing,
             set_video_decode,
+            get_preview,
             open_file
         ])
         .run(tauri::generate_context!())

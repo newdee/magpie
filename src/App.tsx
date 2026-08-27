@@ -144,6 +144,7 @@ interface LocalProgress {
 
 const PAGE = 8;
 const WINDOW_WIDTH = 720;
+const WINDOW_WIDTH_PREVIEW = 1100;
 
 const ALL_SOURCES = [
   { id: "local", label: "Local Files" },
@@ -407,6 +408,12 @@ export default function App() {
   // which re-attaches aliases to the in-memory app list
   const [aliasDraft, setAliasDraft] = useState<string | null>(null);
   const [aliasMsg, setAliasMsg] = useState<string | null>(null);
+
+  // preview pane: → opens (cursor at end of input), ← closes; the selected
+  // hit's content renders beside the list. Backend data only for kinds whose
+  // content is not already in the hit (file text/image, video shots, repo).
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
 
   // sync the tray language once at startup ("auto" resolves per OS locale)
   useEffect(() => {
@@ -716,13 +723,50 @@ export default function App() {
     };
   }, [refreshStatus, refreshFolders, runSearch]);
 
-  // window height follows content
+  // window size follows content; the preview pane widens the palette
   useLayoutEffect(() => {
     const el = panelRef.current;
     if (!el) return;
     const h = Math.min(Math.max(el.offsetHeight, 96), 620);
-    getCurrentWindow().setSize(new LogicalSize(WINDOW_WIDTH, h)).catch(() => {});
+    const w = previewOpen && !showSettings ? WINDOW_WIDTH_PREVIEW : WINDOW_WIDTH;
+    getCurrentWindow().setSize(new LogicalSize(w, h)).catch(() => {});
   });
+
+  // fetch preview content for the selected hit (index-local, so cheap); the
+  // hit itself already carries everything for clips/web/apps
+  useEffect(() => {
+    if (!previewOpen) return;
+    const hit = results[selected];
+    if (!hit) {
+      setPreview(null);
+      return;
+    }
+    const needsFetch = hit.kind === "file" || hit.kind === "video" || hit.kind === "repo";
+    // clear immediately so a slower fetch can never leave the previous hit's
+    // content rendered under the new selection
+    setPreview(null);
+    if (!needsFetch) {
+      return;
+    }
+    let stale = false;
+    const t = setTimeout(() => {
+      invoke<Record<string, unknown>>("get_preview", {
+        kind: hit.kind,
+        id: hit.id,
+        query: queryRef.current,
+      })
+        .then((p) => {
+          if (!stale) setPreview(p);
+        })
+        .catch(() => {
+          if (!stale) setPreview(null);
+        });
+    }, 100);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [previewOpen, selected, results]);
 
   // keep selection visible
   useEffect(() => {
@@ -922,6 +966,23 @@ export default function App() {
             void deleteSelectedClips();
           }
           break;
+        case "ArrowRight": {
+          // open the preview only when the caret has nowhere left to go —
+          // otherwise → keeps moving the cursor like any text field
+          const inp = inputRef.current;
+          const atEnd = !inp || (inp.selectionStart === inp.value.length && inp.selectionEnd === inp.value.length);
+          if (!previewOpen && atEnd && max >= 0 && !showSettings) {
+            e.preventDefault();
+            setPreviewOpen(true);
+          }
+          break;
+        }
+        case "ArrowLeft":
+          if (previewOpen) {
+            e.preventDefault();
+            setPreviewOpen(false);
+          }
+          break;
         case "Enter":
           e.preventDefault();
           if (e.ctrlKey || e.metaKey) {
@@ -975,7 +1036,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips],
   );
 
   const refresh = useCallback(async () => {
@@ -2128,6 +2189,7 @@ export default function App() {
         </div>
       ) : (
         results.length > 0 && (
+          <div className={`body-row ${previewOpen ? "with-preview" : ""}`}>
           <div className="results" ref={listRef}>
             {results.map((r, i) => (
               <div
@@ -2299,6 +2361,10 @@ export default function App() {
               </div>
             ))}
           </div>
+          {previewOpen && (
+            <PreviewPane hit={results[selected]} data={preview} query={query} />
+          )}
+          </div>
         )
       )}
 
@@ -2314,6 +2380,7 @@ export default function App() {
         </div>
       )}
 
+      {/* footer */}
       <div className="footer">
         <span className="hints">
           <span>
@@ -2340,6 +2407,11 @@ export default function App() {
               <kbd>⇧tab</kbd> {source === "github-stars" ? t("sort") : t("scope")}
             </span>
           )}
+          {results.length > 0 && !showSettings && (
+            <span>
+              <kbd>{previewOpen ? "←" : "→"}</kbd> {previewOpen ? t("close preview") : t("preview")}
+            </span>
+          )}
           <span>
             <kbd>alt,</kbd> {t("settings")}
           </span>
@@ -2352,6 +2424,132 @@ export default function App() {
         </span>
         <span className="status">{footerStatus}</span>
       </div>
+    </div>
+  );
+}
+
+/// Highlight every occurrence of the query's words in a text run.
+function highlightQuery(text: string, query: string): React.ReactNode[] {
+  const words = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length >= 2);
+  if (words.length === 0) return [text];
+  const out: React.ReactNode[] = [];
+  const lower = text.toLowerCase();
+  let pos = 0;
+  let key = 0;
+  while (pos < text.length) {
+    let best = -1;
+    let bestLen = 0;
+    for (const w of words) {
+      const i = lower.indexOf(w, pos);
+      if (i >= 0 && (best === -1 || i < best)) {
+        best = i;
+        bestLen = w.length;
+      }
+    }
+    if (best === -1) {
+      out.push(text.slice(pos));
+      break;
+    }
+    if (best > pos) out.push(text.slice(pos, best));
+    out.push(<mark key={key++}>{text.slice(best, best + bestLen)}</mark>);
+    pos = best + bestLen;
+  }
+  return out;
+}
+
+/// Right-hand preview of the selected hit. Web/clip/app hits carry all their
+/// data already; file/video/repo previews arrive via get_preview.
+function PreviewPane({
+  hit,
+  data,
+  query,
+}: {
+  hit: Hit | undefined;
+  data: Record<string, unknown> | null;
+  query: string;
+}) {
+  if (!hit) return <div className="preview-pane" />;
+  return (
+    <div className="preview-pane">
+      {hit.kind === "clip" ? (
+        <>
+          <p className="pv-title">{t("Clipboard entry")}</p>
+          <pre className="pv-text">{hit.content}</pre>
+          <p className="pv-meta">
+            {relTimeUnix(hit.last_copied)} · ×{hit.copy_count}
+          </p>
+        </>
+      ) : hit.kind === "bookmark" || hit.kind === "history" ? (
+        <>
+          <p className="pv-title">{hit.title || hit.url}</p>
+          <p className="pv-link">{hit.url}</p>
+          <p className="pv-meta">
+            {hit.kind === "bookmark"
+              ? `${t("Bookmark")} · ${hit.folder || "—"} · ${hit.browser}`
+              : `${t("History")} · ${hit.visit_count}× · ${hit.browser}`}
+          </p>
+        </>
+      ) : hit.kind === "app" ? (
+        <>
+          <p className="pv-title">{hit.name}</p>
+          <p className="pv-meta mono-wrap">{hit.target}</p>
+        </>
+      ) : hit.kind === "repo" && data?.kind === "repo" ? (
+        <>
+          {typeof data.description === "string" && data.description && (
+            <p className="pv-desc">{data.description}</p>
+          )}
+          {typeof data.topics === "string" && data.topics !== "[]" && (
+            <p className="pv-chips">
+              {(JSON.parse(data.topics as string) as string[]).slice(0, 8).map((tp) => (
+                <span key={tp} className="pv-chip">
+                  {tp}
+                </span>
+              ))}
+            </p>
+          )}
+          {typeof data.readme === "string" && data.readme && (
+            <pre className="pv-text">
+              {data.readme}
+              {data.readme_clipped ? " …" : ""}
+            </pre>
+          )}
+        </>
+      ) : hit.kind === "file" && data?.kind === "image" && typeof data.image === "string" ? (
+        <img className="pv-image" src={`data:image/jpeg;base64,${data.image}`} alt="" />
+      ) : hit.kind === "file" && data?.kind === "text" && typeof data.text === "string" ? (
+        <pre className="pv-text">
+          {data.clipped_head ? "… " : ""}
+          {highlightQuery(data.text, query)}
+          {data.clipped_tail ? " …" : ""}
+        </pre>
+      ) : hit.kind === "video" && data?.kind === "shots" && Array.isArray(data.shots) ? (
+        <>
+          <p className="pv-title">{t("Shots")}</p>
+          <div className="pv-shots">
+            {(data.shots as { start_ms: number; end_ms: number; ts_ms: number; thumb: string | null }[]).map(
+              (s) => (
+                <div
+                  key={s.ts_ms}
+                  className={`pv-shot ${hit.kind === "video" && hit.ts_ms === s.ts_ms ? "on" : ""}`}
+                >
+                  {s.thumb ? (
+                    <img src={`data:image/jpeg;base64,${s.thumb}`} alt="" />
+                  ) : (
+                    <span className="pv-shot-empty" />
+                  )}
+                  <span className="pv-shot-t">{fmtTime(s.start_ms)}</span>
+                </div>
+              ),
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="pv-meta">{t("No preview")}</p>
+      )}
     </div>
   );
 }

@@ -1,3 +1,27 @@
+# 验收记录 2026-08-28（结果预览面板，拟 v0.1.18）
+
+`→`（光标在输入末尾）展开 / `←` 收起；窗口 720→1100 宽度自适应。各源预览：
+文本文件=get_preview 按 query 定位命中窗口（±400/2400 字符、char boundary
+安全）+ 前端逐词高亮；图片=磁盘现读 560px（索引只存 96px）；视频=镜头条带
+（≤60 thumbs + 时间标签，当前命中镜头描边）；repo=description + topics
+chips + README 开头 2400 字符（原文本就在 repos 表）；书签/历史/剪贴/应用
+用 hit 自带字段（剪贴多行全文是老痛点）。数据全部本地索引/本机磁盘，零联网。
+
+三轮（发现 2，均已修）：
+- R1：tsc/vite/cargo 三端编译（image crate 依赖归位 core：preview_b64_for
+  贴 thumb_b64_for；base64 Engine trait 导入）；48/48。
+- R2：浏览器实测交互链——真实焦点路径（事件自 input 冒泡）→ 展开、文本
+  预览 <mark>Vector</mark> 高亮、↓ 换选刷新、← 收起、hint 随态切换（→ 预览
+  / ← 收起）、面板跨 tab 保持展开。发现①：切 tab 瞬间陈旧数据可渲染
+  （text 分支不校验 data 归属，hit 已是 repo 仍显示上一文件正文）→ 修：
+  hit 变化立即清 preview + text/image/shots 分支加 hit.kind 守卫，结构上
+  封死错配渲染。发现②（测试层）：合成 ArrowRight 派发在 panel 节点不进
+  React 合成事件，需派发在 input 上冒泡——真实键盘无此问题，测试脚本修正。
+- R3：修复后复测 repo 预览（desc+chips 完整）、videos 镜头网格 8 格 +
+  时间标签、file 文本高亮复现；tsc+build 复跑 0 错。
+- 光标语义护栏实测：`→` 仅在光标处于末尾时展开，输入中不劫持。
+
+---
 # 验收记录 2026-08-27（解码限制设置项，拟 v0.1.18）
 
 DecodeOpts{threads, hwaccel}：设置 → 解码限制行（线程 1/2/4/自动 pills +

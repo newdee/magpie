@@ -601,6 +601,17 @@ fn image_doc_hash(path: &str, mtime: i64, size: i64) -> String {
     embed::doc_hash(&format!("{path}|{mtime}|{size}"))
 }
 
+/// Large JPEG preview (bounded by `max` px) of an image file, base64 — the
+/// index only keeps 96px thumbs, so the preview pane re-reads the disk.
+pub fn preview_b64_for(path: &Path, max: u32) -> Option<String> {
+    use base64::Engine;
+    let img = image::open(path).ok()?;
+    let big = img.thumbnail(max, max).to_rgb8();
+    let mut out = std::io::Cursor::new(Vec::new());
+    big.write_to(&mut out, image::ImageFormat::Jpeg).ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(out.into_inner()))
+}
+
 /// 96px JPEG thumbnail of an arbitrary image file, base64 — used to preview
 /// a query image in the UI. Not stored.
 pub fn thumb_b64_for(path: &Path) -> Option<String> {
