@@ -11,6 +11,13 @@ that snippet we copied an hour ago, the app three menus deep. **magpie** is a
 tiny desktop launcher that brings them all back — press a hotkey, type what
 you vaguely remember (or drop in an image), hit Enter.
 
+<p align="center">
+  <a href="https://github.com/newdee/magpie/releases/download/v0.1.14/magpie-demo.mp4">
+    <img src="docs/img/magpie-demo.gif" width="640" alt="magpie in 40 seconds: summon, launch apps, full-text search, image similarity, all sources"></a>
+  <br>
+  <sub>▶ <a href="https://github.com/newdee/magpie/releases/download/v0.1.14/magpie-demo.mp4">full-quality demo with sound</a> · 40s · 4 MB</sub>
+</p>
+
 <p align="center"><img src="docs/img/palette-local.png" width="760" alt="magpie searching local files, an app hit on top, snippets highlighted"></p>
 
 <table>

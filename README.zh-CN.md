@@ -10,6 +10,13 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 小巧的桌面启动器，把它们统统找回来——按下快捷键，输入模糊的印象（或者拖进一张
 图），回车。
 
+<p align="center">
+  <a href="https://github.com/newdee/magpie/releases/download/v0.1.14/magpie-demo.mp4">
+    <img src="docs/img/magpie-demo.gif" width="640" alt="40 秒看完 magpie：唤出、启动应用、全文检索、以图搜图、全部数据源"></a>
+  <br>
+  <sub>▶ <a href="https://github.com/newdee/magpie/releases/download/v0.1.14/magpie-demo.mp4">带声音的完整高清版</a> · 40s · 4 MB</sub>
+</p>
+
 <p align="center"><img src="docs/img/palette-local.png" width="760" alt="magpie 本地检索：应用置顶命中、全文高亮"></p>
 
 <table>
