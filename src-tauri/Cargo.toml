@@ -25,3 +25,7 @@ tokio = { workspace = true }
 base64 = "0.22"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+enigo = "0.2"
+
+[target."cfg(windows)".dependencies]
+winreg = "0.55"

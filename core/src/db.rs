@@ -302,6 +302,16 @@ fn migrate(conn: &Connection) -> Result<()> {
             model     TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_video_shots_file ON video_shots(file_id);
+
+        -- frecency: how often/recently the user picked a result. Keys are
+        -- stable identities (path/url/target/repo id), never row ids.
+        CREATE TABLE IF NOT EXISTS hit_stats (
+            kind      TEXT NOT NULL,
+            key       TEXT NOT NULL,
+            uses      INTEGER NOT NULL DEFAULT 0,
+            last_used INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (kind, key)
+        );
         "#,
     )
     .context("run migrations")?;

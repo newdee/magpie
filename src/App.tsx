@@ -777,6 +777,20 @@ export default function App() {
 
   const openHit = useCallback(async (hit: Hit | undefined) => {
     if (!hit) return;
+    // frecency: remember what actually gets opened (stable identity per kind)
+    const frecencyKey =
+      hit.kind === "app"
+        ? hit.target
+        : hit.kind === "file" || hit.kind === "video"
+          ? hit.path
+          : hit.kind === "bookmark" || hit.kind === "history"
+            ? hit.url
+            : hit.kind === "repo"
+              ? String(hit.id)
+              : null;
+    if (frecencyKey) {
+      invoke("record_hit_use", { kind: hit.kind, key: frecencyKey }).catch(() => {});
+    }
     try {
       if (hit.kind === "repo") {
         await invoke("open_repo", { url: hit.html_url });
@@ -787,7 +801,8 @@ export default function App() {
       } else if (hit.kind === "clip") {
         await invoke("copy_clip", { text: hit.content });
       } else if (hit.kind === "video") {
-        await invoke("open_file", { path: hit.path });
+        // default player with a seek interface starts at the matched shot
+        await invoke("play_video", { path: hit.path, tsMs: hit.start_ms });
       } else {
         await invoke("open_file", { path: hit.path });
       }
@@ -987,6 +1002,14 @@ export default function App() {
           e.preventDefault();
           if (e.ctrlKey || e.metaKey) {
             openWeb();
+          } else if (e.shiftKey && source === "clips" && max >= 0) {
+            // Shift+Enter pastes straight into the app the palette covered
+            const range = selAnchor != null && selHi > selLo ? results.slice(selLo, selHi + 1) : [results[selected]];
+            const text = range
+              .filter((r) => r.kind === "clip")
+              .map((r) => (r as ClipHit).content)
+              .join("\n");
+            if (text) void invoke("paste_clip", { text });
           } else if (source === "clips" && selAnchor != null && selHi > selLo) {
             // multi-select: copy every selected clip, list order, one per line
             const joined = results
@@ -2394,6 +2417,9 @@ export default function App() {
           </span>
           {source === "clips" && (
             <>
+              <span>
+                <kbd>⇧⏎</kbd> {t("paste")}
+              </span>
               <span>
                 <kbd>⇧↑↓</kbd> {t("select")}
               </span>

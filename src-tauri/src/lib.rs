@@ -98,7 +98,29 @@ async fn search_stars(
     };
     let conn = state.db.lock().await;
     let store = state.store.lock().unwrap();
-    search::search(&conn, &store, &query, qvec.as_deref(), sort, limit).map_err(err_str)
+    let mut hits =
+        search::search(&conn, &store, &query, qvec.as_deref(), sort, limit).map_err(err_str)?;
+    // frecency: repos the user actually opens edge ahead at similar relevance
+    if matches!(sort, search::RepoSort::Relevance) {
+        let f = magpie_core::frecency::factors(&conn, "repo", unix_now()).map_err(err_str)?;
+        magpie_core::frecency::boost(
+            &mut hits,
+            &f,
+            0.01,
+            |h| h.repo.id.to_string(),
+            |h| h.score,
+            |h, s| h.score = s,
+        );
+    }
+    Ok(hits)
+}
+
+/// The user opened a hit — feed the frecency stats (stable identity per
+/// kind: path / url / target / repo id).
+#[tauri::command]
+fn record_hit_use(state: State<'_, AppState>, kind: String, key: String) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    magpie_core::frecency::record_use(&conn, &kind, &key, unix_now()).map_err(err_str)
 }
 
 #[tauri::command]
@@ -252,7 +274,7 @@ async fn search_local(
             .map_err(err_str)?;
         return Ok(tag_hits(Vec::new(), vids, false));
     }
-    let files = search::search_files(
+    let mut files = search::search_files(
         &conn,
         &store,
         &query,
@@ -262,6 +284,17 @@ async fn search_local(
         limit,
     )
     .map_err(err_str)?;
+    if !query.trim().is_empty() {
+        let f = magpie_core::frecency::factors(&conn, "file", unix_now()).map_err(err_str)?;
+        magpie_core::frecency::boost(
+            &mut files,
+            &f,
+            0.01,
+            |h| h.path.clone(),
+            |h| h.score,
+            |h, s| h.score = s,
+        );
+    }
     Ok(tag_hits(files, Vec::new(), false))
 }
 
@@ -610,7 +643,23 @@ fn search_apps(
     pinyin: Option<bool>,
 ) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
     let apps = state.apps.lock().unwrap();
-    Ok(magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(4), pinyin.unwrap_or(true)))
+    let mut hits =
+        magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(4), pinyin.unwrap_or(true));
+    // frecency: the app you launch daily wins ties within its match tier
+    // (cap 0.08 < the 0.1 tier gaps, so exact matches stay on top)
+    if let Ok(conn) = db::open(&state.db_path) {
+        if let Ok(f) = magpie_core::frecency::factors(&conn, "app", unix_now()) {
+            magpie_core::frecency::boost(
+                &mut hits,
+                &f,
+                0.08,
+                |h| h.target.clone(),
+                |h| h.score,
+                |h, s| h.score = s,
+            );
+        }
+    }
+    Ok(hits)
 }
 
 #[tauri::command]
@@ -908,6 +957,143 @@ fn copy_clip(text: String) -> Result<(), String> {
     clips::set_clipboard_text(&text).map_err(err_str)
 }
 
+/// Copy a clip AND paste it into the app the user came from: hide the
+/// palette, wait for focus to return to the previous window, then synthesize
+/// the platform paste chord.
+#[tauri::command]
+async fn paste_clip(app: AppHandle, text: String) -> Result<(), String> {
+    clips::set_clipboard_text(&text).map_err(err_str)?;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+    tokio::task::spawn_blocking(|| -> Result<()> {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+        let mut e = Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("input: {e}"))?;
+        #[cfg(target_os = "macos")]
+        let modifier = Key::Meta;
+        #[cfg(not(target_os = "macos"))]
+        let modifier = Key::Control;
+        e.key(modifier, Direction::Press).map_err(|e| anyhow::anyhow!("{e}"))?;
+        e.key(Key::Unicode('v'), Direction::Click).map_err(|e| anyhow::anyhow!("{e}"))?;
+        e.key(modifier, Direction::Release).map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(err_str)?
+    .map_err(err_str)
+}
+
+/// Seek arguments for known players, by executable stem. Pure — unit tested.
+fn player_seek_args(exe_stem: &str, path: &str, ts_ms: i64) -> Option<Vec<String>> {
+    let secs = ts_ms as f64 / 1000.0;
+    let (h, rem) = (ts_ms / 3_600_000, ts_ms % 3_600_000);
+    let (m, s) = (rem / 60_000, (rem % 60_000) / 1000);
+    match exe_stem.to_lowercase().as_str() {
+        "vlc" => Some(vec![format!("--start-time={secs:.1}"), path.into()]),
+        "mpv" | "iina" => Some(vec![format!("--start={secs:.1}"), path.into()]),
+        st if st.starts_with("potplayer") => {
+            Some(vec![path.into(), format!("/seek={h}:{m:02}:{s:02}")])
+        }
+        st if st.starts_with("mpc-hc") || st.starts_with("mpc-be") => {
+            Some(vec![path.into(), "/start".into(), ts_ms.to_string()])
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::player_seek_args;
+
+    #[test]
+    fn seek_args_per_player() {
+        let p = "C:\\v\\a.mp4";
+        assert_eq!(
+            player_seek_args("vlc", p, 204_500).unwrap(),
+            vec!["--start-time=204.5".to_string(), p.to_string()]
+        );
+        assert_eq!(
+            player_seek_args("mpv", p, 5_000).unwrap()[0],
+            "--start=5.0"
+        );
+        assert_eq!(
+            player_seek_args("PotPlayerMini64", p, 3_725_000).unwrap()[1],
+            "/seek=1:02:05"
+        );
+        assert_eq!(
+            player_seek_args("mpc-hc64", p, 1500).unwrap()[2],
+            "1500"
+        );
+        assert!(player_seek_args("wmplayer", p, 0).is_none(), "no seek interface");
+    }
+}
+
+/// Play a video at a timestamp with the SYSTEM DEFAULT player when it has a
+/// seek interface (VLC / mpv / PotPlayer / MPC — resolved from the user's own
+/// file association, never overriding their choice); otherwise a plain open.
+#[tauri::command]
+fn play_video(path: String, ts_ms: i64) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let assoc = (|| -> Option<(String, Vec<String>)> {
+            use winreg::enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER};
+            use winreg::RegKey;
+            let ext = std::path::Path::new(&path).extension()?.to_str()?.to_lowercase();
+            let prog_id: String = RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey(format!(
+                    "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.{ext}\\UserChoice"
+                ))
+                .ok()?
+                .get_value("ProgId")
+                .ok()?;
+            let cmd: String = RegKey::predef(HKEY_CLASSES_ROOT)
+                .open_subkey(format!("{prog_id}\\shell\\open\\command"))
+                .ok()?
+                .get_value("")
+                .ok()?;
+            // first token: quoted or bare exe path
+            let exe = if let Some(rest) = cmd.strip_prefix('"') {
+                rest.split('"').next()?.to_string()
+            } else {
+                cmd.split_whitespace().next()?.to_string()
+            };
+            let stem = std::path::Path::new(&exe).file_stem()?.to_str()?.to_string();
+            let args = player_seek_args(&stem, &path, ts_ms)?;
+            Some((exe, args))
+        })();
+        if let Some((exe, args)) = assoc {
+            return std::process::Command::new(exe)
+                .args(args)
+                .spawn()
+                .map(|_| ())
+                .map_err(err_str);
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let desktop = std::process::Command::new("xdg-mime")
+            .args(["query", "default", "video/mp4"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
+            .unwrap_or_default();
+        for player in ["mpv", "vlc"] {
+            if desktop.contains(player) {
+                if let Some(args) = player_seek_args(player, &path, ts_ms) {
+                    if std::process::Command::new(player).args(&args).spawn().is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    // macOS and unknown players: plain open with the default app (no seek —
+    // stock players expose no public jump interface)
+    let _ = ts_ms;
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)
+}
+
 /// Poll the clipboard once a second while enabled; embed new clips inline
 /// when the model is free. Owns its DB connection.
 fn spawn_clip_watcher(app: AppHandle) {
@@ -1017,24 +1203,29 @@ async fn search_web(
     };
     let conn = state.db.lock().await;
     let store = state.store.lock().unwrap();
+    let fb = magpie_core::frecency::factors(&conn, "bookmark", unix_now()).unwrap_or_default();
+    let fh = magpie_core::frecency::factors(&conn, "history", unix_now()).unwrap_or_default();
     let mut out: Vec<(f32, serde_json::Value)> = Vec::new();
     if scope != "history" {
         for b in search::search_bookmarks(&conn, &store, &query, qvec.as_deref(), limit)
             .map_err(err_str)?
         {
-            // curated bookmarks get a small edge over raw history at a tie
+            // curated bookmarks get a small edge over raw history at a tie;
+            // frecency nudges the ones the user actually reopens
+            let bonus = 0.01 * fb.get(&b.url).copied().unwrap_or(0.0);
             let mut v = serde_json::to_value(&b).map_err(err_str)?;
             v["kind"] = json!("bookmark");
-            out.push((b.score + 0.05, v));
+            out.push((b.score + 0.05 + bonus, v));
         }
     }
     if scope != "bookmarks" {
         for h in search::search_history(&conn, &store, &query, qvec.as_deref(), limit)
             .map_err(err_str)?
         {
+            let bonus = 0.01 * fh.get(&h.url).copied().unwrap_or(0.0);
             let mut v = serde_json::to_value(&h).map_err(err_str)?;
             v["kind"] = json!("history");
-            out.push((h.score, v));
+            out.push((h.score + bonus, v));
         }
     }
     out.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -1466,12 +1657,31 @@ fn toggle_window(app: &AppHandle) {
 fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         // launcher position: horizontally centered, upper fifth (Spotlight
-        // convention). Re-applied on every summon, so a dragged-away window
-        // always comes back to a predictable spot.
-        if let (Ok(Some(monitor)), Ok(size)) = (w.current_monitor(), w.outer_size()) {
-            let m = monitor.size();
-            let x = ((m.width as i32 - size.width as i32) / 2).max(0);
-            let y = (m.height as f64 * 0.22) as i32;
+        // convention) — on the monitor the CURSOR is on, so multi-display
+        // users summon the palette where they're looking. Monitor offsets
+        // are global coordinates; the old math ignored them and always
+        // landed on the primary display.
+        let monitor = app
+            .cursor_position()
+            .ok()
+            .and_then(|cur| {
+                w.available_monitors().ok().and_then(|mons| {
+                    mons.into_iter().find(|m| {
+                        let p = m.position();
+                        let s = m.size();
+                        cur.x >= p.x as f64
+                            && cur.x < (p.x + s.width as i32) as f64
+                            && cur.y >= p.y as f64
+                            && cur.y < (p.y + s.height as i32) as f64
+                    })
+                })
+            })
+            .or_else(|| w.current_monitor().ok().flatten());
+        if let (Some(monitor), Ok(size)) = (monitor, w.outer_size()) {
+            let mp = monitor.position();
+            let ms = monitor.size();
+            let x = mp.x + ((ms.width as i32 - size.width as i32) / 2).max(0);
+            let y = mp.y + (ms.height as f64 * 0.22) as i32;
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }
         // above everything, on every summon: re-assert topmost (another app
@@ -1655,6 +1865,9 @@ pub fn run() {
             set_video_indexing,
             set_video_decode,
             get_preview,
+            record_hit_use,
+            paste_clip,
+            play_video,
             open_file
         ])
         .run(tauri::generate_context!())
