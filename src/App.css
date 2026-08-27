@@ -1074,3 +1074,24 @@ kbd {
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
+
+/* app alias rules editor (settings) */
+.alias-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  outline: none;
+}
+.alias-input:focus {
+  border-color: var(--border-strong);
+}
+.alias-input::placeholder {
+  color: var(--text-faint);
+}

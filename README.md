@@ -123,6 +123,13 @@ input methods to launch an app — toggleable in settings. Apps come from the
 Start Menu on Windows, `/Applications` on macOS, and `.desktop` entries on
 Linux.
 
+Apps also answer to **aliases**: a built-in bilingual table bridges Chinese
+and English product names (`lark` finds 飞书, `weixin` finds an app installed
+as *WeChat* — whichever direction your system has), Linux picks up `.desktop`
+`Keywords=`/`GenericName=` for free, and you can add your own rules in
+Settings (`proxy = clash`, one per line) — aliases match like second names,
+pinyin included.
+
 ### Web (bookmarks + history)
 
 The Web tab searches **browser bookmarks and history together**; `Shift+Tab`
@@ -177,7 +184,7 @@ and the tab that opens on launch are both configurable.
 
 GitHub token (with connection badge) · indexed folders (add / remove /
 rebuild) · appearance (auto / light / dark) · **UI language (auto / English /
-中文)** · pinyin app matching · summon shortcut (recordable) ·
+中文)** · pinyin app matching · app aliases · summon shortcut (recordable) ·
 model download source (huggingface.co or **hf-mirror.com** for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · tab order and default tab · clipboard history controls ·
 model download status · one-click in-place updates (signed, verified) ·

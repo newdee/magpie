@@ -38,6 +38,7 @@ const status = {
   clipboard_enabled: true,
   clip_retention_days: 30,
   clip_max_entries: 2000,
+  app_aliases: "proxy = clash",
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",
@@ -82,12 +83,108 @@ const webHits = [
   { kind: "history", id: 13, url: "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX", title: "onnx-community/siglip2-base-patch16-224-ONNX · Hugging Face", browser: "edge", visit_count: 9, last_visit: now - 3 * day, score: 0.07 },
 ];
 
+// --- image-search fixtures: canvas-drawn abstract scenes (fictional data;
+// keeps the demo free of binary assets). Used by the promo capture too. ---
+function scenePng(draw: (c: CanvasRenderingContext2D, w: number, h: number) => void): string {
+  const cv = document.createElement("canvas");
+  cv.width = 640;
+  cv.height = 400;
+  const c = cv.getContext("2d")!;
+  draw(c, 640, 400);
+  return cv.toDataURL("image/jpeg", 0.92).split(",")[1];
+}
+
+const sunsetScene = (hue: number) => (c: CanvasRenderingContext2D, w: number, h: number) => {
+  const sky = c.createLinearGradient(0, 0, 0, h * 0.72);
+  sky.addColorStop(0, `hsl(${hue + 18} 62% 30%)`);
+  sky.addColorStop(0.55, `hsl(${hue} 78% 52%)`);
+  sky.addColorStop(1, `hsl(${hue - 14} 88% 64%)`);
+  c.fillStyle = sky;
+  c.fillRect(0, 0, w, h * 0.72);
+  c.fillStyle = `hsl(${hue - 6} 92% 78%)`;
+  c.beginPath();
+  c.arc(w * 0.62, h * 0.56, 46, 0, Math.PI * 2);
+  c.fill();
+  const sea = c.createLinearGradient(0, h * 0.72, 0, h);
+  sea.addColorStop(0, `hsl(${hue - 30} 45% 34%)`);
+  sea.addColorStop(1, `hsl(${hue - 40} 40% 18%)`);
+  c.fillStyle = sea;
+  c.fillRect(0, h * 0.72, w, h * 0.28);
+  c.fillStyle = "rgba(255,255,255,0.25)";
+  for (let i = 0; i < 9; i++) c.fillRect(w * 0.5 + (i % 3) * 28 - 20, h * 0.74 + i * 9, 60 - i * 4, 2);
+};
+
+const mountainScene = (c: CanvasRenderingContext2D, w: number, h: number) => {
+  const sky = c.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, "hsl(215 45% 22%)");
+  sky.addColorStop(1, "hsl(28 70% 60%)");
+  c.fillStyle = sky;
+  c.fillRect(0, 0, w, h);
+  c.fillStyle = "hsl(230 25% 16%)";
+  c.beginPath();
+  c.moveTo(0, h);
+  c.lineTo(w * 0.22, h * 0.34);
+  c.lineTo(w * 0.46, h);
+  c.fill();
+  c.fillStyle = "hsl(228 22% 22%)";
+  c.beginPath();
+  c.moveTo(w * 0.3, h);
+  c.lineTo(w * 0.62, h * 0.22);
+  c.lineTo(w * 0.95, h);
+  c.fill();
+  c.fillStyle = "rgba(255,255,255,0.85)";
+  c.beginPath();
+  c.moveTo(w * 0.56, h * 0.34);
+  c.lineTo(w * 0.62, h * 0.22);
+  c.lineTo(w * 0.68, h * 0.34);
+  c.lineTo(w * 0.62, h * 0.4);
+  c.fill();
+};
+
+const cityScene = (c: CanvasRenderingContext2D, w: number, h: number) => {
+  c.fillStyle = "hsl(250 30% 12%)";
+  c.fillRect(0, 0, w, h);
+  for (let i = 0; i < 14; i++) {
+    const bw = 34 + ((i * 17) % 30);
+    const bh = h * (0.3 + ((i * 29) % 50) / 100);
+    c.fillStyle = `hsl(${248 - (i % 4) * 6} 25% ${15 + (i % 3) * 4}%)`;
+    c.fillRect(i * 46, h - bh, bw, bh);
+    c.fillStyle = "hsl(45 90% 62%)";
+    for (let win = 0; win < 8; win++) {
+      if ((i * 13 + win * 7) % 3 === 0)
+        c.fillRect(i * 46 + 6 + (win % 2) * 14, h - bh + 10 + Math.floor(win / 2) * 18, 7, 9);
+    }
+  }
+};
+
+const queryImageB64 = scenePng(sunsetScene(28));
+const imageHits = [
+  { id: 101, path: "C:\\Users\\dfine\\Pictures\\screenshots\\sunset-cliff.jpg", name: "sunset-cliff.jpg", ext: "jpg", size: 482133, mtime: now - 12 * day, score: 0.94, thumb: scenePng(sunsetScene(24)), snippet: null },
+  { id: 102, path: "C:\\Users\\dfine\\Pictures\\screenshots\\harbor-dusk.jpg", name: "harbor-dusk.jpg", ext: "jpg", size: 391002, mtime: now - 40 * day, score: 0.87, thumb: scenePng(sunsetScene(0)), snippet: null },
+  { id: 103, path: "C:\\Users\\dfine\\Pictures\\screenshots\\alps-morning.jpg", name: "alps-morning.jpg", ext: "jpg", size: 512908, mtime: now - 90 * day, score: 0.79, thumb: scenePng(mountainScene), snippet: null },
+  { id: 104, path: "C:\\Users\\dfine\\Pictures\\screenshots\\night-skyline.jpg", name: "night-skyline.jpg", ext: "jpg", size: 355670, mtime: now - 150 * day, score: 0.71, thumb: scenePng(cityScene), snippet: null },
+];
+
+// promo capture hook: simulate pasting an image so the palette enters the
+// image-similarity state without a native clipboard
+(window as unknown as { __demoPasteImage?: () => Promise<void> }).__demoPasteImage = async () => {
+  const cv = document.createElement("canvas");
+  cv.width = 640;
+  cv.height = 400;
+  sunsetScene(28)(cv.getContext("2d")!, 640, 400);
+  const blob: Blob = await new Promise((r) => cv.toBlob((b) => r(b!), "image/jpeg", 0.92));
+  const file = new File([blob], "sunset.jpg", { type: "image/jpeg" });
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt }));
+};
+
 const clipHits = [
   { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, score: 0 },
   { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, score: 0 },
   { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, score: 0 },
   { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, score: 0 },
-  { id: 5, content: "kian@anureka-demo.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, score: 0 },
+  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, score: 0 },
 ];
 
 mockIPC((cmd, args) => {
@@ -102,10 +199,22 @@ mockIPC((cmd, args) => {
       return folders;
     case "search_stars":
       return q ? repoHits : [];
-    case "search_apps":
-      return q.toLowerCase().startsWith("v") ? appHits : [];
-    case "search_local":
-      return q ? fileHits : [];
+    case "search_apps": {
+      // prefix-narrowing like the real matcher: "v"/"vs"/"vsc" hit VS Code,
+      // longer unrelated queries drop the app row
+      const ql = q.toLowerCase();
+      return ql && ("visual studio code".startsWith(ql) || "vscode".startsWith(ql))
+        ? appHits
+        : [];
+    }
+    case "search_local": {
+      const ql = q.toLowerCase();
+      return ql && ("vector search".startsWith(ql) || ql.includes("vector")) ? fileHits : [];
+    }
+    case "search_by_image":
+      return imageHits;
+    case "preview_thumb":
+      return queryImageB64;
     case "search_web":
       return q ? webHits : [];
     case "search_clips":

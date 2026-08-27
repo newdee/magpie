@@ -92,6 +92,7 @@ interface Status {
   clipboard_enabled: boolean;
   clip_retention_days: number;
   clip_max_entries: number;
+  app_aliases: string;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -369,6 +370,11 @@ export default function App() {
     setPinyinOn(on);
   }, []);
 
+  // app alias rules ("proxy = clash", one per line); saved to the backend,
+  // which re-attaches aliases to the in-memory app list
+  const [aliasDraft, setAliasDraft] = useState<string | null>(null);
+  const [aliasMsg, setAliasMsg] = useState<string | null>(null);
+
   // sync the tray language once at startup ("auto" resolves per OS locale)
   useEffect(() => {
     invoke("set_ui_lang", { lang: resolveLang(loadLangPref()) }).catch(() => {});
@@ -417,6 +423,20 @@ export default function App() {
       setLastError(`folder list failed: ${String(e)}`);
     }
   }, []);
+
+  const saveAliases = useCallback(
+    async (text: string) => {
+      try {
+        await invoke("set_app_aliases", { text });
+        setAliasMsg("saved");
+        setAliasDraft(null);
+        await refreshStatus();
+      } catch (e) {
+        setAliasMsg(String(e));
+      }
+    },
+    [refreshStatus],
+  );
 
   // opening settings always shows fresh state
   useEffect(() => {
@@ -1594,6 +1614,43 @@ export default function App() {
                     {t(o.label)}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-label">
+                <span className="set-name">{t("App aliases")}</span>
+                <span className="set-desc">
+                  {t(
+                    "One rule per line: alias = app name. The alias matches like a second name (pinyin included).",
+                  )}
+                </span>
+              </div>
+              <textarea
+                className="alias-input"
+                value={aliasDraft ?? status?.app_aliases ?? ""}
+                onChange={(e) => {
+                  setAliasDraft(e.target.value);
+                  setAliasMsg(null);
+                }}
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder={"proxy = clash\nbrowser = chrome"}
+                spellCheck={false}
+                rows={3}
+              />
+              <div className="set-links">
+                <button
+                  className="link-btn"
+                  onClick={() => saveAliases(aliasDraft ?? status?.app_aliases ?? "")}
+                  disabled={aliasDraft == null}
+                >
+                  {t("Save aliases")}
+                </button>
+                {aliasMsg && (
+                  <span className={aliasMsg === "saved" ? "set-empty" : "error-line"}>
+                    {t(aliasMsg)}
+                  </span>
+                )}
               </div>
             </div>
 

@@ -115,6 +115,10 @@ const ZH: Record<string, string> = {
   "Pinyin app matching": "拼音匹配应用",
   "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).":
     "拉丁输入按全拼或首字母匹配中文应用名（wx → 微信）。",
+  "App aliases": "应用别名",
+  "One rule per line: alias = app name. The alias matches like a second name (pinyin included).":
+    "一行一条：别名 = 应用名。别名当作第二名字参与匹配（含拼音）。",
+  "Save aliases": "保存别名",
   "Summon shortcut": "唤出快捷键",
   Currently: "当前",
   "Click and press a new combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.":

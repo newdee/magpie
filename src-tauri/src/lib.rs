@@ -137,6 +137,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "clipboard_enabled": state.clip_watch.load(Ordering::SeqCst),
         "clip_retention_days": clip_retention_days,
         "clip_max_entries": clip_max_entries,
+        "app_aliases": db::meta_get(&conn, "app_aliases").map_err(err_str)?.unwrap_or_default(),
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
         "hf_endpoint": hf_endpoint,
@@ -452,11 +453,30 @@ fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
 
 /// Re-enumerate installed apps (e.g. after installing something new).
 fn spawn_app_scan(app: AppHandle) {
-    let apps = app.state::<AppState>().apps.clone();
+    let state = app.state::<AppState>();
+    let apps = state.apps.clone();
+    let db_path = state.db_path.clone();
     std::thread::spawn(move || {
-        let list = magpie_core::apps::list_apps();
+        let mut list = magpie_core::apps::list_apps();
+        // user alias rules ("proxy = clash") ride on top of the built-ins
+        if let Ok(conn) = db::open(&db_path) {
+            if let Ok(Some(text)) = db::meta_get(&conn, "app_aliases") {
+                let rules = magpie_core::apps::parse_alias_rules(&text);
+                magpie_core::apps::apply_user_aliases(&mut list, &rules);
+            }
+        }
         *apps.lock().unwrap() = list;
     });
+}
+
+/// Persist the "alias = app name" rule text and re-attach aliases in place.
+#[tauri::command]
+fn set_app_aliases(app: AppHandle, state: State<'_, AppState>, text: String) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "app_aliases", &text).map_err(err_str)?;
+    drop(conn);
+    spawn_app_scan(app);
+    Ok(())
 }
 
 // ---------- clipboard history ----------
@@ -1281,6 +1301,7 @@ pub fn run() {
             clear_clips_now,
             copy_clip,
             set_ui_lang,
+            set_app_aliases,
             open_file
         ])
         .run(tauri::generate_context!())
