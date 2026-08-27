@@ -49,6 +49,9 @@ struct AppState {
     siglip_reinit: Arc<AtomicBool>,
     /// Installed-app list, enumerated once at startup, refreshable on demand.
     apps: Arc<StdMutex<Vec<magpie_core::apps::AppEntry>>>,
+    /// Version string of a pending update ("" = none) — drives the tray
+    /// badge and the extra tray menu item.
+    update_badge: Arc<StdMutex<String>>,
     /// Desired state of the clipboard watcher; the thread exits when false.
     clip_watch: Arc<AtomicBool>,
     /// Liveness guard so toggling can't stack watcher threads.
@@ -177,11 +180,7 @@ async fn import_settings(
     spawn_app_scan(app.clone());
     if let Ok(conn) = db::open(&state.db_path) {
         if let Ok(Some(lang)) = db::meta_get(&conn, "ui_lang") {
-            if let Ok(menu) = build_tray_menu(&app, &lang) {
-                if let Some(tray) = app.tray_by_id("main") {
-                    let _ = tray.set_menu(Some(menu));
-                }
-            }
+            let _ = refresh_tray_menu(&app, &lang);
         }
     }
     Ok(doc.get("frontend").cloned().unwrap_or(json!({})))
@@ -1766,13 +1765,77 @@ fn tray_labels(lang: &str) -> [&'static str; 4] {
     }
 }
 
-fn build_tray_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
+/// `update_version`: non-empty adds a "new version available" item on top.
+fn build_tray_menu(
+    app: &AppHandle,
+    lang: &str,
+    update_version: &str,
+) -> tauri::Result<Menu<tauri::Wry>> {
     let l = tray_labels(lang);
     let show = MenuItem::with_id(app, "show", l[0], true, None::<&str>)?;
     let sync_item = MenuItem::with_id(app, "sync", l[1], true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", l[2], true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", l[3], true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &sync_item, &settings_item, &quit])
+    if update_version.is_empty() {
+        Menu::with_items(app, &[&show, &sync_item, &settings_item, &quit])
+    } else {
+        let label = if lang == "zh" {
+            format!("有新版本 v{update_version}…")
+        } else {
+            format!("Update available: v{update_version}…")
+        };
+        let upd = MenuItem::with_id(app, "update", &label, true, None::<&str>)?;
+        Menu::with_items(app, &[&upd, &show, &sync_item, &settings_item, &quit])
+    }
+}
+
+/// Retitle the tray menu with the stored language + current badge state.
+fn refresh_tray_menu(app: &AppHandle, lang: &str) -> tauri::Result<()> {
+    let version = app
+        .state::<AppState>()
+        .update_badge
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+    let menu = build_tray_menu(app, lang, &version)?;
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(menu))?;
+    }
+    Ok(())
+}
+
+/// Frontend found a pending update (or cleared it): remember the version,
+/// re-badge the tray icon, and add/remove the update menu item.
+#[tauri::command]
+fn set_update_badge(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version: Option<String>,
+) -> Result<(), String> {
+    let version = version.unwrap_or_default();
+    if let Ok(mut v) = state.update_badge.lock() {
+        if *v == version {
+            return Ok(()); // periodic re-checks re-report the same version
+        }
+        *v = version.clone();
+    }
+    let lang = db::open(&state.db_path)
+        .ok()
+        .and_then(|c| db::meta_get(&c, "ui_lang").ok().flatten())
+        .unwrap_or_else(|| "en".into());
+    refresh_tray_menu(&app, &lang).map_err(err_str)?;
+    if let (Some(tray), Some(base)) = (app.tray_by_id("main"), app.default_window_icon()) {
+        let icon = if version.is_empty() {
+            base.clone()
+        } else {
+            let (w, h) = (base.width(), base.height());
+            let mut rgba = base.rgba().to_vec();
+            magpie_core::badge::overlay_badge(&mut rgba, w, h);
+            tauri::image::Image::new_owned(rgba, w, h)
+        };
+        tray.set_icon(Some(icon)).map_err(err_str)?;
+    }
+    Ok(())
 }
 
 /// Persist the resolved UI language ("en"/"zh") and retitle the tray menu.
@@ -1782,10 +1845,7 @@ fn set_ui_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Resu
     let lang = if lang == "zh" { "zh" } else { "en" };
     let conn = db::open(&state.db_path).map_err(err_str)?;
     db::meta_set(&conn, "ui_lang", lang).map_err(err_str)?;
-    let menu = build_tray_menu(&app, lang).map_err(err_str)?;
-    if let Some(tray) = app.tray_by_id("main") {
-        tray.set_menu(Some(menu)).map_err(err_str)?;
-    }
+    refresh_tray_menu(&app, lang).map_err(err_str)?;
     Ok(())
 }
 
@@ -1899,6 +1959,7 @@ pub fn run() {
                 siglip_initing: Arc::new(AtomicBool::new(false)),
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
                 apps: Arc::new(StdMutex::new(Vec::new())),
+                update_badge: Arc::new(StdMutex::new(String::new())),
                 clip_watch: Arc::new(AtomicBool::new(clipboard_enabled)),
                 clip_thread_alive: Arc::new(AtomicBool::new(false)),
             });
@@ -1916,14 +1977,14 @@ pub fn run() {
                     .and_then(|c| db::meta_get(&c, "ui_lang").ok().flatten())
                     .unwrap_or_else(|| "en".into())
             };
-            let menu = build_tray_menu(app.handle(), &ui_lang)?;
+            let menu = build_tray_menu(app.handle(), &ui_lang, "")?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_window(app),
                     "sync" => spawn_sync(app.clone()),
-                    "settings" => {
+                    "settings" | "update" => {
                         show_window(app);
                         let _ = app.emit("open-settings", ());
                     }
@@ -2016,6 +2077,7 @@ pub fn run() {
             play_video,
             export_settings,
             import_settings,
+            set_update_badge,
             open_file
         ])
         .run(tauri::generate_context!())

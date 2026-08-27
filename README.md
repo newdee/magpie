@@ -93,7 +93,9 @@ you vaguely remember (or drop in an image), hit Enter.
 - **Settings travel with you**: one-click export/import (everything except
   the GitHub token).
 - **Stays current on its own**: signed, verified in-place auto-updates from
-  this version on — no reinstalling.
+  this version on — no reinstalling. Checked at launch and every 24 h while
+  resident; a pending release shows a red dot on the tray icon and next to
+  the settings hint, plus a tray menu entry — installing stays your call.
 - **A preview pane, one keypress away**: `→` shows the selected result in
   place — file text with your terms highlighted, full-size images, a video's
   shot strip, README head for repos, complete clips — so you confirm before

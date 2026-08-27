@@ -1057,6 +1057,17 @@ input.query:active {
   white-space: nowrap;
 }
 
+/* pending-update dot next to the settings hint (mirrors the tray badge) */
+.upd-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: #f43f36;
+  vertical-align: 1px;
+}
+
 kbd {
   font-family: var(--font-mono);
   font-size: 10.5px;

@@ -379,6 +379,8 @@ export default function App() {
   const [updPct, setUpdPct] = useState(0);
   const [updError, setUpdError] = useState<string | null>(null);
   const updRef = useRef<Update | null>(null);
+  const updPhaseRef = useRef(updPhase);
+  updPhaseRef.current = updPhase;
   const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [showSettings, setShowSettings] = useState(!!import.meta.env.VITE_DEMO);
   const [tokenInput, setTokenInput] = useState("");
@@ -1223,6 +1225,8 @@ export default function App() {
   );
 
   const doCheckUpdate = useCallback(async (silent: boolean) => {
+    // periodic re-checks must not yank the UI out of an install in progress
+    if (silent && updPhaseRef.current === "downloading") return;
     setUpdError(null);
     if (!silent) setUpdPhase("checking");
     try {
@@ -1267,11 +1271,24 @@ export default function App() {
     }
   }, []);
 
-  // quiet startup check, delayed so it never competes with model init
+  // quiet startup check, delayed so it never competes with model init —
+  // then every 24h while resident (the app is a tray dweller; a launch-only
+  // check would miss releases for however long the machine stays up)
   useEffect(() => {
     const t = setTimeout(() => doCheckUpdate(true), 15_000);
-    return () => clearTimeout(t);
+    const iv = setInterval(() => doCheckUpdate(true), 24 * 60 * 60 * 1000);
+    return () => {
+      clearTimeout(t);
+      clearInterval(iv);
+    };
   }, [doCheckUpdate]);
+
+  // mirror the pending update onto the tray: red-dot icon + menu entry
+  useEffect(() => {
+    if (updPhase === "available") {
+      invoke("set_update_badge", { version: updVersion }).catch(() => {});
+    }
+  }, [updPhase, updVersion]);
 
   const rebuildStars = useCallback(async () => {
     setLastError(null);
@@ -2540,6 +2557,9 @@ export default function App() {
           )}
           <span>
             <kbd>alt,</kbd> {t("settings")}
+            {(updPhase === "available" || updPhase === "downloading") && (
+              <i className="upd-dot" title={tf("Version {v} is available.", { v: updVersion ?? "" })} />
+            )}
           </span>
           <span>
             <kbd>ctrl⏎</kbd> {t("web")}

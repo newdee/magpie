@@ -278,6 +278,11 @@ mockIPC((cmd, args) => {
       return clipHits; // recent list on empty query, matches on typed ones
     case "plugin:event|listen":
       return 1;
+    case "plugin:updater|check":
+      // ?update=1 simulates a pending release (exercises the footer red dot)
+      return new URLSearchParams(location.search).has("update")
+        ? { rid: 1, available: true, currentVersion: status.version, version: "9.9.9" }
+        : null;
     default:
       return null; // never throw: unknown commands are inert in the demo
   }
