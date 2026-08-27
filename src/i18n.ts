@@ -101,6 +101,10 @@ const ZH: Record<string, string> = {
   "Remove from index": "从索引中移除",
   "Max file size": "文件大小上限",
   "Video shot search": "视频镜头搜索",
+  "Search videos by name, or describe a scene": "按文件名搜视频，或描述一个画面",
+  "system install": "系统已装",
+  downloaded: "已下载",
+  videos: "视频",
   "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).":
     "文件夹里的视频按镜头切分；每个镜头可用图片或文字描述搜索。需要 ffmpeg（缺失时自动下载）。",
   Video: "视频",

@@ -43,16 +43,124 @@ pub struct VideoHit {
 
 // ---------- ffmpeg resolution ----------
 
-/// Locate a usable ffmpeg: system PATH first, else sidecar auto-download.
-pub fn ensure_ffmpeg() -> Result<std::path::PathBuf> {
-    if let Ok(out) = std::process::Command::new("ffmpeg").arg("-version").output() {
-        if out.status.success() {
-            return Ok(std::path::PathBuf::from("ffmpeg"));
+/// Resolved ffmpeg binary, cached for the process lifetime.
+static FFMPEG: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+fn ffmpeg_bin() -> std::path::PathBuf {
+    FFMPEG.get().cloned().unwrap_or_else(|| std::path::PathBuf::from("ffmpeg"))
+}
+
+/// The static-build asset name for this platform in magpie's own release
+/// (uploaded once as the `ffmpeg-1` release; macOS x64 runs on Apple Silicon
+/// through Rosetta). Users who could download magpie itself can reach these.
+fn managed_asset() -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    return Some("ffmpeg-windows-x64.zip");
+    #[cfg(target_os = "macos")]
+    return Some("ffmpeg-macos-x64.zip");
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return Some("ffmpeg-linux-x64.zip");
+    #[allow(unreachable_code)]
+    None
+}
+
+const MANAGED_BASE: &str = "https://github.com/newdee/magpie/releases/download/ffmpeg-1";
+
+fn system_ffmpeg_works() -> bool {
+    // test/debug hatch: force the managed-download path even when a system
+    // ffmpeg exists (lets CI and dbtool exercise the release-asset chain)
+    if std::env::var("MAGPIE_FORCE_MANAGED_FFMPEG").is_ok() {
+        return false;
+    }
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Locate a usable ffmpeg and report how it was found ("system"/"bundled").
+/// Order: system PATH → previously unpacked managed build in `cache_dir` →
+/// download magpie's own release asset (resumable) → ffmpeg-sidecar's
+/// upstream static builds as a last resort.
+pub fn ensure_ffmpeg_with(
+    cache_dir: &std::path::Path,
+    progress: &mut dyn FnMut(String),
+) -> Result<(std::path::PathBuf, &'static str)> {
+    if let Some(p) = FFMPEG.get() {
+        let label = if p == std::path::Path::new("ffmpeg") { "system" } else { "bundled" };
+        return Ok((p.clone(), label));
+    }
+    if system_ffmpeg_works() {
+        let p = std::path::PathBuf::from("ffmpeg");
+        let _ = FFMPEG.set(p.clone());
+        return Ok((p, "system"));
+    }
+    let dir = cache_dir.join("ffmpeg-bin");
+    let exe = dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    if exe.is_file() {
+        let _ = FFMPEG.set(exe.clone());
+        return Ok((exe, "bundled"));
+    }
+    if let Some(asset) = managed_asset() {
+        let url = format!("{MANAGED_BASE}/{asset}");
+        let zip_path = dir.join(asset);
+        progress("downloading ffmpeg…".into());
+        let fetched = crate::download::fetch_file(&url, &zip_path, &mut |done, total| {
+            if let Some(pct) = total.and_then(|t| (done * 100).checked_div(t)) {
+                progress(format!("downloading ffmpeg… {pct}%"));
+            }
+        });
+        match fetched.and_then(|_| unzip_single(&zip_path, &exe)) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&zip_path);
+                let _ = FFMPEG.set(exe.clone());
+                return Ok((exe, "bundled"));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&zip_path);
+                eprintln!("managed ffmpeg download failed: {e}");
+            }
         }
     }
+    progress("downloading ffmpeg (upstream)…".into());
     ffmpeg_sidecar::download::auto_download()
-        .map_err(|e| anyhow!("ffmpeg unavailable (install it or allow the download): {e}"))?;
-    Ok(ffmpeg_sidecar::paths::ffmpeg_path())
+        .map_err(|e| anyhow!("ffmpeg unavailable (install it, e.g. `winget install ffmpeg` / `brew install ffmpeg`, or allow the download): {e}"))?;
+    let p = ffmpeg_sidecar::paths::ffmpeg_path();
+    let _ = FFMPEG.set(p.clone());
+    Ok((p, "bundled"))
+}
+
+/// Back-compat shim used by the index pass and dbtool.
+pub fn ensure_ffmpeg() -> Result<std::path::PathBuf> {
+    let dir = std::env::temp_dir().join("magpie-ffmpeg");
+    Ok(ensure_ffmpeg_with(&dir, &mut |_| {})?.0)
+}
+
+/// Extract the (single) ffmpeg binary from a downloaded zip to `dest`.
+fn unzip_single(zip_path: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    let file = std::fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let want = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().rsplit(['/', '\\']).next().unwrap_or("").to_string();
+        if name == want {
+            if let Some(dir) = dest.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let mut out = std::fs::File::create(dest)?;
+            std::io::copy(&mut entry, &mut out)?;
+            drop(out);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+            }
+            return Ok(());
+        }
+    }
+    Err(anyhow!("no ffmpeg binary inside {}", zip_path.display()))
 }
 
 // ---------- shot detection ----------
@@ -148,7 +256,7 @@ pub fn detect_shots(path: &str) -> Result<(Vec<Shot>, i64)> {
 
     let mut ts: Vec<i64> = Vec::new();
     let mut hists: Vec<[f32; BINS]> = Vec::new();
-    let iter = FfmpegCommand::new()
+    let iter = FfmpegCommand::new_with_path(ffmpeg_bin())
         .input(path)
         .args(["-vf", &format!("fps={SAMPLE_FPS},scale=160:-2"), "-an", "-sn"])
         .rawvideo()
@@ -173,7 +281,7 @@ pub fn frame_at(path: &str, ts_ms: i64) -> Result<image::DynamicImage> {
     use ffmpeg_sidecar::event::FfmpegEvent;
 
     let seek = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
-    let iter = FfmpegCommand::new()
+    let iter = FfmpegCommand::new_with_path(ffmpeg_bin())
         .args(["-ss", &seek])
         .input(path)
         .args(["-frames:v", "1", "-vf", "scale=480:-2", "-an", "-sn"])
@@ -312,6 +420,69 @@ pub fn all_shot_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
         out.push((id, vec));
     }
     Ok(out)
+}
+
+/// Video files ranked by filename match: prefix beats substring, shorter
+/// names first. LIKE keeps mid-token matches working ("sms" → longsms.mp4).
+pub fn video_name_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<i64>> {
+    let q = query.trim();
+    if q.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let pat = format!(
+        "%{}%",
+        q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    );
+    let prefix = format!(
+        "{}%",
+        q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    );
+    let exts = VIDEO_EXTS.iter().map(|e| format!("'{e}'")).collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id FROM files
+         WHERE lower(ext) IN ({exts}) AND name LIKE ?1 ESCAPE '\\'
+         ORDER BY (CASE WHEN name LIKE ?2 ESCAPE '\\' THEN 0 ELSE 1 END), length(name)
+         LIMIT ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![pat, prefix, limit as i64], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Whole-file hit for a filename match (no specific shot): thumb borrows the
+/// video's first shot when it has been indexed; time range stays empty.
+pub fn file_level_hit(conn: &Connection, file_id: i64, score: f32) -> Result<Option<VideoHit>> {
+    let row = conn
+        .query_row(
+            "SELECT f.path, f.name, COALESCE(vi.duration_ms, 0),
+                    (SELECT thumb FROM video_shots vs WHERE vs.file_id = f.id
+                     ORDER BY vs.start_ms LIMIT 1)
+             FROM files f LEFT JOIN video_index vi ON vi.file_id = f.id
+             WHERE f.id = ?1",
+            params![file_id],
+            |r| {
+                Ok(VideoHit {
+                    id: file_id,
+                    shot_id: 0,
+                    path: r.get(0)?,
+                    name: r.get(1)?,
+                    start_ms: 0,
+                    end_ms: 0,
+                    ts_ms: 0,
+                    thumb: r.get(3)?,
+                    duration_ms: r.get(2)?,
+                    score,
+                })
+            },
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    Ok(row)
 }
 
 /// Shot-id → owning file-id map, for grouping search results per video.

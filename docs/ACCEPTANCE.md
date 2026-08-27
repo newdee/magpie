@@ -1,3 +1,36 @@
+# 验收记录 2026-08-27（videos 档位 + ffmpeg 自托管/预下载/状态行，拟 v0.1.16）
+
+四块：
+1. 本地 tab 第四档「videos」：video_name_search（LIKE 中缀 + 前缀优先排序，
+   files 表视频扩展名过滤）+ SigLIP 文本语义镜头搜索，rrf_fuse 按文件融合；
+   同一视频双路命中保留镜头表现（带时间范围/缩略图），纯名字命中显示为
+   文件级行（时长 + 首镜头缩略图借用）。images 档还原为纯图片。
+2. ffmpeg 自托管：magpie 仓库 ffmpeg-1 prerelease 挂三平台单文件 zip
+   （gyan.dev win 37MB / evermeet mac-x64 26MB Rosetta / johnvansickle
+   linux 29MB，GPL 构建来源注入 README 与 release notes）。解析链：系统
+   PATH → 本地缓存 → magpie Release 资产（download.rs 断点续传 + 进度%）
+   → sidecar 上游兜底 → 报错提示手动安装。MAGPIE_FORCE_MANAGED_FFMPEG
+   测试口。
+3. 启动预检查：开关开 + 文件夹里存在视频 → 立即解析/预下载（不等模型；
+   无视频用户零下载）。
+4. 设置行常驻 ffmpeg 状态（系统已装/已下载/下载中 N%/missing）。
+
+## 连续三轮干净（发现数 2，均已修）
+
+- R1：47/47（新 videos_scope 融合测试：名字中缀命中文件级表现、语义命中带
+   3000..6000ms 范围、双路命中去重取镜头、非视频文件不漏入）；真机 E2E
+   managed 链——强制跳过系统 ffmpeg 后从 release 资产下载（进度打点到
+   100%）→ unzip_single 解出 → `ffmpeg 9.0.1-essentials` -version 运行成功。
+- R2：clippy 两轮共发现 2 条（params 宏路径笔误编译期即挡；manual checked
+   division lint）→ 修复后 0 告警；tsc + vite build 0 错。
+- R3：浏览器 demo——四档 pill（全部/文本/图片/视频）、videos 档 placeholder、
+   两种结果形态实测（镜头行 3:24–3:42+缩略图+12:34 时长；文件级行仅时长
+   32:02）、设置行「· ffmpeg: 系统已装」、Ctrl+, 顺带复测；47/47 与
+   search 7/7 复跑一致。
+- 待 CI：mac/linux 编译；上游兜底路径未真机测（代码路径与 sidecar 文档
+   一致，失败落 video_note）。
+
+---
 # 验收记录 2026-08-27（应用别名层 + 视频镜头搜索，拟 v0.1.15）
 
 两块：

@@ -44,6 +44,7 @@ const status = {
   video_indexing_enabled: true,
   video_indexing: false,
   video_note: "",
+  ffmpeg_status: "system",
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",
@@ -214,6 +215,14 @@ mockIPC((cmd, args) => {
         : [];
     }
     case "search_local": {
+      if ((args as { scope?: string })?.scope === "videos") {
+        return q
+          ? [
+              imageHits[1], // the drone-coast shot hit
+              { kind: "video", id: 202, shot_id: 0, path: "C:\\Users\\dfine\\Documents\\projects\\clips\\team-standup-recording.mp4", name: "team-standup-recording.mp4", start_ms: 0, end_ms: 0, ts_ms: 0, thumb: null, duration_ms: 1_922_000, score: 0.02 },
+            ]
+          : [];
+      }
       const ql = q.toLowerCase();
       return ql && ("vector search".startsWith(ql) || ql.includes("vector"))
         ? fileHits.map((f) => ({ kind: "file", ...f }))

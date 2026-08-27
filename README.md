@@ -114,8 +114,12 @@ folders is split into **shots** (histogram-based scene-change detection — a
 pure-Rust pass over 2 fps frames), every shot's representative frames are
 SigLIP-embedded, and both image and text queries can land *inside* a video:
 the result row shows the matching shot's thumbnail and its exact time range
-(`3:24 – 3:42`). Decoding uses ffmpeg — a system install is picked up
-automatically, or a static build is downloaded once. Toggleable in Settings.
+(`3:24 – 3:42`). The Local tab's **videos** scope searches them by filename
+and by scene description in one list. Decoding uses ffmpeg — a system
+install is picked up automatically, or a static build is fetched once from
+magpie's own releases (reachable wherever you downloaded magpie from;
+[GPL builds](https://ffmpeg.org/download.html) by gyan.dev / evermeet.cx /
+johnvansickle.com — sources at ffmpeg.org). Toggleable in Settings.
 
 The index is incremental: startup, manual refresh, and a 30-minute timer pick
 up new, changed, and deleted files automatically.

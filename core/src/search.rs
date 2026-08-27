@@ -208,6 +208,9 @@ pub enum LocalScope {
     Text,
     /// Images only.
     Images,
+    /// Videos only (filename matches + semantic shot search — handled by
+    /// [`search_videos_scope`], not [`search_files`]).
+    Videos,
 }
 
 /// Hybrid search over local files: filename/content FTS + e5 text vectors +
@@ -259,6 +262,11 @@ pub fn search_files(
         LocalScope::All => {}
         LocalScope::Text => hits.retain(|h| !files::is_image_ext(h.ext.as_deref())),
         LocalScope::Images => hits.retain(|h| files::is_image_ext(h.ext.as_deref())),
+        // the videos scope never reaches search_files (see search_videos_scope);
+        // returning video-ext files here keeps the function total anyway
+        LocalScope::Videos => {
+            hits.retain(|h| crate::videos::is_video_ext(h.ext.as_deref()));
+        }
     }
     hits.truncate(limit);
     for h in &mut hits {
@@ -371,19 +379,17 @@ pub fn search_images(
     crate::files::files_by_ids(conn, &ids, &scores)
 }
 
-/// Video-shot search in the same SigLIP space (image or text query vector).
-/// Shots are grouped per video — a video answers with its best shot only.
-pub fn search_video_shots(
+/// Best shot per video for a SigLIP query vector: (file_id, shot_id, sim),
+/// ranked best-first.
+fn best_shot_per_video(
     conn: &Connection,
     store: &VectorStore,
     qvec: &[f32],
-    limit: usize,
-) -> Result<Vec<crate::videos::VideoHit>> {
+) -> Result<Vec<(i64, i64, f32)>> {
     if store.video_shots.is_empty() {
         return Ok(Vec::new());
     }
     let owners = crate::videos::shot_owners(conn)?;
-    // score every shot, then keep the best shot per owning video
     let scored = top_similar(&store.video_shots, qvec, store.video_shots.len());
     let mut best: std::collections::HashMap<i64, (i64, f32)> = std::collections::HashMap::new();
     for (shot_id, sim) in scored {
@@ -393,12 +399,66 @@ pub fn search_video_shots(
             *e = (shot_id, sim);
         }
     }
-    let mut winners: Vec<(i64, f32)> = best.into_values().collect();
-    winners.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    winners.truncate(limit);
-    let scores: std::collections::HashMap<i64, f32> = winners.iter().copied().collect();
-    let ids: Vec<i64> = winners.into_iter().map(|(id, _)| id).collect();
+    let mut winners: Vec<(i64, i64, f32)> =
+        best.into_iter().map(|(fid, (sid, sim))| (fid, sid, sim)).collect();
+    winners.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.1.cmp(&b.1)));
+    Ok(winners)
+}
+
+/// Video-shot search in the same SigLIP space (image or text query vector).
+/// Shots are grouped per video — a video answers with its best shot only.
+pub fn search_video_shots(
+    conn: &Connection,
+    store: &VectorStore,
+    qvec: &[f32],
+    limit: usize,
+) -> Result<Vec<crate::videos::VideoHit>> {
+    let winners = best_shot_per_video(conn, store, qvec)?;
+    let scores: std::collections::HashMap<i64, f32> =
+        winners.iter().map(|(_, sid, sim)| (*sid, *sim)).collect();
+    let ids: Vec<i64> = winners.into_iter().take(limit).map(|(_, sid, _)| sid).collect();
     crate::videos::hits_by_shot_ids(conn, &ids, &scores)
+}
+
+/// The dedicated "videos" scope: filename matches and semantic shot matches,
+/// rank-fused (RRF — the two scores live on different scales). A video that
+/// matches both ways answers once, preferring its shot representation (it
+/// carries the time range and scene thumbnail).
+pub fn search_videos_scope(
+    conn: &Connection,
+    store: &VectorStore,
+    query: &str,
+    image_qvec: Option<&[f32]>,
+    limit: usize,
+) -> Result<Vec<crate::videos::VideoHit>> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let name_ids = crate::videos::video_name_search(conn, query, CANDIDATES_PER_LIST)?;
+    let shot_winners = match image_qvec {
+        Some(qv) => best_shot_per_video(conn, store, qv)?,
+        None => Vec::new(),
+    };
+    let sem_ids: Vec<i64> = shot_winners.iter().take(CANDIDATES_PER_LIST).map(|(f, _, _)| *f).collect();
+    let shot_of: std::collections::HashMap<i64, (i64, f32)> =
+        shot_winners.into_iter().map(|(f, s, sim)| (f, (s, sim))).collect();
+    let fused = rrf_fuse(&[name_ids, sem_ids]);
+    let mut out = Vec::new();
+    for (file_id, score) in fused.into_iter().take(limit) {
+        match shot_of.get(&file_id) {
+            Some((shot_id, _)) => {
+                let scores: std::collections::HashMap<i64, f32> =
+                    [(*shot_id, score)].into_iter().collect();
+                out.extend(crate::videos::hits_by_shot_ids(conn, &[*shot_id], &scores)?);
+            }
+            None => {
+                if let Some(h) = crate::videos::file_level_hit(conn, file_id, score)? {
+                    out.push(h);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -457,6 +517,48 @@ mod tests {
 
         // LIKE wildcards in user input stay literal
         assert!(search_bookmarks(&conn, &store, "%", None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn videos_scope_fuses_name_and_shot_hits() {
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO folders (path) VALUES ('/v');
+             INSERT INTO files (folder_id, path, name, ext, size, mtime) VALUES
+               (1, '/v/sunset-drone.mp4', 'sunset-drone.mp4', 'mp4', 1, 1),
+               (1, '/v/longsms-tutorial.mp4', 'longsms-tutorial.mp4', 'mp4', 1, 1),
+               (1, '/v/notes.md', 'notes.md', 'md', 1, 1);
+             INSERT INTO video_index (file_id, mtime, duration_ms, shot_count) VALUES (1, 1, 9000, 1);",
+        )
+        .unwrap();
+        // one embedded shot for sunset-drone.mp4: vector [1, 0]
+        conn.execute(
+            "INSERT INTO video_shots (file_id, start_ms, end_ms, ts_ms, thumb, embedding, model)
+             VALUES (1, 3000, 6000, 4500, 'x', ?1, 'm')",
+            rusqlite::params![[0u8, 0, 128, 63, 0, 0, 0, 0].as_slice()],
+        )
+        .unwrap();
+        let store = VectorStore::load(&conn).unwrap();
+        assert_eq!(store.video_shots.len(), 1);
+
+        // filename-only match (mid-token!): whole-file hit, no time range
+        let hits = search_videos_scope(&conn, &store, "sms", None, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "longsms-tutorial.mp4");
+        assert_eq!(hits[0].end_ms, 0, "file-level representation");
+
+        // semantic-only match: shot hit carries its range
+        let hits = search_videos_scope(&conn, &store, "sunset scene", Some(&[1.0, 0.0]), 10).unwrap();
+        assert!(hits.iter().any(|h| h.name == "sunset-drone.mp4" && h.start_ms == 3000 && h.end_ms == 6000));
+
+        // both ways at once: one row, shot representation preferred
+        let hits = search_videos_scope(&conn, &store, "sunset", Some(&[1.0, 0.0]), 10).unwrap();
+        let drone: Vec<_> = hits.iter().filter(|h| h.name == "sunset-drone.mp4").collect();
+        assert_eq!(drone.len(), 1, "no duplicate for name+shot double match");
+        assert_eq!(drone[0].start_ms, 3000, "shot representation wins");
+
+        // non-video files never leak into the scope
+        assert!(search_videos_scope(&conn, &store, "notes", None, 10).unwrap().is_empty());
     }
 
     #[test]

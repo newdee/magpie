@@ -37,6 +37,9 @@ struct AppState {
     video_indexing: Arc<AtomicBool>,
     /// Human-readable video-index problem ("" = fine), e.g. missing ffmpeg.
     video_note: Arc<StdMutex<String>>,
+    /// ffmpeg resolution state: "" (unchecked) / "system" / "bundled" /
+    /// "downloading ffmpeg… N%" / "missing: <why>".
+    ffmpeg_status: Arc<StdMutex<String>>,
     /// One model init at a time: concurrent inits would race on the same
     /// .part download files. The reinit flag queues one follow-up attempt
     /// (used when the mirror changes while an init is already running).
@@ -149,6 +152,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .unwrap_or(true),
         "video_indexing": state.video_indexing.load(Ordering::SeqCst),
         "video_note": state.video_note.lock().unwrap().clone(),
+        "ffmpeg_status": state.ffmpeg_status.lock().unwrap().clone(),
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
         "hf_endpoint": hf_endpoint,
@@ -234,6 +238,12 @@ async fn search_local(
     };
     let conn = state.db.lock().await;
     let store = state.store.lock().unwrap();
+    // the videos scope is its own pipeline: filename + semantic shots, fused
+    if matches!(scope, search::LocalScope::Videos) {
+        let vids = search::search_videos_scope(&conn, &store, &query, image_qvec.as_deref(), limit)
+            .map_err(err_str)?;
+        return Ok(tag_hits(Vec::new(), vids, false));
+    }
     let files = search::search_files(
         &conn,
         &store,
@@ -244,17 +254,7 @@ async fn search_local(
         limit,
     )
     .map_err(err_str)?;
-    // text→video: only in the images scope, appended after the file hits
-    // (hybrid file scores and cosine shot scores are not on one scale)
-    let vids = if matches!(scope, search::LocalScope::Images) {
-        match image_qvec.as_deref() {
-            Some(qv) => search::search_video_shots(&conn, &store, qv, 6).map_err(err_str)?,
-            None => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
-    Ok(tag_hits(files, vids, false))
+    Ok(tag_hits(files, Vec::new(), false))
 }
 
 /// Tag file/video hits with their kind for the frontend's mixed result list.
@@ -547,10 +547,12 @@ fn spawn_video_index(app: AppHandle) {
         return;
     }
     let db_path = state.db_path.clone();
+    let model_dir = state.model_dir.clone();
     let siglip = state.siglip.clone();
     let store = state.store.clone();
     let running = state.video_indexing.clone();
     let note = state.video_note.clone();
+    let ffmpeg_status = state.ffmpeg_status.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<usize> {
             let conn = db::open(&db_path)?;
@@ -567,8 +569,13 @@ fn spawn_video_index(app: AppHandle) {
             if pending.is_empty() {
                 return Ok(0);
             }
-            // resolve ffmpeg once per pass (may download a static build)
-            magpie_core::videos::ensure_ffmpeg()?;
+            // resolve ffmpeg once per pass (may download a static build);
+            // the settings row mirrors progress via ffmpeg_status
+            let fs2 = ffmpeg_status.clone();
+            let (_, label) = magpie_core::videos::ensure_ffmpeg_with(&model_dir, &mut move |m| {
+                *fs2.lock().unwrap() = m;
+            })?;
+            *ffmpeg_status.lock().unwrap() = label.to_string();
             let total = pending.len();
             let mut done = 0usize;
             for (file_id, path, mtime) in pending {
@@ -621,6 +628,48 @@ fn spawn_video_index(app: AppHandle) {
     });
 }
 
+/// Resolve ffmpeg early (system → magpie release asset → upstream) when the
+/// feature is on and the folders actually contain videos, so the binary is
+/// ready before the first index pass. Progress lands in ffmpeg_status.
+fn spawn_ffmpeg_check(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let db_path = state.db_path.clone();
+    let model_dir = state.model_dir.clone();
+    let status = state.ffmpeg_status.clone();
+    std::thread::spawn(move || {
+        let has_videos = (|| -> Result<bool> {
+            let conn = db::open(&db_path)?;
+            let enabled = db::meta_get(&conn, "video_indexing")?
+                .map(|v| v != "0")
+                .unwrap_or(true);
+            if !enabled {
+                return Ok(false);
+            }
+            let exts = magpie_core::videos::VIDEO_EXTS
+                .iter()
+                .map(|e| format!("'{e}'"))
+                .collect::<Vec<_>>()
+                .join(",");
+            Ok(conn.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM files WHERE lower(ext) IN ({exts}))"),
+                [],
+                |r| r.get(0),
+            )?)
+        })()
+        .unwrap_or(false);
+        if !has_videos {
+            return; // nothing to decode — never download 80 MB for nothing
+        }
+        let status2 = status.clone();
+        match magpie_core::videos::ensure_ffmpeg_with(&model_dir, &mut move |msg| {
+            *status2.lock().unwrap() = msg;
+        }) {
+            Ok((_, label)) => *status.lock().unwrap() = label.to_string(),
+            Err(e) => *status.lock().unwrap() = format!("missing: {e}"),
+        }
+    });
+}
+
 /// Toggle video shot indexing; enabling kicks a pass immediately.
 #[tauri::command]
 fn set_video_indexing(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
@@ -628,6 +677,7 @@ fn set_video_indexing(app: AppHandle, state: State<'_, AppState>, enabled: bool)
     db::meta_set(&conn, "video_indexing", if enabled { "1" } else { "0" }).map_err(err_str)?;
     drop(conn);
     if enabled {
+        spawn_ffmpeg_check(app.clone());
         spawn_video_index(app);
     }
     Ok(())
@@ -1349,6 +1399,7 @@ pub fn run() {
                 local_indexing: Arc::new(AtomicBool::new(false)),
                 video_indexing: Arc::new(AtomicBool::new(false)),
                 video_note: Arc::new(StdMutex::new(String::new())),
+                ffmpeg_status: Arc::new(StdMutex::new(String::new())),
                 model_initing: Arc::new(AtomicBool::new(false)),
                 model_reinit: Arc::new(AtomicBool::new(false)),
                 siglip_initing: Arc::new(AtomicBool::new(false)),
@@ -1361,6 +1412,7 @@ pub fn run() {
                 spawn_clip_watcher(app.handle().clone());
             }
             spawn_app_scan(app.handle().clone());
+            spawn_ffmpeg_check(app.handle().clone());
 
             // tray: Show / Sync / Settings / Quit (labels follow the UI language)
             let ui_lang = {

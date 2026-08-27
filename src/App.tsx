@@ -112,6 +112,7 @@ interface Status {
   video_indexing_enabled: boolean;
   video_indexing: boolean;
   video_note: string;
+  ffmpeg_status: string;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -195,11 +196,12 @@ const SORTS: { id: RepoSort; label: string }[] = [
   { id: "stars", label: "stars" },
 ];
 
-type LocalScope = "all" | "text" | "images";
+type LocalScope = "all" | "text" | "images" | "videos";
 const SCOPES: { id: LocalScope; label: string }[] = [
   { id: "all", label: "all" },
   { id: "text", label: "text" },
   { id: "images", label: "images" },
+  { id: "videos", label: "videos" },
 ];
 
 type WebScope = "all" | "bookmarks" | "history";
@@ -1301,7 +1303,9 @@ export default function App() {
                 ? status && status.repo_count > 0
                   ? tf("Search {n} starred repos", { n: status.repo_count })
                   : t("Search your stars")
-                : localScope === "images"
+                : localScope === "videos"
+                  ? t("Search videos by name, or describe a scene")
+                  : localScope === "images"
                   ? t("Describe the image, or pick / drop / paste one")
                   : status && status.file_count > 0
                     ? tf("Search {n} local files, drop or paste an image", {
@@ -1547,6 +1551,16 @@ export default function App() {
                     : t(
                         "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).",
                       )}
+                  {status?.ffmpeg_status ? (
+                    <>
+                      {" · ffmpeg: "}
+                      {status.ffmpeg_status === "system"
+                        ? t("system install")
+                        : status.ffmpeg_status === "bundled"
+                          ? t("downloaded")
+                          : status.ffmpeg_status}
+                    </>
+                  ) : null}
                 </span>
               </div>
               <div className="pill-row">
@@ -2128,15 +2142,18 @@ export default function App() {
                     <div className="row-main">
                       <span className="row-title">{r.name}</span>
                       <span className="row-sub">
-                        <span className="dim-prefix">
-                          {fmtTime(r.start_ms)} – {fmtTime(r.end_ms)} ·{" "}
-                        </span>
+                        {/* a shot hit names its time range; a filename hit is whole-file */}
+                        {r.end_ms > r.start_ms && (
+                          <span className="dim-prefix">
+                            {fmtTime(r.start_ms)} – {fmtTime(r.end_ms)} ·{" "}
+                          </span>
+                        )}
                         {parentDir(r.path)}
                       </span>
                     </div>
                     <div className="row-meta">
                       <span className="app-badge">{t("Video")}</span>
-                      <span className="mono">{fmtTime(r.duration_ms)}</span>
+                      {r.duration_ms > 0 && <span className="mono">{fmtTime(r.duration_ms)}</span>}
                       {imageQuery && (
                         <span className="sim">{Math.max(0, Math.round(r.score * 100))}%</span>
                       )}
