@@ -40,6 +40,7 @@ const ZH: Record<string, string> = {
   "scanning files… {n}": "扫描文件… {n}",
   "indexing images {a}/{b}": "索引图片 {a}/{b}",
   "indexing files {a}/{b}": "索引文件 {a}/{b}",
+  "indexing videos {a}/{b}": "索引视频 {a}/{b}",
   // footer status
   "error: {e}": "错误：{e}",
   "model download failed, keyword search only (set a mirror in settings)":
@@ -99,6 +100,10 @@ const ZH: Record<string, string> = {
   "Rebuild this folder's index from scratch": "从零重建该文件夹的索引",
   "Remove from index": "从索引中移除",
   "Max file size": "文件大小上限",
+  "Video shot search": "视频镜头搜索",
+  "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).":
+    "文件夹里的视频按镜头切分；每个镜头可用图片或文字描述搜索。需要 ffmpeg（缺失时自动下载）。",
+  Video: "视频",
   "Larger files index by name only. Changing rebuilds.": "超限文件仅按文件名索引。修改后重建。",
   "Model download source": "模型下载源",
   "Pick the mirror if huggingface.co is unreachable from your network.":

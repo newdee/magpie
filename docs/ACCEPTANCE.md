@@ -1,3 +1,39 @@
+# 验收记录 2026-08-27（应用别名层 + 视频镜头搜索，拟 v0.1.15）
+
+两块：
+1. 应用别名：AppEntry.aliases。三来源——内置 NAME_GROUPS 中英名对照
+   （~30 组，双向：装成飞书输 lark 能中，装成 Lark 输 feishu 经别名拼音
+   也能中）+ 用户规则（meta app_aliases，"proxy = clash" 一行一条，
+   set_app_aliases 命令即时重挂）+ Linux .desktop Keywords=/GenericName=。
+   匹配：别名走同一 score_name 通路（含拼音），×0.95 保证本名优先。
+2. 视频镜头搜索：videos.rs——ffmpeg（系统优先，缺失 sidecar 自动下载）
+   2fps/160px 解码 → 64-bin RGB 直方图卡方距离切镜头（纯 Rust，无 OpenCV，
+   阈值 0.4 + 最短 1s）→ 每镜头代表帧（中点 + 长镜头每 20s 一帧，≤3/镜头
+   ≤200/视频）→ 480px 抽帧 → SigLIP embed + 96px 缩略图 → video_index/
+   video_shots 表（FK 级联）。检索 search_video_shots 按视频分组取最佳
+   镜头；图查询按余弦与图片混排，文查询（images 范围）追加在文件后
+   （分数不同尺度不硬混）。结果行：缩略图 + 时间范围 + 时长 + 相似度%。
+   开关 set_video_indexing（默认开）；worker 持锁按视频粒度，坏文件记
+   mtime 跳过不卡队列；启动（siglip 就绪后）+ 30min 周期触发。
+
+## 连续三轮干净（发现数 1，已修）
+
+- R1：apps 9/9（别名双向/评分次序/用户规则 5 个新断言）+ videos 单测 5/5
+  （硬切边界/静态场景零误报/最短镜头抑制/代表帧/扩展名）；真机 E2E：
+  ffmpeg 合成三场景视频（红3s|蓝3s|SMPTE3s）→ 恰 3 镜头、边界精确
+  3000/6000ms、红帧查询命中 0..3000ms score 1.000、thumb 1092B 入库。
+  浏览器 demo：别名编辑区（改动激活保存→保存后回读 status）、视频结果行
+  （89% 按分插排 94/87 之间、"3:24 – 3:42"、"视频"徽章、缩略图）、设置行
+  计数 pill 486。
+- R2：全量 45/45；clippy 发现 2 条 chunks_exact 常量块 lint（本轮唯一
+  发现）→ as_chunks 修复后 0 告警；tsc + vite build 0 错。
+- R3：E2E 幂等复跑——同库第二次 pending 为空（零重索引），shots 保持
+  3 条、查询命中与 score 逐字节一致；videos 5/5 复跑。
+- 待 CI：ffmpeg-sidecar mac/linux 编译；国内网络 sidecar 下载不可达时
+  的降级路径（video_note 显示错误，功能其余不受影响）已在代码层保证，
+  真机验证待用户侧。
+
+---
 # 验收记录 2026-08-27（中英双语 UI + 应用启动器拼音匹配，并入 v0.1.14）
 
 两块：

@@ -61,6 +61,8 @@ you vaguely remember (or drop in an image), hit Enter.
 - **Five things, one keystroke**: local files (full-text + by name), images
   by content, GitHub stars, browser bookmarks **and** history, your clipboard,
   and installed apps — all behind `Alt+Space`.
+- **Search inside your videos**: shots are detected and embedded, so a
+  dropped image or a description finds the exact scene — with its time range.
 - **A real app launcher**: type an app name (prefix, substring, or acronym
   like `vsc`) and `Enter` launches it — Start Menu, `/Applications`, or Linux
   `.desktop`. Chinese app names match by pinyin too: `wx`, `weixin`, or
@@ -99,6 +101,14 @@ name, and understood formats are searched in full text:
 - *Image → image*: drag an image onto the palette, paste a screenshot, or
   click the pick-image button — magpie returns the most similar indexed
   images with cosine-similarity percentages.
+
+**Videos** get the same treatment, one level deeper: each video in your
+folders is split into **shots** (histogram-based scene-change detection — a
+pure-Rust pass over 2 fps frames), every shot's representative frames are
+SigLIP-embedded, and both image and text queries can land *inside* a video:
+the result row shows the matching shot's thumbnail and its exact time range
+(`3:24 – 3:42`). Decoding uses ffmpeg — a system install is picked up
+automatically, or a static build is downloaded once. Toggleable in Settings.
 
 The index is incremental: startup, manual refresh, and a 30-minute timer pick
 up new, changed, and deleted files automatically.
@@ -186,7 +196,8 @@ GitHub token (with connection badge) · indexed folders (add / remove /
 rebuild) · appearance (auto / light / dark) · **UI language (auto / English /
 中文)** · pinyin app matching · app aliases · summon shortcut (recordable) ·
 model download source (huggingface.co or **hf-mirror.com** for networks where
-HF is unreachable) · max file size (4/16/64 MB or unlimited) · tab order and default tab · clipboard history controls ·
+HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
+search toggle · tab order and default tab · clipboard history controls ·
 model download status · one-click in-place updates (signed, verified) ·
 app version.
 

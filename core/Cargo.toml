@@ -31,6 +31,9 @@ pdf-inspector = "1.15.0"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 arboard = "3.6.1"
 pinyin = "0.10"
+# video frame decoding for shot detection; prefers a system ffmpeg, can
+# auto-download a static build on first use
+ffmpeg-sidecar = "2"
 
 [target."cfg(windows)".dependencies]
 clipboard-win = "5.4.1"

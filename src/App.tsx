@@ -74,7 +74,21 @@ interface ClipHit {
   score: number;
 }
 
-type Hit = RepoHit | FileHit | BookmarkHit | HistoryHit | ClipHit | AppHit;
+interface VideoHit {
+  kind: "video";
+  id: number;
+  shot_id: number;
+  path: string;
+  name: string;
+  start_ms: number;
+  end_ms: number;
+  ts_ms: number;
+  thumb: string | null;
+  duration_ms: number;
+  score: number;
+}
+
+type Hit = RepoHit | FileHit | BookmarkHit | HistoryHit | ClipHit | AppHit | VideoHit;
 
 interface FolderInfo {
   id: number;
@@ -93,6 +107,11 @@ interface Status {
   clip_retention_days: number;
   clip_max_entries: number;
   app_aliases: string;
+  video_count: number;
+  video_shot_count: number;
+  video_indexing_enabled: boolean;
+  video_indexing: boolean;
+  video_note: string;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -115,7 +134,7 @@ interface StarsProgress {
 }
 
 interface LocalProgress {
-  stage: "scan" | "embed" | "embed-images";
+  stage: "scan" | "embed" | "embed-images" | "videos";
   done: number;
   total?: number;
 }
@@ -240,6 +259,15 @@ function parentDir(path: string): string {
   return cut > 0 ? path.slice(0, cut) : path;
 }
 
+/// mm:ss (or h:mm:ss) for video shot ranges
+function fmtTime(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = (s % 60).toString().padStart(2, "0");
+  return h > 0 ? `${h}:${m.toString().padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
 /// FTS snippet with \u0001..\u0002 sentinels around matches → <mark> nodes
 function renderSnippet(s: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
@@ -270,6 +298,7 @@ function starsProgressLabel(p: StarsProgress): string | null {
 function localProgressLabel(p: LocalProgress): string | null {
   if (p.stage === "scan") return tf("scanning files… {n}", { n: p.done });
   if ((p.total ?? 0) === 0) return null;
+  if (p.stage === "videos") return tf("indexing videos {a}/{b}", { a: p.done, b: p.total ?? 0 });
   return p.stage === "embed-images"
     ? tf("indexing images {a}/{b}", { a: p.done, b: p.total ?? 0 })
     : tf("indexing files {a}/{b}", { a: p.done, b: p.total ?? 0 });
@@ -493,21 +522,19 @@ export default function App() {
         const cs = await invoke<Omit<ClipHit, "kind">[]>("search_clips", { query: q });
         hits = cs.map((c) => ({ ...c, kind: "clip" as const }));
       } else {
-        // local: matching apps surface as top hits, then files
+        // local: matching apps surface as top hits, then files (+ videos in
+        // the images scope — the backend tags each hit's kind)
         const [apps, fs] = await Promise.all([
           invoke<Omit<AppHit, "kind">[]>("search_apps", {
             query: q,
             pinyin: pinyinRef.current,
           }),
-          invoke<Omit<FileHit, "kind">[]>("search_local", {
+          invoke<Hit[]>("search_local", {
             query: q,
             scope: localScopeRef.current,
           }),
         ]);
-        hits = [
-          ...apps.map((a) => ({ ...a, kind: "app" as const })),
-          ...fs.map((f) => ({ ...f, kind: "file" as const })),
-        ];
+        hits = [...apps.map((a) => ({ ...a, kind: "app" as const })), ...fs];
       }
       if (queryRef.current === q && sourceRef.current === srcIdx) {
         setResults(hits);
@@ -530,13 +557,13 @@ export default function App() {
   // live search, debounced; an active image query searches by similarity instead
   useEffect(() => {
     if (imageQuery) {
-      invoke<Omit<FileHit, "kind">[]>("search_by_image", {
+      invoke<Hit[]>("search_by_image", {
         path: imageQuery.path ?? null,
         bytesB64: imageQuery.bytesB64 ?? null,
       })
-        .then((fs) => {
+        .then((hits) => {
           if (imageQueryRef.current !== imageQuery) return; // stale
-          setResults(fs.map((f) => ({ ...f, kind: "file" as const })));
+          setResults(hits);
           setSelected(0);
           setLastError(null);
         })
@@ -687,6 +714,8 @@ export default function App() {
         await invoke("launch_app", { target: hit.target });
       } else if (hit.kind === "clip") {
         await invoke("copy_clip", { text: hit.content });
+      } else if (hit.kind === "video") {
+        await invoke("open_file", { path: hit.path });
       } else {
         await invoke("open_file", { path: hit.path });
       }
@@ -1496,6 +1525,45 @@ export default function App() {
               </div>
             </div>
 
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">
+                  {t("Video shot search")}
+                  {status != null && status.video_shot_count > 0 && (
+                    <span className="count-pill">{status.video_shot_count}</span>
+                  )}
+                </span>
+                <span className="set-desc">
+                  {status?.video_note
+                    ? status.video_note
+                    : t(
+                        "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).",
+                      )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${status?.video_indexing_enabled === o.on ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_video_indexing", { enabled: o.on });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="set-row stack">
               <div className="set-head">
                 <div className="set-label">
@@ -2045,6 +2113,28 @@ export default function App() {
                         <span className="mono">{relTimeUnix(r.last_visit)}</span>
                       )}
                       <span>{r.visit_count}×</span>
+                    </div>
+                  </>
+                ) : r.kind === "video" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title">{r.name}</span>
+                      <span className="row-sub">
+                        <span className="dim-prefix">
+                          {fmtTime(r.start_ms)} – {fmtTime(r.end_ms)} ·{" "}
+                        </span>
+                        {parentDir(r.path)}
+                      </span>
+                    </div>
+                    <div className="row-meta">
+                      <span className="app-badge">{t("Video")}</span>
+                      <span className="mono">{fmtTime(r.duration_ms)}</span>
+                      {imageQuery && (
+                        <span className="sim">{Math.max(0, Math.round(r.score * 100))}%</span>
+                      )}
+                      {r.thumb && (
+                        <img className="thumb" src={`data:image/jpeg;base64,${r.thumb}`} alt="" />
+                      )}
                     </div>
                   </>
                 ) : r.kind === "repo" ? (

@@ -57,7 +57,59 @@ fn main() -> anyhow::Result<()> {
                 println!("  {:.2} {} — {}", a.score, a.name, a.target);
             }
         }
-        _ => eprintln!("usage: dbtool <db> meta-get|meta-set|clips|clips-clear ..."),
+        // dbtool <db> index-videos <model_dir> <video_path>
+        // E2E: register the video as a files row, shot-detect + embed it,
+        // then query with a frame from the first scene and print the ranking.
+        Some("index-videos") => {
+            let model_dir = std::path::PathBuf::from(args.get(2).expect("model dir"));
+            let video = args.get(3).expect("video path");
+            let name = std::path::Path::new(video)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let folder: i64 = conn
+                .query_row("SELECT id FROM folders LIMIT 1", [], |r| r.get(0))
+                .expect("a folder row");
+            conn.execute(
+                "INSERT OR IGNORE INTO files (folder_id, path, name, ext, size, mtime)
+                 VALUES (?1, ?2, ?3, 'mp4', 0, 1)",
+                magpie_core::rusqlite::params![folder, video, name],
+            )?;
+            println!("ffmpeg: {:?}", magpie_core::videos::ensure_ffmpeg()?);
+            let mut sig = magpie_core::siglip::Siglip::new(&model_dir)?;
+            for (fid, path, mtime) in magpie_core::videos::pending_videos(&conn)? {
+                let n = magpie_core::videos::index_video(&conn, &mut sig, fid, &path, mtime)?;
+                println!("indexed {path}: {n} shots embedded");
+            }
+            let mut stmt = conn.prepare(
+                "SELECT vs.start_ms, vs.end_ms, vs.ts_ms FROM video_shots vs
+                 JOIN files f ON f.id = vs.file_id WHERE f.path = ?1 ORDER BY vs.start_ms",
+            )?;
+            for row in stmt.query_map([video], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            })? {
+                let (s, e, t) = row?;
+                println!("  shot {s}..{e} ms (rep @{t})");
+            }
+            // query with a frame from 1.5s into the video (first scene)
+            let qimg = magpie_core::videos::frame_at(video, 1500)?;
+            let mut qvec = sig.embed_dynamic(qimg)?;
+            let norm = qvec.iter().map(|x| x * x).sum::<f32>().sqrt();
+            qvec.iter_mut().for_each(|x| *x /= norm.max(1e-12));
+            let store = magpie_core::search::VectorStore::load(&conn)?;
+            for h in magpie_core::search::search_video_shots(&conn, &store, &qvec, 5)? {
+                println!(
+                    "  hit: {} {}..{}ms score {:.3} thumb={}B",
+                    h.name,
+                    h.start_ms,
+                    h.end_ms,
+                    h.score,
+                    h.thumb.as_deref().map(str::len).unwrap_or(0)
+                );
+            }
+        }
+        _ => eprintln!("usage: dbtool <db> meta-get|meta-set|clips|clips-clear|index-videos ..."),
     }
     Ok(())
 }

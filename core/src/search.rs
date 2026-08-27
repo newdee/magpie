@@ -46,6 +46,8 @@ pub struct VectorStore {
     pub bookmarks: Vec<(i64, Vec<f32>)>,
     pub history: Vec<(i64, Vec<f32>)>,
     pub clips: Vec<(i64, Vec<f32>)>,
+    /// (shot_id, SigLIP vector) — one entry per representative video frame.
+    pub video_shots: Vec<(i64, Vec<f32>)>,
 }
 
 impl VectorStore {
@@ -57,6 +59,7 @@ impl VectorStore {
             bookmarks: crate::bookmarks::all_bookmark_embeddings(conn)?,
             history: crate::history::all_history_embeddings(conn)?,
             clips: crate::clips::all_clip_embeddings(conn)?,
+            video_shots: crate::videos::all_shot_embeddings(conn)?,
         })
     }
 
@@ -68,6 +71,7 @@ impl VectorStore {
             bookmarks: Vec::new(),
             history: Vec::new(),
             clips: Vec::new(),
+            video_shots: Vec::new(),
         }
     }
 }
@@ -353,6 +357,36 @@ pub fn search_images(
     let scores: std::collections::HashMap<i64, f32> = scored.iter().copied().collect();
     let ids: Vec<i64> = scored.into_iter().map(|(id, _)| id).collect();
     crate::files::files_by_ids(conn, &ids, &scores)
+}
+
+/// Video-shot search in the same SigLIP space (image or text query vector).
+/// Shots are grouped per video — a video answers with its best shot only.
+pub fn search_video_shots(
+    conn: &Connection,
+    store: &VectorStore,
+    qvec: &[f32],
+    limit: usize,
+) -> Result<Vec<crate::videos::VideoHit>> {
+    if store.video_shots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let owners = crate::videos::shot_owners(conn)?;
+    // score every shot, then keep the best shot per owning video
+    let scored = top_similar(&store.video_shots, qvec, store.video_shots.len());
+    let mut best: std::collections::HashMap<i64, (i64, f32)> = std::collections::HashMap::new();
+    for (shot_id, sim) in scored {
+        let Some(&file_id) = owners.get(&shot_id) else { continue };
+        let e = best.entry(file_id).or_insert((shot_id, f32::NEG_INFINITY));
+        if sim > e.1 {
+            *e = (shot_id, sim);
+        }
+    }
+    let mut winners: Vec<(i64, f32)> = best.into_values().collect();
+    winners.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    winners.truncate(limit);
+    let scores: std::collections::HashMap<i64, f32> = winners.iter().copied().collect();
+    let ids: Vec<i64> = winners.into_iter().map(|(id, _)| id).collect();
+    crate::videos::hits_by_shot_ids(conn, &ids, &scores)
 }
 
 #[cfg(test)]

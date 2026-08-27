@@ -39,6 +39,11 @@ const status = {
   clip_retention_days: 30,
   clip_max_entries: 2000,
   app_aliases: "proxy = clash",
+  video_count: 12,
+  video_shot_count: 486,
+  video_indexing_enabled: true,
+  video_indexing: false,
+  video_note: "",
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",
@@ -159,10 +164,11 @@ const cityScene = (c: CanvasRenderingContext2D, w: number, h: number) => {
 
 const queryImageB64 = scenePng(sunsetScene(28));
 const imageHits = [
-  { id: 101, path: "C:\\Users\\dfine\\Pictures\\screenshots\\sunset-cliff.jpg", name: "sunset-cliff.jpg", ext: "jpg", size: 482133, mtime: now - 12 * day, score: 0.94, thumb: scenePng(sunsetScene(24)), snippet: null },
-  { id: 102, path: "C:\\Users\\dfine\\Pictures\\screenshots\\harbor-dusk.jpg", name: "harbor-dusk.jpg", ext: "jpg", size: 391002, mtime: now - 40 * day, score: 0.87, thumb: scenePng(sunsetScene(0)), snippet: null },
-  { id: 103, path: "C:\\Users\\dfine\\Pictures\\screenshots\\alps-morning.jpg", name: "alps-morning.jpg", ext: "jpg", size: 512908, mtime: now - 90 * day, score: 0.79, thumb: scenePng(mountainScene), snippet: null },
-  { id: 104, path: "C:\\Users\\dfine\\Pictures\\screenshots\\night-skyline.jpg", name: "night-skyline.jpg", ext: "jpg", size: 355670, mtime: now - 150 * day, score: 0.71, thumb: scenePng(cityScene), snippet: null },
+  { kind: "file", id: 101, path: "C:\\Users\\dfine\\Pictures\\screenshots\\sunset-cliff.jpg", name: "sunset-cliff.jpg", ext: "jpg", size: 482133, mtime: now - 12 * day, score: 0.94, thumb: scenePng(sunsetScene(24)), snippet: null },
+  { kind: "video", id: 201, shot_id: 3101, path: "C:\\Users\\dfine\\Documents\\projects\\clips\\drone-coast.mp4", name: "drone-coast.mp4", start_ms: 204_000, end_ms: 221_500, ts_ms: 212_000, thumb: scenePng(sunsetScene(12)), duration_ms: 754_000, score: 0.89 },
+  { kind: "file", id: 102, path: "C:\\Users\\dfine\\Pictures\\screenshots\\harbor-dusk.jpg", name: "harbor-dusk.jpg", ext: "jpg", size: 391002, mtime: now - 40 * day, score: 0.87, thumb: scenePng(sunsetScene(0)), snippet: null },
+  { kind: "file", id: 103, path: "C:\\Users\\dfine\\Pictures\\screenshots\\alps-morning.jpg", name: "alps-morning.jpg", ext: "jpg", size: 512908, mtime: now - 90 * day, score: 0.79, thumb: scenePng(mountainScene), snippet: null },
+  { kind: "file", id: 104, path: "C:\\Users\\dfine\\Pictures\\screenshots\\night-skyline.jpg", name: "night-skyline.jpg", ext: "jpg", size: 355670, mtime: now - 150 * day, score: 0.71, thumb: scenePng(cityScene), snippet: null },
 ];
 
 // promo capture hook: simulate pasting an image so the palette enters the
@@ -209,7 +215,9 @@ mockIPC((cmd, args) => {
     }
     case "search_local": {
       const ql = q.toLowerCase();
-      return ql && ("vector search".startsWith(ql) || ql.includes("vector")) ? fileHits : [];
+      return ql && ("vector search".startsWith(ql) || ql.includes("vector"))
+        ? fileHits.map((f) => ({ kind: "file", ...f }))
+        : [];
     }
     case "search_by_image":
       return imageHits;

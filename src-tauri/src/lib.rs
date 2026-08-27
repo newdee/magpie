@@ -34,6 +34,9 @@ struct AppState {
     store: Arc<StdMutex<VectorStore>>,
     sync_running: Arc<AtomicBool>,
     local_indexing: Arc<AtomicBool>,
+    video_indexing: Arc<AtomicBool>,
+    /// Human-readable video-index problem ("" = fine), e.g. missing ffmpeg.
+    video_note: Arc<StdMutex<String>>,
     /// One model init at a time: concurrent inits would race on the same
     /// .part download files. The reinit flag queues one follow-up attempt
     /// (used when the mirror changes while an init is already running).
@@ -138,6 +141,14 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "clip_retention_days": clip_retention_days,
         "clip_max_entries": clip_max_entries,
         "app_aliases": db::meta_get(&conn, "app_aliases").map_err(err_str)?.unwrap_or_default(),
+        "video_count": magpie_core::videos::video_count(&conn).map_err(err_str)?,
+        "video_shot_count": magpie_core::videos::shot_count(&conn).map_err(err_str)?,
+        "video_indexing_enabled": db::meta_get(&conn, "video_indexing")
+            .map_err(err_str)?
+            .map(|v| v != "0")
+            .unwrap_or(true),
+        "video_indexing": state.video_indexing.load(Ordering::SeqCst),
+        "video_note": state.video_note.lock().unwrap().clone(),
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
         "hf_endpoint": hf_endpoint,
@@ -193,7 +204,7 @@ async fn search_local(
     query: String,
     scope: Option<search::LocalScope>,
     limit: Option<usize>,
-) -> Result<Vec<FileHit>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     let scope = scope.unwrap_or(search::LocalScope::All);
     let limit = limit.unwrap_or(30).min(100);
     let (qvec, image_qvec) = if query.trim().is_empty() {
@@ -223,7 +234,7 @@ async fn search_local(
     };
     let conn = state.db.lock().await;
     let store = state.store.lock().unwrap();
-    search::search_files(
+    let files = search::search_files(
         &conn,
         &store,
         &query,
@@ -232,19 +243,63 @@ async fn search_local(
         scope,
         limit,
     )
-    .map_err(err_str)
+    .map_err(err_str)?;
+    // text→video: only in the images scope, appended after the file hits
+    // (hybrid file scores and cosine shot scores are not on one scale)
+    let vids = if matches!(scope, search::LocalScope::Images) {
+        match image_qvec.as_deref() {
+            Some(qv) => search::search_video_shots(&conn, &store, qv, 6).map_err(err_str)?,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    Ok(tag_hits(files, vids, false))
+}
+
+/// Tag file/video hits with their kind for the frontend's mixed result list.
+fn tag_hits(
+    files: Vec<FileHit>,
+    videos: Vec<magpie_core::videos::VideoHit>,
+    interleave_by_score: bool,
+) -> Vec<serde_json::Value> {
+    let mut tagged: Vec<(f32, serde_json::Value)> = Vec::new();
+    for f in files {
+        let s = f.score;
+        let mut v = serde_json::to_value(&f).unwrap_or_default();
+        v["kind"] = serde_json::Value::from("file");
+        tagged.push((s, v));
+    }
+    let file_count = tagged.len();
+    for h in videos {
+        let s = h.score;
+        let mut v = serde_json::to_value(&h).unwrap_or_default();
+        v["kind"] = serde_json::Value::from("video");
+        tagged.push((s, v));
+    }
+    if interleave_by_score {
+        // image queries: both lists are cosine similarities — comparable
+        tagged.sort_by(|a, b| b.0.total_cmp(&a.0));
+    } else {
+        // text queries: hybrid file scores and cosine shot scores live on
+        // different scales — videos append after files instead
+        let _ = file_count;
+    }
+    tagged.into_iter().map(|(_, v)| v).collect()
 }
 
 /// Search indexed images with a query image: a dropped file (`path`) or
 /// pasted clipboard bytes (`bytes_b64`). The query image itself does not need
 /// to be inside an indexed folder — it is only embedded, never stored.
+/// Video shots share the SigLIP space, so matching videos rank in the same
+/// list with the exact time range of the best-matching shot.
 #[tauri::command]
 async fn search_by_image(
     state: State<'_, AppState>,
     path: Option<String>,
     bytes_b64: Option<String>,
     limit: Option<usize>,
-) -> Result<Vec<FileHit>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     let limit = limit.unwrap_or(30).min(100);
     let sig = state.siglip.clone();
     let qvec = tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
@@ -272,7 +327,9 @@ async fn search_by_image(
 
     let conn = state.db.lock().await;
     let store = state.store.lock().unwrap();
-    search::search_images(&conn, &store, &qvec, limit).map_err(err_str)
+    let files = search::search_images(&conn, &store, &qvec, limit).map_err(err_str)?;
+    let vids = search::search_video_shots(&conn, &store, &qvec, 8).map_err(err_str)?;
+    Ok(tag_hits(files, vids, true))
 }
 
 /// Thumbnail of a query image for the input-row chip. Read-only, never stored.
@@ -476,6 +533,103 @@ fn set_app_aliases(app: AppHandle, state: State<'_, AppState>, text: String) -> 
     db::meta_set(&conn, "app_aliases", &text).map_err(err_str)?;
     drop(conn);
     spawn_app_scan(app);
+    Ok(())
+}
+
+// ---------- video shot indexing ----------
+
+/// Background pass: shot-detect + embed every new/changed video in the
+/// indexed folders. Needs the image model; holds its lock per video (search
+/// degrades to "busy indexing" exactly like bulk image embedding does).
+fn spawn_video_index(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.video_indexing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let db_path = state.db_path.clone();
+    let siglip = state.siglip.clone();
+    let store = state.store.clone();
+    let running = state.video_indexing.clone();
+    let note = state.video_note.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<usize> {
+            let conn = db::open(&db_path)?;
+            let enabled = db::meta_get(&conn, "video_indexing")
+                .ok()
+                .flatten()
+                .map(|v| v != "0")
+                .unwrap_or(true);
+            if !enabled {
+                return Ok(0);
+            }
+            let pending = magpie_core::videos::pending_videos(&conn)?;
+            magpie_core::videos::prune_orphan_shots(&conn)?;
+            if pending.is_empty() {
+                return Ok(0);
+            }
+            // resolve ffmpeg once per pass (may download a static build)
+            magpie_core::videos::ensure_ffmpeg()?;
+            let total = pending.len();
+            let mut done = 0usize;
+            for (file_id, path, mtime) in pending {
+                let _ = app.emit(
+                    "local-progress",
+                    json!({ "stage": "videos", "done": done, "total": total }),
+                );
+                // hold the model only per video; skip (retry next pass) if a
+                // bulk image embed owns it right now
+                let indexed = match siglip.try_lock() {
+                    Ok(mut guard) => match guard.as_mut() {
+                        Some(s) => {
+                            magpie_core::videos::index_video(&conn, s, file_id, &path, mtime)
+                        }
+                        None => return Ok(done), // model gone (reinit) — stop quietly
+                    },
+                    Err(_) => continue,
+                };
+                match indexed {
+                    Ok(_) => done += 1,
+                    Err(e) => {
+                        // a broken file must not wedge the queue: record the
+                        // attempt at this mtime and move on
+                        eprintln!("video index {path}: {e}");
+                        let _ = conn.execute(
+                            "INSERT INTO video_index (file_id, mtime, duration_ms, shot_count, indexed_at)
+                             VALUES (?1, ?2, 0, 0, strftime('%s','now'))
+                             ON CONFLICT(file_id) DO UPDATE SET mtime = excluded.mtime",
+                            magpie_core::rusqlite::params![file_id, mtime],
+                        );
+                    }
+                }
+            }
+            Ok(done)
+        })();
+        match result {
+            Ok(n) => {
+                *note.lock().unwrap() = String::new();
+                if n > 0 {
+                    reload_store(&db_path, &store);
+                    let _ = app.emit("local-done", json!({ "videos": n }));
+                }
+            }
+            Err(e) => {
+                *note.lock().unwrap() = e.to_string();
+                let _ = app.emit("local-error", format!("video indexing: {e}"));
+            }
+        }
+        running.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Toggle video shot indexing; enabling kicks a pass immediately.
+#[tauri::command]
+fn set_video_indexing(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "video_indexing", if enabled { "1" } else { "0" }).map_err(err_str)?;
+    drop(conn);
+    if enabled {
+        spawn_video_index(app);
+    }
     Ok(())
 }
 
@@ -1052,6 +1206,8 @@ fn spawn_siglip_init(app: AppHandle) {
                         let _ = app.emit("embed-caught-up", n);
                     }
                 }
+                // image model is up → sweep videos for new/changed shots
+                spawn_video_index(app.clone());
                 initing.store(false, Ordering::SeqCst);
                 reinit.store(false, Ordering::SeqCst);
             }
@@ -1191,6 +1347,8 @@ pub fn run() {
                 siglip_status: Arc::new(StdMutex::new("loading".into())),
                 sync_running: Arc::new(AtomicBool::new(false)),
                 local_indexing: Arc::new(AtomicBool::new(false)),
+                video_indexing: Arc::new(AtomicBool::new(false)),
+                video_note: Arc::new(StdMutex::new(String::new())),
                 model_initing: Arc::new(AtomicBool::new(false)),
                 model_reinit: Arc::new(AtomicBool::new(false)),
                 siglip_initing: Arc::new(AtomicBool::new(false)),
@@ -1260,6 +1418,7 @@ pub fn run() {
                     tick.tick().await;
                     spawn_local_index(periodic.clone());
                     spawn_bookmark_sync(periodic.clone());
+                    spawn_video_index(periodic.clone());
                 }
             });
             Ok(())
@@ -1302,6 +1461,7 @@ pub fn run() {
             copy_clip,
             set_ui_lang,
             set_app_aliases,
+            set_video_indexing,
             open_file
         ])
         .run(tauri::generate_context!())

@@ -11,4 +11,5 @@ pub mod github;
 pub mod history;
 pub mod search;
 pub mod siglip;
+pub mod videos;
 pub mod sync;

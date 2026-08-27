@@ -281,6 +281,27 @@ fn migrate(conn: &Connection) -> Result<()> {
             dim      INTEGER NOT NULL,
             vec      BLOB NOT NULL
         );
+
+        -- video shot index: per-file bookkeeping + one row per representative
+        -- frame, each carrying its shot's time range and a SigLIP vector
+        CREATE TABLE IF NOT EXISTS video_index (
+            file_id     INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+            mtime       INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            shot_count  INTEGER NOT NULL DEFAULT 0,
+            indexed_at  INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS video_shots (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id   INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            start_ms  INTEGER NOT NULL,
+            end_ms    INTEGER NOT NULL,
+            ts_ms     INTEGER NOT NULL,
+            thumb     TEXT,
+            embedding BLOB,
+            model     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_video_shots_file ON video_shots(file_id);
         "#,
     )
     .context("run migrations")?;
