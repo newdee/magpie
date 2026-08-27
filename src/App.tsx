@@ -920,6 +920,14 @@ export default function App() {
             getCurrentWindow().hide();
           }
           break;
+        case ",":
+          // Ctrl/Cmd+, toggles Settings ↔ search (the platform convention)
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            setShowSettings((s) => !s);
+            queueMicrotask(() => inputRef.current?.focus());
+          }
+          break;
         case "Tab":
           e.preventDefault();
           if (showSettings) break;
@@ -2240,6 +2248,9 @@ export default function App() {
               <kbd>⇧tab</kbd> {source === "github-stars" ? t("sort") : t("scope")}
             </span>
           )}
+          <span>
+            <kbd>ctrl,</kbd> {t("settings")}
+          </span>
           <span>
             <kbd>ctrl⏎</kbd> {t("web")}
           </span>

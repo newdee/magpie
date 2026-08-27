@@ -190,6 +190,7 @@ const ZH: Record<string, string> = {
   sort: "排序",
   web: "网页",
   hide: "隐藏",
+  settings: "设置",
 };
 
 export function resolveLang(pref: LangPref): Lang {
