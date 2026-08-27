@@ -209,7 +209,7 @@ rebuild) · appearance (auto / light / dark) · **UI language (auto / English /
 中文)** · pinyin app matching · app aliases · summon shortcut (recordable) ·
 model download source (huggingface.co or **hf-mirror.com** for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
-search toggle · tab order and default tab · clipboard history controls ·
+search toggle · decode limits (threads / hardware decode) · tab order and default tab · clipboard history controls ·
 model download status · one-click in-place updates (signed, verified) ·
 app version.
 
