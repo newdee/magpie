@@ -619,6 +619,30 @@ export default function App() {
     return () => document.removeEventListener("contextmenu", block);
   }, []);
 
+  // Settings toggle on the WINDOW, not the panel: with settings open the
+  // input is hidden and focus can sit on <body>, so a panel-level handler
+  // would open settings but never close them. Alt+, matches the app's own
+  // Alt family; Ctrl/Cmd+, keeps the platform convention working too.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "," && (e.altKey || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setShowSettings((s) => !s);
+      } else if (e.key === "Escape" && document.activeElement === document.body) {
+        // focus fell to <body> (e.g. after clicking a settings pill): the
+        // panel handler can't hear this Esc, so mirror its top layer here
+        setShowSettings((s) => (s ? false : s));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // whenever settings close (shortcut, Esc, ✕), typing must work immediately
+  useEffect(() => {
+    if (!showSettings) inputRef.current?.focus();
+  }, [showSettings]);
+
   useEffect(() => {
     refreshStatus();
     refreshFolders();
@@ -922,14 +946,9 @@ export default function App() {
             getCurrentWindow().hide();
           }
           break;
-        case ",":
-          // Ctrl/Cmd+, toggles Settings ↔ search (the platform convention)
-          if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            setShowSettings((s) => !s);
-            queueMicrotask(() => inputRef.current?.focus());
-          }
-          break;
+        // note: the Settings toggle (Alt+, / Ctrl+,) lives on a window-level
+        // listener — in settings mode the input is hidden and focus can land
+        // on <body>, where this panel handler never hears the key
         case "Tab":
           e.preventDefault();
           if (showSettings) break;
@@ -2266,7 +2285,7 @@ export default function App() {
             </span>
           )}
           <span>
-            <kbd>ctrl,</kbd> {t("settings")}
+            <kbd>alt,</kbd> {t("settings")}
           </span>
           <span>
             <kbd>ctrl⏎</kbd> {t("web")}

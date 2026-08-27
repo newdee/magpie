@@ -194,7 +194,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
 | `Shift`+`↑` `↓` | extend a multi-selection (Clipboard tab) |
 | `Ctrl+Delete` | delete the selected clips (Clipboard tab) |
-| `Ctrl+,` | toggle Settings ↔ search |
+| `Alt+,` (or `Ctrl+,`) | toggle Settings ↔ search |
 | `Esc` | clear image query → close settings → hide window |
 | drop / paste / pick an image | search local images by similarity |
 
