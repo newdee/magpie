@@ -1,3 +1,16 @@
+# 验收记录 2026-08-27（解码限制设置项，拟 v0.1.18）
+
+DecodeOpts{threads, hwaccel}：设置 → 解码限制行（线程 1/2/4/自动 pills +
+硬解开关）。默认 threads=2（后台礼貌值，不吃满全核）、硬解默认关；
+`-hwaccel auto` 失败进程级记忆（HWACCEL_BROKEN）自动回退软解不反复撞墙。
+meta：video_decode_threads / video_hwaccel；set_video_decode 命令；
+detect_shots/frame_at/index_video 全链路透传。
+
+三轮：48/48（decode_args 纯函数单测：空/线程/硬解组合 + 默认值断言）；
+clippy 0 告警；tsc+build 过；真机 E2E 复跑（frame_at 走 threads=2 抓帧，
+命中与基线逐字节一致 score 1.000）。
+
+---
 # 验收记录 2026-08-27（videos 档位 + ffmpeg 自托管/预下载/状态行，拟 v0.1.16）
 
 四块：

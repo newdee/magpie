@@ -105,6 +105,12 @@ const ZH: Record<string, string> = {
   "system install": "系统已装",
   downloaded: "已下载",
   videos: "视频",
+  "Decode limits": "解码限制",
+  "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.":
+    "限制视频索引时 ffmpeg 的占用，后台跑不打扰前台。硬件解码失败自动回退软解。",
+  "auto threads": "自动线程",
+  "hw decode": "硬解",
+  "Hardware decode (falls back to software on failure)": "硬件解码（失败自动回退软解）",
   "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).":
     "文件夹里的视频按镜头切分；每个镜头可用图片或文字描述搜索。需要 ffmpeg（缺失时自动下载）。",
   Video: "视频",

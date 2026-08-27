@@ -163,6 +163,51 @@ fn unzip_single(zip_path: &std::path::Path, dest: &std::path::Path) -> Result<()
     Err(anyhow!("no ffmpeg binary inside {}", zip_path.display()))
 }
 
+// ---------- decode options ----------
+
+/// User-tunable decode limits (settings → Video shot search).
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeOpts {
+    /// ffmpeg decoder threads; 0 = let ffmpeg decide (all cores).
+    pub threads: u32,
+    /// Try hardware decoding (-hwaccel auto). Falls back to software once
+    /// per process if the driver chokes.
+    pub hwaccel: bool,
+}
+
+impl Default for DecodeOpts {
+    fn default() -> Self {
+        // polite default: background indexing should never own the machine
+        Self { threads: 2, hwaccel: false }
+    }
+}
+
+/// Set once a hwaccel attempt failed — later decodes go software-only
+/// instead of failing every video the same way.
+static HWACCEL_BROKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn effective(opts: DecodeOpts) -> DecodeOpts {
+    if opts.hwaccel && HWACCEL_BROKEN.load(std::sync::atomic::Ordering::Relaxed) {
+        DecodeOpts { hwaccel: false, ..opts }
+    } else {
+        opts
+    }
+}
+
+/// Input-side ffmpeg args for the given options (pure, unit-tested).
+pub fn decode_args(opts: DecodeOpts) -> Vec<String> {
+    let mut a = Vec::new();
+    if opts.hwaccel {
+        a.push("-hwaccel".into());
+        a.push("auto".into());
+    }
+    if opts.threads > 0 {
+        a.push("-threads".into());
+        a.push(opts.threads.to_string());
+    }
+    a
+}
+
 // ---------- shot detection ----------
 
 const SAMPLE_FPS: f32 = 2.0;
@@ -250,13 +295,28 @@ pub fn rep_timestamps(shot: &Shot) -> Vec<i64> {
 }
 
 /// Decode the sampling pass and detect shots. Returns (shots, duration_ms).
-pub fn detect_shots(path: &str) -> Result<(Vec<Shot>, i64)> {
+/// A failing hwaccel attempt marks the accelerator broken for this process
+/// and retries in software once.
+pub fn detect_shots(path: &str, opts: DecodeOpts) -> Result<(Vec<Shot>, i64)> {
+    match detect_shots_once(path, effective(opts)) {
+        Ok(r) => Ok(r),
+        Err(e) if effective(opts).hwaccel => {
+            eprintln!("hwaccel decode failed ({e}); falling back to software");
+            HWACCEL_BROKEN.store(true, std::sync::atomic::Ordering::Relaxed);
+            detect_shots_once(path, effective(opts))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn detect_shots_once(path: &str, opts: DecodeOpts) -> Result<(Vec<Shot>, i64)> {
     use ffmpeg_sidecar::command::FfmpegCommand;
     use ffmpeg_sidecar::event::FfmpegEvent;
 
     let mut ts: Vec<i64> = Vec::new();
     let mut hists: Vec<[f32; BINS]> = Vec::new();
     let iter = FfmpegCommand::new_with_path(ffmpeg_bin())
+        .args(decode_args(opts))
         .input(path)
         .args(["-vf", &format!("fps={SAMPLE_FPS},scale=160:-2"), "-an", "-sn"])
         .rawvideo()
@@ -276,12 +336,14 @@ pub fn detect_shots(path: &str) -> Result<(Vec<Shot>, i64)> {
 }
 
 /// Grab one frame at `ts_ms` as a decoded image (480px wide).
-pub fn frame_at(path: &str, ts_ms: i64) -> Result<image::DynamicImage> {
+pub fn frame_at(path: &str, ts_ms: i64, opts: DecodeOpts) -> Result<image::DynamicImage> {
     use ffmpeg_sidecar::command::FfmpegCommand;
     use ffmpeg_sidecar::event::FfmpegEvent;
 
+    let opts = effective(opts);
     let seek = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
     let iter = FfmpegCommand::new_with_path(ffmpeg_bin())
+        .args(decode_args(opts))
         .args(["-ss", &seek])
         .input(path)
         .args(["-frames:v", "1", "-vf", "scale=480:-2", "-an", "-sn"])
@@ -359,8 +421,9 @@ pub fn index_video(
     file_id: i64,
     path: &str,
     mtime: i64,
+    opts: DecodeOpts,
 ) -> Result<usize> {
-    let (shots, duration_ms) = detect_shots(path)?;
+    let (shots, duration_ms) = detect_shots(path, opts)?;
     let mut reps: Vec<(usize, i64)> = Vec::new(); // (shot idx, ts)
     for (si, s) in shots.iter().enumerate() {
         for t in rep_timestamps(s) {
@@ -373,7 +436,7 @@ pub fn index_video(
     let mut stored = 0usize;
     for (si, ts) in reps {
         let s = &shots[si];
-        let Ok(img) = frame_at(path, ts) else { continue };
+        let Ok(img) = frame_at(path, ts, opts) else { continue };
         let thumb = thumb_b64(&img);
         let mut emb = siglip.embed_dynamic(img)?;
         l2_normalize(&mut emb);
@@ -581,6 +644,21 @@ mod tests {
         let reps = rep_timestamps(&Shot { start_ms: 0, end_ms: 60_000 });
         assert!(reps.len() > 1 && reps.len() <= MAX_REPS_PER_SHOT);
         assert!(reps.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn decode_args_reflect_options() {
+        assert!(decode_args(DecodeOpts { threads: 0, hwaccel: false }).is_empty());
+        assert_eq!(
+            decode_args(DecodeOpts { threads: 2, hwaccel: false }),
+            vec!["-threads", "2"]
+        );
+        assert_eq!(
+            decode_args(DecodeOpts { threads: 4, hwaccel: true }),
+            vec!["-hwaccel", "auto", "-threads", "4"]
+        );
+        assert_eq!(DecodeOpts::default().threads, 2, "polite background default");
+        assert!(!DecodeOpts::default().hwaccel);
     }
 
     #[test]

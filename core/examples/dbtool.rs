@@ -79,7 +79,14 @@ fn main() -> anyhow::Result<()> {
             println!("ffmpeg: {:?}", magpie_core::videos::ensure_ffmpeg()?);
             let mut sig = magpie_core::siglip::Siglip::new(&model_dir)?;
             for (fid, path, mtime) in magpie_core::videos::pending_videos(&conn)? {
-                let n = magpie_core::videos::index_video(&conn, &mut sig, fid, &path, mtime)?;
+                let n = magpie_core::videos::index_video(
+                    &conn,
+                    &mut sig,
+                    fid,
+                    &path,
+                    mtime,
+                    Default::default(),
+                )?;
                 println!("indexed {path}: {n} shots embedded");
             }
             let mut stmt = conn.prepare(
@@ -93,7 +100,7 @@ fn main() -> anyhow::Result<()> {
                 println!("  shot {s}..{e} ms (rep @{t})");
             }
             // query with a frame from 1.5s into the video (first scene)
-            let qimg = magpie_core::videos::frame_at(video, 1500)?;
+            let qimg = magpie_core::videos::frame_at(video, 1500, Default::default())?;
             let mut qvec = sig.embed_dynamic(qimg)?;
             let norm = qvec.iter().map(|x| x * x).sum::<f32>().sqrt();
             qvec.iter_mut().for_each(|x| *x /= norm.max(1e-12));

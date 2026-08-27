@@ -28,7 +28,7 @@ const folders = [
 ];
 
 const status = {
-  version: "0.1.14",
+  version: "0.1.17",
   repo_count: 1778,
   file_count: 1695,
   folder_count: 2,
@@ -45,6 +45,8 @@ const status = {
   video_indexing: false,
   video_note: "",
   ffmpeg_status: "system",
+  video_decode_threads: 2,
+  video_hwaccel: false,
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",

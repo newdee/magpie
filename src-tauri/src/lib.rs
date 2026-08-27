@@ -153,6 +153,14 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "video_indexing": state.video_indexing.load(Ordering::SeqCst),
         "video_note": state.video_note.lock().unwrap().clone(),
         "ffmpeg_status": state.ffmpeg_status.lock().unwrap().clone(),
+        "video_decode_threads": db::meta_get(&conn, "video_decode_threads")
+            .map_err(err_str)?
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(2),
+        "video_hwaccel": db::meta_get(&conn, "video_hwaccel")
+            .map_err(err_str)?
+            .map(|v| v == "1")
+            .unwrap_or(false),
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
         "hf_endpoint": hf_endpoint,
@@ -585,10 +593,11 @@ fn spawn_video_index(app: AppHandle) {
                 );
                 // hold the model only per video; skip (retry next pass) if a
                 // bulk image embed owns it right now
+                let opts = decode_opts_from_meta(&conn);
                 let indexed = match siglip.try_lock() {
                     Ok(mut guard) => match guard.as_mut() {
                         Some(s) => {
-                            magpie_core::videos::index_video(&conn, s, file_id, &path, mtime)
+                            magpie_core::videos::index_video(&conn, s, file_id, &path, mtime, opts)
                         }
                         None => return Ok(done), // model gone (reinit) — stop quietly
                     },
@@ -668,6 +677,30 @@ fn spawn_ffmpeg_check(app: AppHandle) {
             Err(e) => *status.lock().unwrap() = format!("missing: {e}"),
         }
     });
+}
+
+/// Decode limits from meta (threads default 2, hwaccel default off).
+fn decode_opts_from_meta(conn: &magpie_core::rusqlite::Connection) -> magpie_core::videos::DecodeOpts {
+    let threads = db::meta_get(conn, "video_decode_threads")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(2);
+    let hwaccel = db::meta_get(conn, "video_hwaccel")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    magpie_core::videos::DecodeOpts { threads, hwaccel }
+}
+
+/// Persist decode limits; they apply from the next decode onwards.
+#[tauri::command]
+fn set_video_decode(state: State<'_, AppState>, threads: u32, hwaccel: bool) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "video_decode_threads", &threads.to_string()).map_err(err_str)?;
+    db::meta_set(&conn, "video_hwaccel", if hwaccel { "1" } else { "0" }).map_err(err_str)?;
+    Ok(())
 }
 
 /// Toggle video shot indexing; enabling kicks a pass immediately.
@@ -1514,6 +1547,7 @@ pub fn run() {
             set_ui_lang,
             set_app_aliases,
             set_video_indexing,
+            set_video_decode,
             open_file
         ])
         .run(tauri::generate_context!())

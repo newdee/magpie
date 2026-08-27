@@ -113,6 +113,8 @@ interface Status {
   video_indexing: boolean;
   video_note: string;
   ffmpeg_status: string;
+  video_decode_threads: number;
+  video_hwaccel: boolean;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -1602,6 +1604,60 @@ export default function App() {
                     {t(o.label)}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Decode limits")}</span>
+                <span className="set-desc">
+                  {t(
+                    "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "1", threads: 1 },
+                  { label: "2", threads: 2 },
+                  { label: "4", threads: 4 },
+                  { label: "auto", threads: 0 },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${status?.video_decode_threads === o.threads ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_video_decode", {
+                          threads: o.threads,
+                          hwaccel: status?.video_hwaccel ?? false,
+                        });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {o.threads === 0 ? t("auto threads") : o.label}
+                  </button>
+                ))}
+                <button
+                  className={`source ${status?.video_hwaccel ? "active" : ""}`}
+                  onClick={async () => {
+                    try {
+                      await invoke("set_video_decode", {
+                        threads: status?.video_decode_threads ?? 2,
+                        hwaccel: !(status?.video_hwaccel ?? false),
+                      });
+                      await refreshStatus();
+                    } catch (e) {
+                      setLastError(String(e));
+                    }
+                  }}
+                  title={t("Hardware decode (falls back to software on failure)")}
+                >
+                  {t("hw decode")}
+                </button>
               </div>
             </div>
 
