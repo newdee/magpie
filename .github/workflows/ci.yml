@@ -34,7 +34,9 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # Match the pnpm major used to generate pnpm-lock.yaml and
+          # pnpm-workspace.yaml (config-only workspace files need >= 10).
+          version: 11
 
       - uses: actions/setup-node@v4
         with:
