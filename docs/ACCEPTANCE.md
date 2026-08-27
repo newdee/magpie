@@ -1,4 +1,4 @@
-# 验收记录 2026-08-28（图片剪贴历史 + 设置导入导出 + CI 缓存修复，拟 v0.1.19 批二）
+# 验收记录 2026-08-28（图片剪贴历史 + 设置导入导出 + CI pnpm 修复，拟 v0.1.19 批二）
 
 1. 图片剪贴历史：clips 表增列（kind/image/thumb/width/height，PRAGMA 条件
    ALTER 迁移）+ clip_image_vecs（SigLIP 空间，与 e5 文本空间分表）。watcher
@@ -11,8 +11,11 @@
 2. 设置导入导出：EXPORTABLE_META 白名单（token 显式排除）+ 前端
    localStorage 九键合并为单 JSON；导入即时生效（别名重挂 + 托盘语言），
    前端 reload 重读。
-3. CI 门修复：setup-node 的 pnpm 缓存探测在本仓布局下报
-   "packages field missing or empty"，移除 cache 配置。
+3. CI 门修复：报错 "packages field missing or empty" 根因是版本错配——
+   CI 钉 pnpm 9，而 pnpm-lock.yaml / pnpm-workspace.yaml（纯配置、无
+   packages 字段）由本地 pnpm 11 生成，pnpm 9 拒收。第一刀只删了
+   setup-node 的 cache 配置（表象），同错误换到 install 步骤复发；
+   第二刀 CI 对齐 pnpm 11，转绿。教训：修 CI 报错先对齐工具链版本。
 
 三轮：51/51（新增 image_clip_roundtrip_and_dedupe：编码尺寸保持/去重计数
 /JPEG 逐字节回读/异图异哈希）；clippy 0 告警；tsc+build 过；浏览器实测
