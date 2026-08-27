@@ -189,11 +189,12 @@ const imageHits = [
 };
 
 const clipHits = [
-  { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, score: 0 },
-  { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, score: 0 },
-  { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, score: 0 },
-  { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, score: 0 },
-  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, score: 0 },
+  { id: 6, content: "", first_copied: now - 120, last_copied: now - 120, copy_count: 1, clip_kind: "image", thumb: scenePng(mountainScene), width: 1600, height: 1000, score: 0 },
+  { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
+  { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
+  { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
+  { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
+  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
 ];
 
 mockIPC((cmd, args) => {

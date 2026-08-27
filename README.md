@@ -78,7 +78,20 @@ you vaguely remember (or drop in an image), hit Enter.
   English and 简体中文 — auto-follows your OS, switchable in settings.
 - **Clipboard history that respects secrets**: opt-in, stored locally, and
   clips a password manager marks confidential are never recorded (honored on
-  Windows and macOS). Cap it by count and age, multi-select and delete.
+  Windows and macOS). Cap it by count and age, multi-select and delete —
+  and `Shift+Enter` pastes straight into the app you came from.
+- **Copied images are history too**: screenshots and copied pictures join
+  the clipboard history with thumbnails, and you can find them later by
+  *describing* them ("that error dialog") — SigLIP works on your clips.
+- **It learns your habits**: results you actually open float up over time
+  (frequency + recency, decaying) — purely local statistics, never enough
+  to override a better match.
+- **Videos open at the scene**: when your default player is VLC / mpv /
+  PotPlayer / MPC, `Enter` on a shot starts playback at its time range.
+- **Multi-monitor aware**: the palette summons on the display your cursor
+  is on.
+- **Settings travel with you**: one-click export/import (everything except
+  the GitHub token).
 - **Stays current on its own**: signed, verified in-place auto-updates from
   this version on — no reinstalling.
 - **A preview pane, one keypress away**: `→` shows the selected result in
@@ -196,6 +209,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Ctrl+Enter` | hand the query to the browser — URL-looking input opens directly, anything else web-searches |
 | `Tab` | next source (Local / Stars / Web / Clipboard — order set in settings) |
 | `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
+| `Shift+Enter` | paste the selected clip(s) into the previous app (Clipboard tab) |
 | `Shift`+`↑` `↓` | extend a multi-selection (Clipboard tab) |
 | `Ctrl+Delete` | delete the selected clips (Clipboard tab) |
 | `→` / `←` | open / close the preview pane (`→` with the cursor at the end of the query) |

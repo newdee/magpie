@@ -174,6 +174,11 @@ const ZH: Record<string, string> = {
   "Update & restart": "更新并重启",
   "Check now": "检查更新",
   "Checking…": "检查中…",
+  "Settings file": "设置文件",
+  "Everything except the GitHub token — move your setup to another machine.":
+    "除 GitHub token 外的全部配置——换机器一键搬家。",
+  Export: "导出",
+  Import: "导入",
   // empty states
   "No matches in your stars": "stars 中无匹配",
   "No matching bookmarks or history": "无匹配的书签或历史",
@@ -205,6 +210,7 @@ const ZH: Record<string, string> = {
   paste: "粘贴",
   "close preview": "收起预览",
   "Clipboard entry": "剪贴内容",
+  Image: "图片",
   Shots: "镜头",
   "No preview": "无可预览内容",
 };

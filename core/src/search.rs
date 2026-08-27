@@ -48,6 +48,8 @@ pub struct VectorStore {
     pub clips: Vec<(i64, Vec<f32>)>,
     /// (shot_id, SigLIP vector) — one entry per representative video frame.
     pub video_shots: Vec<(i64, Vec<f32>)>,
+    /// (clip_id, SigLIP vector) — image clips, searchable by description.
+    pub clip_images: Vec<(i64, Vec<f32>)>,
 }
 
 impl VectorStore {
@@ -60,6 +62,7 @@ impl VectorStore {
             history: crate::history::all_history_embeddings(conn)?,
             clips: crate::clips::all_clip_embeddings(conn)?,
             video_shots: crate::videos::all_shot_embeddings(conn)?,
+            clip_images: crate::clips::all_clip_image_embeddings(conn)?,
         })
     }
 
@@ -72,6 +75,7 @@ impl VectorStore {
             history: Vec::new(),
             clips: Vec::new(),
             video_shots: Vec::new(),
+            clip_images: Vec::new(),
         }
     }
 }
@@ -343,11 +347,14 @@ pub fn search_history(
 }
 
 /// Hybrid search over clipboard history; empty query shows most recent clips.
+/// Text clips answer via FTS + e5; image clips via SigLIP text→image
+/// (`image_qvec`) — rank fusion keeps the two score spaces apart.
 pub fn search_clips(
     conn: &Connection,
     store: &VectorStore,
     query: &str,
     qvec: Option<&[f32]>,
+    image_qvec: Option<&[f32]>,
     limit: usize,
 ) -> Result<Vec<crate::clips::ClipHit>> {
     use crate::clips;
@@ -355,10 +362,13 @@ pub fn search_clips(
         return clips::recent_clips(conn, limit);
     }
     let fts = clips::clips_fts_search(conn, query, CANDIDATES_PER_LIST)?;
-    let vecs = match qvec {
-        Some(qvec) => vec![top_similar(&store.clips, qvec, CANDIDATES_PER_LIST)],
-        None => vec![],
-    };
+    let mut vecs = Vec::new();
+    if let Some(qvec) = qvec {
+        vecs.push(top_similar(&store.clips, qvec, CANDIDATES_PER_LIST));
+    }
+    if let Some(iq) = image_qvec {
+        vecs.push(top_similar(&store.clip_images, iq, CANDIDATES_PER_LIST));
+    }
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
     let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();

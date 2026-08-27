@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
@@ -71,6 +71,10 @@ interface ClipHit {
   first_copied: number;
   last_copied: number;
   copy_count: number;
+  clip_kind: "text" | "image";
+  thumb: string | null;
+  width: number | null;
+  height: number | null;
   score: number;
 }
 
@@ -145,6 +149,19 @@ interface LocalProgress {
 const PAGE = 8;
 const WINDOW_WIDTH = 720;
 const WINDOW_WIDTH_PREVIEW = 1100;
+
+/// localStorage keys included in a settings export/import.
+const LOCAL_KEYS = [
+  "magpie.taborder",
+  "magpie.tabhidden",
+  "magpie.defaulttab",
+  "magpie.theme",
+  "magpie.lang",
+  "magpie.pinyin",
+  "magpie.scope",
+  "magpie.webscope",
+  "magpie.sort",
+] as const;
 
 const ALL_SOURCES = [
   { id: "local", label: "Local Files" },
@@ -741,7 +758,11 @@ export default function App() {
       setPreview(null);
       return;
     }
-    const needsFetch = hit.kind === "file" || hit.kind === "video" || hit.kind === "repo";
+    const needsFetch =
+      hit.kind === "file" ||
+      hit.kind === "video" ||
+      hit.kind === "repo" ||
+      (hit.kind === "clip" && hit.clip_kind === "image");
     // clear immediately so a slower fetch can never leave the previous hit's
     // content rendered under the new selection
     setPreview(null);
@@ -799,7 +820,11 @@ export default function App() {
       } else if (hit.kind === "app") {
         await invoke("launch_app", { target: hit.target });
       } else if (hit.kind === "clip") {
-        await invoke("copy_clip", { text: hit.content });
+        if (hit.clip_kind === "image") {
+          await invoke("copy_image_clip", { clipId: hit.id });
+        } else {
+          await invoke("copy_clip", { text: hit.content });
+        }
       } else if (hit.kind === "video") {
         // default player with a seek interface starts at the matched shot
         await invoke("play_video", { path: hit.path, tsMs: hit.start_ms });
@@ -1006,7 +1031,7 @@ export default function App() {
             // Shift+Enter pastes straight into the app the palette covered
             const range = selAnchor != null && selHi > selLo ? results.slice(selLo, selHi + 1) : [results[selected]];
             const text = range
-              .filter((r) => r.kind === "clip")
+              .filter((r) => r.kind === "clip" && r.clip_kind !== "image")
               .map((r) => (r as ClipHit).content)
               .join("\n");
             if (text) void invoke("paste_clip", { text });
@@ -1014,7 +1039,7 @@ export default function App() {
             // multi-select: copy every selected clip, list order, one per line
             const joined = results
               .slice(selLo, selHi + 1)
-              .filter((r) => r.kind === "clip")
+              .filter((r) => r.kind === "clip" && r.clip_kind !== "image")
               .map((r) => (r as ClipHit).content)
               .join("\n");
             void invoke("copy_clip", { text: joined }).then(() => getCurrentWindow().hide());
@@ -2206,6 +2231,63 @@ export default function App() {
               )}
             </div>
             {updError && <p className="error-line">{updError}</p>}
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Settings file")}</span>
+                <span className="set-desc">
+                  {t("Everything except the GitHub token — move your setup to another machine.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                <button
+                  className="ghost-btn"
+                  onClick={async () => {
+                    try {
+                      const path = await saveDialog({
+                        defaultPath: "magpie-settings.json",
+                        filters: [{ name: "JSON", extensions: ["json"] }],
+                      });
+                      if (!path) return;
+                      const frontend: Record<string, string> = {};
+                      for (const k of LOCAL_KEYS) {
+                        const v = localStorage.getItem(k);
+                        if (v != null) frontend[k] = v;
+                      }
+                      await invoke("export_settings", { path, frontend });
+                      setLastError(null);
+                    } catch (e) {
+                      setLastError(String(e));
+                    }
+                  }}
+                >
+                  {t("Export")}
+                </button>
+                <button
+                  className="ghost-btn"
+                  onClick={async () => {
+                    try {
+                      const path = await openDialog({
+                        multiple: false,
+                        filters: [{ name: "JSON", extensions: ["json"] }],
+                      });
+                      if (typeof path !== "string") return;
+                      const frontend = await invoke<Record<string, string>>("import_settings", {
+                        path,
+                      });
+                      for (const k of LOCAL_KEYS) {
+                        if (typeof frontend[k] === "string") localStorage.setItem(k, frontend[k]);
+                      }
+                      window.location.reload(); // re-read every store in one clean pass
+                    } catch (e) {
+                      setLastError(String(e));
+                    }
+                  }}
+                >
+                  {t("Import")}
+                </button>
+              </div>
+            </div>
           </div>
 
           {lastError && <p className="error-line">{lastError}</p>}
@@ -2224,7 +2306,25 @@ export default function App() {
                 }}
                 onClick={() => openHit(r)}
               >
-                {r.kind === "clip" ? (
+                {r.kind === "clip" && r.clip_kind === "image" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title">{t("Image")}</span>
+                      <span className="row-sub">
+                        {r.width && r.height ? `${r.width} × ${r.height}` : ""}
+                      </span>
+                    </div>
+                    <div className="row-meta">
+                      {relTimeUnix(r.last_copied) && (
+                        <span className="mono">{relTimeUnix(r.last_copied)}</span>
+                      )}
+                      {r.copy_count > 1 && <span>×{r.copy_count}</span>}
+                      {r.thumb && (
+                        <img className="thumb" src={`data:image/jpeg;base64,${r.thumb}`} alt="" />
+                      )}
+                    </div>
+                  </>
+                ) : r.kind === "clip" ? (
                   <>
                     <div className="row-main">
                       <span className="row-title clip-text" title={r.content}>
@@ -2500,7 +2600,18 @@ function PreviewPane({
   if (!hit) return <div className="preview-pane" />;
   return (
     <div className="preview-pane">
-      {hit.kind === "clip" ? (
+      {hit.kind === "clip" && hit.clip_kind === "image" ? (
+        <>
+          {data?.kind === "image" && typeof data.image === "string" ? (
+            <img className="pv-image" src={`data:image/jpeg;base64,${data.image}`} alt="" />
+          ) : hit.thumb ? (
+            <img className="pv-image" src={`data:image/jpeg;base64,${hit.thumb}`} alt="" />
+          ) : null}
+          <p className="pv-meta">
+            {hit.width} × {hit.height} · {relTimeUnix(hit.last_copied)} · ×{hit.copy_count}
+          </p>
+        </>
+      ) : hit.kind === "clip" ? (
         <>
           <p className="pv-title">{t("Clipboard entry")}</p>
           <pre className="pv-text">{hit.content}</pre>

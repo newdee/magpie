@@ -315,6 +315,36 @@ fn migrate(conn: &Connection) -> Result<()> {
         "#,
     )
     .context("run migrations")?;
+
+    // additive column migrations (SQLite has no ADD COLUMN IF NOT EXISTS):
+    // clips grew image support in 0.1.19
+    ensure_column(conn, "clips", "kind", "TEXT NOT NULL DEFAULT 'text'")?;
+    ensure_column(conn, "clips", "image", "BLOB")?;
+    ensure_column(conn, "clips", "thumb", "TEXT")?;
+    ensure_column(conn, "clips", "width", "INTEGER")?;
+    ensure_column(conn, "clips", "height", "INTEGER")?;
+    conn.execute_batch(
+        r#"
+        -- SigLIP vectors for image clips (text clips stay in clip_vecs/e5)
+        CREATE TABLE IF NOT EXISTS clip_image_vecs (
+            clip_id INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+            dim     INTEGER NOT NULL,
+            vec     BLOB NOT NULL
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+/// ALTER TABLE … ADD COLUMN, only when the column is missing.
+fn ensure_column(conn: &Connection, table: &str, col: &str, ddl: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !existing.iter().any(|c| c == col) {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {ddl}"), [])?;
+    }
     Ok(())
 }
 

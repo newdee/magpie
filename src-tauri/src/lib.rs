@@ -115,6 +115,78 @@ async fn search_stars(
     Ok(hits)
 }
 
+/// Backend halves of a settings snapshot: exportable meta keys. The GitHub
+/// token is deliberately NEVER exported.
+const EXPORTABLE_META: &[&str] = &[
+    "app_aliases",
+    "video_indexing",
+    "video_decode_threads",
+    "video_hwaccel",
+    "ui_lang",
+    "clipboard_enabled",
+    "clip_retention_days",
+    "clip_max_entries",
+    "max_file_mb",
+    "hf_endpoint",
+];
+
+/// Write a settings snapshot (backend meta + the frontend's localStorage
+/// half, passed in) to a JSON file the user picked.
+#[tauri::command]
+async fn export_settings(
+    state: State<'_, AppState>,
+    path: String,
+    frontend: serde_json::Value,
+) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    let mut meta = serde_json::Map::new();
+    for key in EXPORTABLE_META {
+        if let Some(v) = db::meta_get(&conn, key).map_err(err_str)? {
+            meta.insert((*key).into(), serde_json::Value::String(v));
+        }
+    }
+    let doc = json!({ "magpie_settings": 1, "meta": meta, "frontend": frontend });
+    std::fs::write(&path, serde_json::to_string_pretty(&doc).map_err(err_str)?).map_err(err_str)?;
+    Ok(())
+}
+
+/// Read a snapshot back: apply the meta half here, hand the frontend half
+/// back for localStorage. Unknown keys are ignored; the token can't sneak in.
+#[tauri::command]
+async fn import_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let raw = std::fs::read_to_string(&path).map_err(err_str)?;
+    let doc: serde_json::Value = serde_json::from_str(&raw).map_err(err_str)?;
+    if doc.get("magpie_settings").and_then(|v| v.as_i64()) != Some(1) {
+        return Err("not a magpie settings file".into());
+    }
+    {
+        let conn = state.db.lock().await;
+        if let Some(meta) = doc.get("meta").and_then(|m| m.as_object()) {
+            for key in EXPORTABLE_META {
+                if let Some(v) = meta.get(*key).and_then(|v| v.as_str()) {
+                    db::meta_set(&conn, key, v).map_err(err_str)?;
+                }
+            }
+        }
+    }
+    // side effects that read meta live: aliases re-attach, tray language
+    spawn_app_scan(app.clone());
+    if let Ok(conn) = db::open(&state.db_path) {
+        if let Ok(Some(lang)) = db::meta_get(&conn, "ui_lang") {
+            if let Ok(menu) = build_tray_menu(&app, &lang) {
+                if let Some(tray) = app.tray_by_id("main") {
+                    let _ = tray.set_menu(Some(menu));
+                }
+            }
+        }
+    }
+    Ok(doc.get("frontend").cloned().unwrap_or(json!({})))
+}
+
 /// The user opened a hit — feed the frecency stats (stable identity per
 /// kind: path / url / target / repo id).
 #[tauri::command]
@@ -437,6 +509,20 @@ async fn get_preview(
                 "clipped_head": clipped_head,
                 "clipped_tail": end < text.len(),
             }))
+        }
+        "clip" => {
+            // image clips: the stored full-size JPEG; text clips carry their
+            // content in the hit already
+            match clips::image_clip_jpeg(&conn, id).map_err(err_str)? {
+                Some(jpeg) => {
+                    use base64::Engine;
+                    Ok(json!({
+                        "kind": "image",
+                        "image": base64::engine::general_purpose::STANDARD.encode(jpeg),
+                    }))
+                }
+                None => Ok(json!({ "kind": "none" })),
+            }
         }
         "video" => {
             let mut stmt = conn
@@ -898,9 +984,34 @@ async fn search_clips(
             Err(_) => None, // bulk embed in progress; keyword-only is fine
         }
     };
+    // image clips answer to descriptions via SigLIP's text encoder
+    let image_qvec = if query.trim().is_empty() {
+        None
+    } else {
+        match state.siglip.try_lock() {
+            Ok(mut guard) => guard.as_mut().and_then(|s| s.embed_query(&query).ok()),
+            Err(_) => None,
+        }
+    };
     let conn = state.db.lock().await;
     let store = state.store.lock().unwrap();
-    search::search_clips(&conn, &store, &query, qvec.as_deref(), limit).map_err(err_str)
+    search::search_clips(&conn, &store, &query, qvec.as_deref(), image_qvec.as_deref(), limit)
+        .map_err(err_str)
+}
+
+/// Copy an image clip back to the clipboard.
+#[tauri::command]
+async fn copy_image_clip(state: State<'_, AppState>, clip_id: i64) -> Result<(), String> {
+    let jpeg = {
+        let conn = state.db.lock().await;
+        clips::image_clip_jpeg(&conn, clip_id)
+            .map_err(err_str)?
+            .ok_or("image clip not found")?
+    };
+    tokio::task::spawn_blocking(move || clips::set_clipboard_image(&jpeg))
+        .await
+        .map_err(err_str)?
+        .map_err(err_str)
 }
 
 #[tauri::command]
@@ -1105,6 +1216,7 @@ fn spawn_clip_watcher(app: AppHandle) {
     let alive = state.clip_thread_alive.clone();
     let db_path = state.db_path.clone();
     let embedder = state.embedder.clone();
+    let siglip = state.siglip.clone();
     let store = state.store.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<()> {
@@ -1112,26 +1224,46 @@ fn spawn_clip_watcher(app: AppHandle) {
             let mut watcher = clips::ClipboardWatcher::new()?;
             let mut ticks: u64 = 0;
             while run.load(Ordering::SeqCst) {
+                let mut recorded = false;
                 if let Some(text) = watcher.poll() {
                     let now = unix_now();
                     if clips::record_clip(&conn, &text, now, clips::DEFAULT_MAX_LEN)
                         .unwrap_or(false)
                     {
-                        let cap = db::meta_get(&conn, "clip_max_entries")
-                            .ok()
-                            .flatten()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0u32);
-                        let _ = clips::prune_clips_to_count(&conn, cap);
+                        recorded = true;
                         // embed immediately when the model isn't busy
                         if let Ok(mut guard) = embedder.try_lock() {
                             if let Some(e) = guard.as_mut() {
                                 let _ = clips::embed_pending_clips(&conn, e, |_, _| {});
-                                drop(guard);
-                                reload_store(&db_path, &store);
                             }
                         }
                     }
+                } else if let Some((w, h, rgba)) = watcher.poll_image() {
+                    // screenshots and copied images join the history too,
+                    // searchable by describing what's in them
+                    let hash = clips::sample_hash(w, h, &rgba);
+                    if let Some((jpeg, thumb, iw, ih)) = clips::encode_clipboard_image(w, h, &rgba)
+                    {
+                        if clips::record_image_clip(&conn, &hash, &jpeg, &thumb, iw, ih, unix_now())
+                            .unwrap_or(false)
+                        {
+                            recorded = true;
+                            if let Ok(mut guard) = siglip.try_lock() {
+                                if let Some(s) = guard.as_mut() {
+                                    let _ = clips::embed_pending_image_clips(&conn, s);
+                                }
+                            }
+                        }
+                    }
+                }
+                if recorded {
+                    let cap = db::meta_get(&conn, "clip_max_entries")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0u32);
+                    let _ = clips::prune_clips_to_count(&conn, cap);
+                    reload_store(&db_path, &store);
                 }
                 ticks += 1;
                 if ticks.is_multiple_of(3600) {
@@ -1586,7 +1718,20 @@ fn spawn_siglip_init(app: AppHandle) {
                         let _ = app.emit("embed-caught-up", n);
                     }
                 }
-                // image model is up → sweep videos for new/changed shots
+                // image model is up → catch up image clips, then sweep videos
+                {
+                    let siglip2 = app.state::<AppState>().siglip.clone();
+                    let path2 = db_path.clone();
+                    let store2 = store.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if let (Ok(conn), Ok(mut guard)) = (db::open(&path2), siglip2.lock()) {
+                            if let Some(s) = guard.as_mut() {
+                                while matches!(clips::embed_pending_image_clips(&conn, s), Ok(n) if n > 0) {}
+                            }
+                        }
+                        reload_store(&path2, &store2);
+                    });
+                }
                 spawn_video_index(app.clone());
                 initing.store(false, Ordering::SeqCst);
                 reinit.store(false, Ordering::SeqCst);
@@ -1854,6 +1999,7 @@ pub fn run() {
             launch_app,
             sync_bookmarks_now,
             search_clips,
+            copy_image_clip,
             set_clipboard_enabled,
             set_clip_retention,
             set_clip_max_entries,
@@ -1868,6 +2014,8 @@ pub fn run() {
             record_hit_use,
             paste_clip,
             play_video,
+            export_settings,
+            import_settings,
             open_file
         ])
         .run(tauri::generate_context!())

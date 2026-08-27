@@ -1,3 +1,25 @@
+# 验收记录 2026-08-28（图片剪贴历史 + 设置导入导出 + CI 缓存修复，拟 v0.1.19 批二）
+
+1. 图片剪贴历史：clips 表增列（kind/image/thumb/width/height，PRAGMA 条件
+   ALTER 迁移）+ clip_image_vecs（SigLIP 空间，与 e5 文本空间分表）。watcher
+   文本优先，无文本时 poll_image（采样哈希 <1ms/4K 截图，同 last_hash 去重），
+   RGBA → ≤1600px JPEG + 96px thumb 入库；inline SigLIP embed（try_lock），
+   模型就绪时批量补嵌。检索三路 rank_hybrid：FTS + e5(文本条) + SigLIP
+   文本→图（图片条）。Enter/copy_image_clip 解码回 RGBA 上剪贴板；
+   Shift+Enter 粘贴仅文本条参与合并。行/预览：缩略图 + 尺寸 + 大图。
+   条数/时长/清空/机密标记护栏全部天然覆盖（同表）。
+2. 设置导入导出：EXPORTABLE_META 白名单（token 显式排除）+ 前端
+   localStorage 九键合并为单 JSON；导入即时生效（别名重挂 + 托盘语言），
+   前端 reload 重读。
+3. CI 门修复：setup-node 的 pnpm 缓存探测在本仓布局下报
+   "packages field missing or empty"，移除 cache 配置。
+
+三轮：51/51（新增 image_clip_roundtrip_and_dedupe：编码尺寸保持/去重计数
+/JPEG 逐字节回读/异图异哈希）；clippy 0 告警；tsc+build 过；浏览器实测
+图片剪贴行（"图片"+1600×1000+缩略图）、预览大图 + meta、设置文件行
+导出/导入按钮。批一（frecency/多屏/粘贴/视频跳转）已单独验收提交。
+
+---
 # 验收记录 2026-08-28（结果预览面板，拟 v0.1.18）
 
 `→`（光标在输入末尾）展开 / `←` 收起；窗口 720→1100 宽度自适应。各源预览：
