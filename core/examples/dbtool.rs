@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
         Some("apps") => {
             let apps = magpie_core::apps::list_apps();
             println!("app_count={}", apps.len());
-            for a in magpie_core::apps::match_apps(&apps, args.get(2).map(String::as_str).unwrap_or(""), 8) {
+            for a in magpie_core::apps::match_apps(&apps, args.get(2).map(String::as_str).unwrap_or(""), 8, true) {
                 println!("  {:.2} {} — {}", a.score, a.name, a.target);
             }
         }

@@ -1,3 +1,37 @@
+# 验收记录 2026-08-27（中英双语 UI + 应用启动器拼音匹配，并入 v0.1.14）
+
+两块：
+1. 中英双语 UI：src/i18n.ts 自研字典（英文原文作 key，~145 条 zh 译文，
+   零依赖）。语言偏好 auto/en/zh 存 localStorage magpie.lang，auto 按
+   navigator.language 解析；setLang 在触发 re-render 前同步更新模块态。
+   托盘菜单跟随：新命令 set_ui_lang 存 meta ui_lang 并 rebuild 托盘菜单
+   （TrayIconBuilder::with_id("main") + tray_by_id + set_menu），启动时
+   前端把解析后的语言同步给后端。
+2. 拼音匹配应用：core pinyin crate（0.10）。match_pinyin 按字生成候选拼写
+   （全拼 + 首字母，多音字全读音），DFS 一次覆盖全拼/首字母/混拼；分隔符可
+   跳过、ASCII 字符须原样匹配；起始于词首 0.8-长度罚，词中 0.55，均低于
+   原文前缀/子串。护栏：查询 <2 字符或含非 ASCII 不走拼音；纯拉丁名不产生
+   拼音候选。开关：设置行（默认开）存 magpie.pinyin，经 search_apps 的
+   pinyin 参数透传 match_apps。
+
+## 连续三轮干净（发现数 0）
+
+- R1（静态一致性）：可见文案 grep 仅剩 aria-label 英文（读屏可接受）+
+  "GitHub" 专有名词；t()/tf() 126 个字面 key 与字典对账全命中（差集全部为
+  动态键 t(s.label)/t(o.label) 与 split( 正则误报，浏览器实测动态键渲染
+  正确）。cargo test apps 7/7；tsc+vite build 0 错。
+- R2（机制通路+边界）：浏览器 demo 实测——auto 在中文系统渲染中文；点
+  English 全界面即时翻转（eyebrows/tabs/placeholder 数据对比）；点中文+关
+  拼音后 reload 状态保留（langActive=中文, pyActive=关）；invoke 捕获
+  search_apps args={query:"v",pinyin:false} 与开关一致（通路存活）；结果行
+  中文（徽章"应用"/副题"应用程序"）。全量 38/38；clippy 双 crate 0 告警。
+- R3（错误路径+回归）：match_apps 22 处调用全带第 4 参；set_ui_lang 四处
+  wiring（fn/handler/chooseLang/启动 effect）齐；英文态结果行（App/
+  Application）实测；全量 38/38 复跑；pnpm build 两次产物 hash 逐字节一致
+  （index-BWDC8VDM.js / index-CRUez5ik.css）。
+- 待 CI：托盘 set_menu 路径 mac/linux 真实编译（Windows cargo check 已过）。
+
+---
 # 验收记录 2026-08-22（mac 剪贴板机密标记 + tab 自定义，并入 v0.1.12）
 
 两块：

@@ -435,9 +435,10 @@ fn search_apps(
     state: State<'_, AppState>,
     query: String,
     limit: Option<usize>,
+    pinyin: Option<bool>,
 ) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
     let apps = state.apps.lock().unwrap();
-    Ok(magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(4)))
+    Ok(magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(4), pinyin.unwrap_or(true)))
 }
 
 #[tauri::command]
@@ -1055,6 +1056,38 @@ fn spawn_siglip_init(app: AppHandle) {
 
 // ---------- window / tray / shortcut ----------
 
+/// Tray labels for a UI language ("zh" or anything else = English).
+fn tray_labels(lang: &str) -> [&'static str; 4] {
+    if lang == "zh" {
+        ["显示", "立即同步", "设置…", "退出"]
+    } else {
+        ["Show", "Sync now", "Settings…", "Quit"]
+    }
+}
+
+fn build_tray_menu(app: &AppHandle, lang: &str) -> tauri::Result<Menu<tauri::Wry>> {
+    let l = tray_labels(lang);
+    let show = MenuItem::with_id(app, "show", l[0], true, None::<&str>)?;
+    let sync_item = MenuItem::with_id(app, "sync", l[1], true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", l[2], true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", l[3], true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &sync_item, &settings_item, &quit])
+}
+
+/// Persist the resolved UI language ("en"/"zh") and retitle the tray menu.
+/// The frontend resolves "auto" against the OS locale before calling this.
+#[tauri::command]
+fn set_ui_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Result<(), String> {
+    let lang = if lang == "zh" { "zh" } else { "en" };
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "ui_lang", lang).map_err(err_str)?;
+    let menu = build_tray_menu(&app, lang).map_err(err_str)?;
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(menu)).map_err(err_str)?;
+    }
+    Ok(())
+}
+
 fn toggle_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {
@@ -1151,14 +1184,16 @@ pub fn run() {
             }
             spawn_app_scan(app.handle().clone());
 
-            // tray: Show / Sync / Settings / Quit
-            let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let sync_item = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
-            let settings_item =
-                MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &sync_item, &settings_item, &quit])?;
-            TrayIconBuilder::new()
+            // tray: Show / Sync / Settings / Quit (labels follow the UI language)
+            let ui_lang = {
+                let state = app.state::<AppState>();
+                db::open(&state.db_path)
+                    .ok()
+                    .and_then(|c| db::meta_get(&c, "ui_lang").ok().flatten())
+                    .unwrap_or_else(|| "en".into())
+            };
+            let menu = build_tray_menu(app.handle(), &ui_lang)?;
+            TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1245,6 +1280,7 @@ pub fn run() {
             delete_clip,
             clear_clips_now,
             copy_clip,
+            set_ui_lang,
             open_file
         ])
         .run(tauri::generate_context!())

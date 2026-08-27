@@ -78,7 +78,9 @@ pub fn list_apps() -> Vec<AppEntry> {
 }
 
 /// Rank apps against a query. Prefix match beats substring beats subsequence.
-pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize) -> Vec<AppEntry> {
+/// With `use_pinyin`, a latin query also matches Chinese names by full pinyin
+/// or initials ("wx" / "weixin" -> 微信), ranked below same-script matches.
+pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize, use_pinyin: bool) -> Vec<AppEntry> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Vec::new();
@@ -95,6 +97,8 @@ pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize) -> Vec<AppEntry>
                 0.6
             } else if matches_initials(&q, &name) {
                 0.5 // "vsc" -> "Visual Studio Code"
+            } else if use_pinyin {
+                match_pinyin(&q, &a.name)?
             } else {
                 return None;
             };
@@ -106,6 +110,73 @@ pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize) -> Vec<AppEntry>
     scored.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.name.len().cmp(&b.name.len())));
     scored.truncate(limit);
     scored
+}
+
+/// Pinyin match for names containing Han characters. Each Han char may be
+/// spelled in the query as any of its readings (heteronyms included) or their
+/// first letter, so one walk covers full pinyin ("weixin"), initials ("wx"),
+/// and mixes ("weix"). ASCII chars must match themselves; separators may be
+/// skipped. Returns a score below same-script prefix/substring matches, or
+/// None when the name has no Han chars / nothing lines up.
+fn match_pinyin(q: &str, name: &str) -> Option<f32> {
+    use pinyin::ToPinyinMulti;
+    // guard: query must be latin (a Han query is matched directly upstream)
+    // and 1-letter queries would light up every app sharing one initial
+    if q.len() < 2 || !q.is_ascii() {
+        return None;
+    }
+    let mut opts: Vec<Vec<String>> = Vec::new();
+    let mut has_han = false;
+    for c in name.chars() {
+        if let Some(multi) = c.to_pinyin_multi() {
+            has_han = true;
+            let mut v: Vec<String> = Vec::new();
+            for p in multi {
+                let plain = p.plain().to_string();
+                let first = p.first_letter().to_string();
+                if !v.contains(&first) {
+                    v.push(first);
+                }
+                if !v.contains(&plain) {
+                    v.push(plain);
+                }
+            }
+            opts.push(v);
+        } else if c.is_ascii_alphanumeric() {
+            opts.push(vec![c.to_ascii_lowercase().to_string()]);
+        } else {
+            opts.push(vec![String::new()]); // separator/punctuation: skippable
+        }
+    }
+    if !has_han {
+        return None;
+    }
+    let qb = q.as_bytes();
+    for start in 0..opts.len() {
+        if pinyin_walk(qb, 0, &opts, start) {
+            // start-of-name pinyin beats mid-name, both stay below native hits
+            return Some(if start == 0 { 0.8 - 0.001 * name.chars().count() as f32 } else { 0.55 });
+        }
+    }
+    None
+}
+
+/// Can query bytes from `qi` be consumed by per-char spellings from `ci` on?
+/// Chars are consumed in order; "" options (separators) consume nothing.
+fn pinyin_walk(q: &[u8], qi: usize, opts: &[Vec<String>], ci: usize) -> bool {
+    if qi == q.len() {
+        return true;
+    }
+    if ci == opts.len() {
+        return false;
+    }
+    for o in &opts[ci] {
+        let ob = o.as_bytes();
+        if q[qi..].starts_with(ob) && pinyin_walk(q, qi + ob.len(), opts, ci + 1) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Acronym match: does `q` spell out the initials of the words in `name`?
@@ -216,7 +287,7 @@ mod tests {
     #[test]
     fn ranks_exact_then_shortest_substring() {
         let apps = vec![app("Visual Studio Code"), app("Code"), app("QR Code Reader"), app("Xcode")];
-        let hits = match_apps(&apps, "code", 10);
+        let hits = match_apps(&apps, "code", 10, true);
         assert_eq!(hits[0].name, "Code", "exact match wins");
         // remaining are substring matches, shortest name first
         assert_eq!(hits[1].name, "Xcode");
@@ -226,24 +297,60 @@ mod tests {
     #[test]
     fn prefix_beats_substring() {
         let apps = vec![app("Google Chrome"), app("Chrome")];
-        let hits = match_apps(&apps, "chrome", 10);
+        let hits = match_apps(&apps, "chrome", 10, true);
         assert_eq!(hits[0].name, "Chrome", "exact/prefix beats mid-string");
     }
 
     #[test]
     fn acronym_matches_word_initials_only() {
         let apps = vec![app("Visual Studio Code"), app("RecoveryDrive")];
-        let hits = match_apps(&apps, "vsc", 10);
+        let hits = match_apps(&apps, "vsc", 10, true);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].name, "Visual Studio Code", "initials v-s-c");
         // 'code' must NOT match RecoveryDrive as a loose subsequence
         // (it legitimately substring-matches "Visual Studio Code", so test in isolation)
-        assert!(match_apps(&[app("RecoveryDrive")], "code", 10).is_empty());
-        assert!(match_apps(&apps, "zzz", 10).is_empty());
+        assert!(match_apps(&[app("RecoveryDrive")], "code", 10, true).is_empty());
+        assert!(match_apps(&apps, "zzz", 10, true).is_empty());
     }
 
     #[test]
     fn empty_query_matches_nothing() {
-        assert!(match_apps(&[app("Safari")], "  ", 10).is_empty());
+        assert!(match_apps(&[app("Safari")], "  ", 10, true).is_empty());
+    }
+
+    #[test]
+    fn pinyin_initials_and_full_match_chinese_names() {
+        let apps = vec![app("微信"), app("腾讯会议"), app("网易云音乐"), app("Visual Studio Code")];
+        for q in ["wx", "weixin", "weix"] {
+            let hits = match_apps(&apps, q, 10, true);
+            assert_eq!(hits.len(), 1, "query {q}");
+            assert_eq!(hits[0].name, "微信", "query {q}");
+        }
+        assert_eq!(match_apps(&apps, "txhy", 10, true)[0].name, "腾讯会议");
+        assert_eq!(match_apps(&apps, "wangyiyun", 10, true)[0].name, "网易云音乐");
+        assert_eq!(match_apps(&apps, "wyyyy", 10, true)[0].name, "网易云音乐");
+    }
+
+    #[test]
+    fn pinyin_handles_heteronyms_and_mixed_names() {
+        // 重 reads chong2 (in 重庆) and zhong4 — both spellings must match
+        let apps = vec![app("重庆生活"), app("QQ音乐")];
+        assert_eq!(match_apps(&apps, "cqsh", 10, true)[0].name, "重庆生活");
+        assert_eq!(match_apps(&apps, "zqsh", 10, true)[0].name, "重庆生活");
+        assert_eq!(match_apps(&apps, "chongqing", 10, true)[0].name, "重庆生活");
+        // ascii chars inside a Han name must match themselves
+        assert_eq!(match_apps(&apps, "qqyinyue", 10, true)[0].name, "QQ音乐");
+        assert_eq!(match_apps(&apps, "qqyy", 10, true)[0].name, "QQ音乐");
+    }
+
+    #[test]
+    fn pinyin_respects_toggle_and_guards() {
+        let apps = vec![app("微信")];
+        assert!(match_apps(&apps, "wx", 10, false).is_empty(), "toggle off");
+        assert!(match_apps(&apps, "w", 10, true).is_empty(), "1-letter query too broad");
+        // Han query matches the name directly, with or without pinyin
+        assert_eq!(match_apps(&apps, "微信", 10, false)[0].name, "微信");
+        // pure-latin names never gain pinyin matches
+        assert!(match_apps(&[app("WeChat")], "weixin", 10, true).is_empty());
     }
 }

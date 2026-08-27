@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
 import "./App.css";
 
 interface RepoHit {
@@ -227,10 +228,10 @@ function relTimeUnix(secs: number): string | null {
 function relTimeFromMs(ms: number): string | null {
   if (Number.isNaN(ms) || ms < 0) return null;
   const days = ms / 86_400_000;
-  if (days < 1) return "today";
-  if (days < 30) return `${Math.floor(days)}d`;
-  if (days < 365) return `${Math.floor(days / 30)}mo`;
-  return `${Math.floor(days / 365)}y`;
+  if (days < 1) return t("today");
+  if (days < 30) return tf("{n}d", { n: Math.floor(days) });
+  if (days < 365) return tf("{n}mo", { n: Math.floor(days / 30) });
+  return tf("{n}y", { n: Math.floor(days / 365) });
 }
 
 function parentDir(path: string): string {
@@ -257,20 +258,20 @@ function renderSnippet(s: string): React.ReactNode[] {
 function starsProgressLabel(p: StarsProgress): string | null {
   switch (p.stage) {
     case "listing":
-      return `listing stars… ${p.total}`;
+      return tf("listing stars… {n}", { n: p.total });
     case "readmes":
-      return p.total === 0 ? null : `readmes ${p.done}/${p.total}`;
+      return p.total === 0 ? null : tf("readmes {a}/{b}", { a: p.done ?? 0, b: p.total });
     case "embedding":
-      return p.total === 0 ? null : `indexing stars ${p.done}/${p.total}`;
+      return p.total === 0 ? null : tf("indexing stars {a}/{b}", { a: p.done ?? 0, b: p.total });
   }
 }
 
 function localProgressLabel(p: LocalProgress): string | null {
-  if (p.stage === "scan") return `scanning files… ${p.done}`;
+  if (p.stage === "scan") return tf("scanning files… {n}", { n: p.done });
   if ((p.total ?? 0) === 0) return null;
   return p.stage === "embed-images"
-    ? `indexing images ${p.done}/${p.total}`
-    : `indexing files ${p.done}/${p.total}`;
+    ? tf("indexing images {a}/{b}", { a: p.done, b: p.total ?? 0 })
+    : tf("indexing files {a}/{b}", { a: p.done, b: p.total ?? 0 });
 }
 
 export default function App() {
@@ -347,6 +348,31 @@ export default function App() {
     const saved = localStorage.getItem("magpie.theme") as Theme | null;
     return saved && THEMES.includes(saved) ? saved : "auto";
   });
+  const [langPref, setLangPref] = useState<LangPref>(loadLangPref);
+  const [pinyinOn, setPinyinOn] = useState(
+    () => localStorage.getItem("magpie.pinyin") !== "0",
+  );
+  const pinyinRef = useRef(pinyinOn);
+  pinyinRef.current = pinyinOn;
+
+  // language: update the module-level dictionary BEFORE the re-render, then
+  // tell the backend so the tray menu follows
+  const chooseLang = useCallback((p: LangPref) => {
+    setLang(resolveLang(p));
+    localStorage.setItem("magpie.lang", p);
+    setLangPref(p);
+    invoke("set_ui_lang", { lang: resolveLang(p) }).catch(() => {});
+  }, []);
+
+  const togglePinyin = useCallback((on: boolean) => {
+    localStorage.setItem("magpie.pinyin", on ? "1" : "0");
+    setPinyinOn(on);
+  }, []);
+
+  // sync the tray language once at startup ("auto" resolves per OS locale)
+  useEffect(() => {
+    invoke("set_ui_lang", { lang: resolveLang(loadLangPref()) }).catch(() => {});
+  }, []);
   const [hotkeyDraft, setHotkeyDraft] = useState("");
   const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
 
@@ -449,7 +475,10 @@ export default function App() {
       } else {
         // local: matching apps surface as top hits, then files
         const [apps, fs] = await Promise.all([
-          invoke<Omit<AppHit, "kind">[]>("search_apps", { query: q }),
+          invoke<Omit<AppHit, "kind">[]>("search_apps", {
+            query: q,
+            pinyin: pinyinRef.current,
+          }),
           invoke<Omit<FileHit, "kind">[]>("search_local", {
             query: q,
             scope: localScopeRef.current,
@@ -1073,23 +1102,26 @@ export default function App() {
   const modelFailed = status !== null && status.model.startsWith("failed");
 
   const footerStatus = lastError
-    ? `error: ${lastError}`
+    ? tf("error: {e}", { e: lastError })
     : modelFailed
-      ? "model download failed, keyword search only (set a mirror in settings)"
+      ? t("model download failed, keyword search only (set a mirror in settings)")
       : modelWarming
-        ? "preparing semantic model (first run downloads ~500 MB)"
+        ? t("preparing semantic model (first run downloads ~500 MB)")
         : source === "local" && status?.image_model === "loading"
-          ? "preparing image model (first run downloads ~200 MB)"
+          ? t("preparing image model (first run downloads ~200 MB)")
           : status
             ? source === "github-stars"
-              ? `${status.repo_count} repos indexed`
+              ? tf("{n} repos indexed", { n: status.repo_count })
               : source === "web"
-                ? `${status.bookmark_count} bookmarks · ${status.history_count} history`
+                ? tf("{a} bookmarks · {b} history", {
+                    a: status.bookmark_count,
+                    b: status.history_count,
+                  })
                 : source === "clips"
                   ? status.clipboard_enabled
-                    ? `${status.clip_count} clips recorded`
-                    : "clipboard history is off — enable it in settings"
-                  : `${status.file_count} files indexed`
+                    ? tf("{n} clips recorded", { n: status.clip_count })
+                    : t("clipboard history is off — enable it in settings")
+                  : tf("{n} files indexed", { n: status.file_count })
             : "";
 
   // progress is scoped to the active source: stars sync details only show on
@@ -1117,7 +1149,7 @@ export default function App() {
             onClick={() => switchSource(i)}
             tabIndex={-1}
           >
-            {s.label}
+            {t(s.label)}
           </button>
         ))}
         {source === "local" && (
@@ -1128,9 +1160,9 @@ export default function App() {
                 className={`source ${localScope === s.id ? "active" : ""}`}
                 onClick={() => setScope(s.id)}
                 tabIndex={-1}
-                title={`Search ${s.id === "all" ? "everything" : s.id} (Shift+Tab cycles)`}
+                title={tf("Search {s} (Shift+Tab cycles)", { s: t(s.label) })}
               >
-                {s.label}
+                {t(s.label)}
               </button>
             ))}
           </span>
@@ -1143,9 +1175,9 @@ export default function App() {
                 className={`source ${webScope === s.id ? "active" : ""}`}
                 onClick={() => setWebScope(s.id)}
                 tabIndex={-1}
-                title={`Search ${s.id} (Shift+Tab cycles)`}
+                title={tf("Search {s} (Shift+Tab cycles)", { s: t(s.label) })}
               >
-                {s.label}
+                {t(s.label)}
               </button>
             ))}
           </span>
@@ -1162,9 +1194,9 @@ export default function App() {
                   inputRef.current?.focus();
                 }}
                 tabIndex={-1}
-                title={`Sort by ${s.id}`}
+                title={tf("Sort by {s}", { s: t(s.label) })}
               >
-                {s.label}
+                {t(s.label)}
               </button>
             ))}
           </span>
@@ -1188,7 +1220,7 @@ export default function App() {
               </svg>
             )}
             <span className="img-chip-label">{imageQuery.label}</span>
-            <button onClick={() => setImageQuery(null)} aria-label="Clear image query">
+            <button onClick={() => setImageQuery(null)} aria-label={t("Clear")}>
               ✕
             </button>
           </span>
@@ -1203,20 +1235,22 @@ export default function App() {
           }}
           placeholder={
             imageQuery
-              ? "Searching by image similarity"
+              ? t("Searching by image similarity")
               : source === "web"
-              ? "Search bookmarks and browser history"
+              ? t("Search bookmarks and browser history")
               : source === "clips"
-              ? "Search your clipboard history"
+              ? t("Search your clipboard history")
               : source === "github-stars"
                 ? status && status.repo_count > 0
-                  ? `Search ${status.repo_count} starred repos`
-                  : "Search your stars"
+                  ? tf("Search {n} starred repos", { n: status.repo_count })
+                  : t("Search your stars")
                 : localScope === "images"
-                  ? "Describe the image, or pick / drop / paste one"
+                  ? t("Describe the image, or pick / drop / paste one")
                   : status && status.file_count > 0
-                    ? `Search ${status.file_count} local files, drop or paste an image`
-                    : "Search indexed folders"
+                    ? tf("Search {n} local files, drop or paste an image", {
+                        n: status.file_count,
+                      })
+                    : t("Search indexed folders")
           }
           autoFocus
           spellCheck={false}
@@ -1227,8 +1261,8 @@ export default function App() {
           <button
             className="icon-btn"
             onClick={pickQueryImage}
-            title="Search with an image file"
-            aria-label="Pick a query image"
+            title={t("Search with an image file")}
+            aria-label={t("Search with an image file")}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
@@ -1241,7 +1275,7 @@ export default function App() {
           className={`icon-btn ${busy ? "spinning" : ""}`}
           onClick={refresh}
           disabled={busy || needsToken}
-          title={source === "github-stars" ? "Re-fetch starred repos" : "Re-scan folders"}
+          title={source === "github-stars" ? t("Re-fetch starred repos") : t("Re-scan folders")}
           aria-label="Refresh"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -1261,7 +1295,7 @@ export default function App() {
 
       {needsToken && !showSettings && (
         <button className="collapse-bar" onClick={() => setShowSettings(true)}>
-          <span>Connect GitHub to sync your stars</span>
+          <span>{t("Connect GitHub to sync your stars")}</span>
           <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -1270,7 +1304,7 @@ export default function App() {
 
       {source === "local" && !showSettings && folders.length === 0 && (
         <button className="collapse-bar" onClick={() => setShowSettings(true)}>
-          <span>No folders indexed yet, add some to search locally</span>
+          <span>{t("No folders indexed yet, add some to search locally")}</span>
           <svg className="chevron" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -1281,13 +1315,13 @@ export default function App() {
         <div className="card settings-page">
           <div className="card-head" data-tauri-drag-region>
             <p className="card-title settings-title">
-              Settings
+              {t("Settings")}
               {status?.version && <span className="ver">v{status.version}</span>}
             </p>
             <button
               className="icon-btn"
               onClick={() => setShowSettings(false)}
-              title="Back to search (Esc)"
+              title={t("Back to search (Esc)")}
               aria-label="Close settings"
             >
               ✕
@@ -1295,7 +1329,7 @@ export default function App() {
           </div>
 
           {/* CONNECTION */}
-          <p className="set-eyebrow">Connection</p>
+          <p className="set-eyebrow">{t("Connection")}</p>
           <div className="set-group">
             <div className="set-row stack">
               <div className="set-head">
@@ -1303,8 +1337,10 @@ export default function App() {
                   <span className="set-name">GitHub</span>
                   <span className="set-desc">
                     {status?.has_token
-                      ? "Paste a new token to replace the current one."
-                      : "A personal access token, no scopes needed — it only reads your public stars."}
+                      ? t("Paste a new token to replace the current one.")
+                      : t(
+                          "A personal access token, no scopes needed — it only reads your public stars.",
+                        )}
                   </span>
                 </div>
                 {status?.has_token && status.username ? (
@@ -1312,7 +1348,7 @@ export default function App() {
                     <span className="conn-dot" aria-hidden="true" /> {status.username}
                   </span>
                 ) : (
-                  <span className="conn-badge">not connected</span>
+                  <span className="conn-badge">{t("not connected")}</span>
                 )}
               </div>
               <div className="token-row">
@@ -1331,7 +1367,7 @@ export default function App() {
                   spellCheck={false}
                 />
                 <button className="primary-btn" onClick={submitToken} disabled={tokenBusy}>
-                  {tokenBusy ? "Checking" : "Connect"}
+                  {tokenBusy ? t("Checking") : t("Connect")}
                 </button>
               </div>
               {tokenError && <p className="error-line">{tokenError}</p>}
@@ -1344,15 +1380,15 @@ export default function App() {
                     })
                   }
                 >
-                  Create one on github.com
+                  {t("Create one on github.com")}
                 </button>
                 {status?.has_token && (
                   <button
                     className="link-btn"
                     onClick={rebuildStars}
-                    title="Wipe the star index and sync everything from scratch"
+                    title={t("Wipe the star index and sync everything from scratch")}
                   >
-                    Rebuild star index
+                    {t("Rebuild star index")}
                   </button>
                 )}
               </div>
@@ -1360,33 +1396,35 @@ export default function App() {
           </div>
 
           {/* INDEXING */}
-          <p className="set-eyebrow">Indexing</p>
+          <p className="set-eyebrow">{t("Indexing")}</p>
           <div className="set-group">
             <div className="set-row stack">
               <div className="set-head">
                 <div className="set-label">
                   <span className="set-name">
-                    Indexed folders
+                    {t("Indexed folders")}
                     {status != null && status.folder_count > 0 && (
                       <span className="count-pill">{status.folder_count}</span>
                     )}
                   </span>
                   <span className="set-desc">
-                    Scanned recursively; hidden and gitignored paths are skipped.
+                    {t("Scanned recursively; hidden and gitignored paths are skipped.")}
                   </span>
                 </div>
                 <button className="primary-btn" onClick={addFolder}>
-                  Add folder
+                  {t("Add folder")}
                 </button>
               </div>
               {folders.length === 0 &&
                 (status != null && status.folder_count > 0 ? (
                   <p className="error-line">
-                    {status.folder_count} folder(s) indexed but the list failed to load —
-                    please report this with the error below.
+                    {tf(
+                      "{n} folder(s) indexed but the list failed to load — please report this with the error below.",
+                      { n: status.folder_count },
+                    )}
                   </p>
                 ) : (
-                  <p className="set-empty">No folders yet.</p>
+                  <p className="set-empty">{t("No folders yet.")}</p>
                 ))}
               {folders.length > 0 && (
                 <div className="folder-list">
@@ -1399,7 +1437,7 @@ export default function App() {
                       <button
                         className="folder-remove"
                         onClick={() => rebuildFolder(f.id)}
-                        title="Rebuild this folder's index from scratch"
+                        title={t("Rebuild this folder's index from scratch")}
                         aria-label={`Rebuild index for ${f.path}`}
                       >
                         ↻
@@ -1407,7 +1445,7 @@ export default function App() {
                       <button
                         className="folder-remove"
                         onClick={() => removeFolder(f.id)}
-                        title="Remove from index"
+                        title={t("Remove from index")}
                         aria-label={`Remove ${f.path}`}
                       >
                         ✕
@@ -1420,8 +1458,10 @@ export default function App() {
 
             <div className="set-row">
               <div className="set-label">
-                <span className="set-name">Max file size</span>
-                <span className="set-desc">Larger files index by name only. Changing rebuilds.</span>
+                <span className="set-name">{t("Max file size")}</span>
+                <span className="set-desc">
+                  {t("Larger files index by name only. Changing rebuilds.")}
+                </span>
               </div>
               <div className="pill-row">
                 {FILE_CAPS.map((c) => (
@@ -1430,7 +1470,7 @@ export default function App() {
                     className={`source ${status?.max_file_mb === c.mb ? "active" : ""}`}
                     onClick={() => applyFileCap(c.mb)}
                   >
-                    {c.label}
+                    {t(c.label)}
                   </button>
                 ))}
               </div>
@@ -1439,9 +1479,9 @@ export default function App() {
             <div className="set-row stack">
               <div className="set-head">
                 <div className="set-label">
-                  <span className="set-name">Model download source</span>
+                  <span className="set-name">{t("Model download source")}</span>
                   <span className="set-desc">
-                    Pick the mirror if huggingface.co is unreachable from your network.
+                    {t("Pick the mirror if huggingface.co is unreachable from your network.")}
                   </span>
                 </div>
                 <div className="pill-row">
@@ -1458,7 +1498,7 @@ export default function App() {
                         }
                       }}
                     >
-                      {e.label}
+                      {t(e.label)}
                     </button>
                   ))}
                 </div>
@@ -1466,20 +1506,20 @@ export default function App() {
               <div className="model-status">
                 <span>
                   <span className={`status-dot ${status?.model === "ready" ? "ok" : ""}`} />
-                  Semantic model —{" "}
+                  {t("Semantic model")} —{" "}
                   {status?.model === "ready"
-                    ? "ready"
+                    ? t("ready")
                     : status?.model === "loading"
-                      ? "downloading (~500 MB, first run)…"
+                      ? t("downloading (~500 MB, first run)…")
                       : (status?.model ?? "…")}
                 </span>
                 <span>
                   <span className={`status-dot ${status?.image_model === "ready" ? "ok" : ""}`} />
-                  Image model —{" "}
+                  {t("Image model")} —{" "}
                   {status?.image_model === "ready"
-                    ? "ready"
+                    ? t("ready")
                     : status?.image_model === "loading"
-                      ? "downloading (~200 MB, first run)…"
+                      ? t("downloading (~200 MB, first run)…")
                       : (status?.image_model ?? "…")}
                 </span>
               </div>
@@ -1487,20 +1527,71 @@ export default function App() {
           </div>
 
           {/* APPEARANCE & BEHAVIOR */}
-          <p className="set-eyebrow">Appearance &amp; behavior</p>
+          <p className="set-eyebrow">{t("Appearance & behavior")}</p>
           <div className="set-group">
             <div className="set-row">
               <div className="set-label">
-                <span className="set-name">Theme</span>
+                <span className="set-name">{t("Theme")}</span>
               </div>
               <div className="pill-row">
-                {THEMES.map((t) => (
+                {THEMES.map((th) => (
                   <button
-                    key={t}
-                    className={`source ${theme === t ? "active" : ""}`}
-                    onClick={() => setTheme(t)}
+                    key={th}
+                    className={`source ${theme === th ? "active" : ""}`}
+                    onClick={() => setTheme(th)}
                   >
-                    {t}
+                    {t(th)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Language")}</span>
+                <span className="set-desc">
+                  {t("Palette and settings text; the tray menu follows.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                {(
+                  [
+                    { id: "auto", label: t("auto") },
+                    { id: "en", label: "English" },
+                    { id: "zh", label: "中文" },
+                  ] as { id: LangPref; label: string }[]
+                ).map((o) => (
+                  <button
+                    key={o.id}
+                    className={`source ${langPref === o.id ? "active" : ""}`}
+                    onClick={() => chooseLang(o.id)}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Pinyin app matching")}</span>
+                <span className="set-desc">
+                  {t(
+                    "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${pinyinOn === o.on ? "active" : ""}`}
+                    onClick={() => togglePinyin(o.on)}
+                  >
+                    {t(o.label)}
                   </button>
                 ))}
               </div>
@@ -1508,10 +1599,12 @@ export default function App() {
 
             <div className="set-row stack">
               <div className="set-label">
-                <span className="set-name">Summon shortcut</span>
+                <span className="set-name">{t("Summon shortcut")}</span>
                 <span className="set-desc">
-                  Currently <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>. Click and press a new
-                  combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.
+                  {t("Currently")} <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>.{" "}
+                  {t(
+                    "Click and press a new combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.",
+                  )}
                 </span>
               </div>
               <div className="token-row">
@@ -1520,7 +1613,7 @@ export default function App() {
                   value={hotkeyDraft}
                   onChange={() => {}}
                   onKeyDown={captureHotkey}
-                  placeholder="press keys…"
+                  placeholder={t("press keys…")}
                   spellCheck={false}
                 />
                 {hotkeyDraft && (
@@ -1530,18 +1623,22 @@ export default function App() {
                       setHotkeyDraft("");
                       setHotkeyMsg(null);
                     }}
-                    title="Clear"
+                    title={t("Clear")}
                     aria-label="Clear recorded shortcut"
                   >
                     ✕
                   </button>
                 )}
                 <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
-                  Apply
+                  {t("Apply")}
                 </button>
               </div>
               {hotkeyMsg && (
-                <p className={hotkeyMsg === "saved" ? "set-empty" : "error-line"}>{hotkeyMsg}</p>
+                // hotkeyMsg holds internal sentinels ("saved") or raw errors;
+                // translate known sentinels at render time only
+                <p className={hotkeyMsg === "saved" ? "set-empty" : "error-line"}>
+                  {t(hotkeyMsg)}
+                </p>
               )}
               {status?.hotkey !== "Alt+Space" && (
                 <div className="set-links">
@@ -1558,7 +1655,7 @@ export default function App() {
                       }
                     }}
                   >
-                    Reset to Alt+Space
+                    {t("Reset to Alt+Space")}
                   </button>
                 </div>
               )}
@@ -1566,11 +1663,11 @@ export default function App() {
 
             <div className="set-row stack">
               <div className="set-label">
-                <span className="set-name">Tabs</span>
+                <span className="set-name">{t("Tabs")}</span>
                 <span className="set-desc">
-                  Tick which sources appear as tabs (at least one stays on).
-                  Drag the handle (or use the arrows) to reorder; ★ marks the
-                  tab that opens on launch.
+                  {t(
+                    "Tick which sources appear as tabs (at least one stays on). Drag the handle (or use the arrows) to reorder; ★ marks the tab that opens on launch.",
+                  )}
                 </span>
               </div>
               <div className="tab-order">
@@ -1605,10 +1702,10 @@ export default function App() {
                         onChange={() => toggleTabVisible(s.id)}
                         title={
                           lastVisible
-                            ? "At least one tab must stay visible"
+                            ? t("At least one tab must stay visible")
                             : hidden
-                              ? `Show ${s.label}`
-                              : `Hide ${s.label}`
+                              ? tf("Show {s}", { s: t(s.label) })
+                              : tf("Hide {s}", { s: t(s.label) })
                         }
                         aria-label={`Show ${s.label} as a tab`}
                       />
@@ -1616,12 +1713,16 @@ export default function App() {
                         className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
                         onClick={() => chooseDefaultTab(s.id)}
                         disabled={hidden}
-                        title={defaultTab === s.id ? "Opens on launch" : "Make this the launch tab"}
+                        title={
+                          defaultTab === s.id
+                            ? t("Opens on launch")
+                            : t("Make this the launch tab")
+                        }
                         aria-label={`Make ${s.label} the default tab`}
                       >
                         {defaultTab === s.id ? "★" : "☆"}
                       </button>
-                      <span className="tab-name">{s.label}</span>
+                      <span className="tab-name">{t(s.label)}</span>
                       <button
                         className="tab-move"
                         onClick={() => moveTab(s.id, -1)}
@@ -1646,19 +1747,20 @@ export default function App() {
           </div>
 
           {/* PRIVACY */}
-          <p className="set-eyebrow">Privacy</p>
+          <p className="set-eyebrow">{t("Privacy")}</p>
           <div className="set-group">
             <div className="set-row">
               <div className="set-label">
                 <span className="set-name">
-                  Clipboard history
+                  {t("Clipboard history")}
                   {status?.clipboard_enabled && (
                     <span className="count-pill">{status.clip_count}</span>
                   )}
                 </span>
                 <span className="set-desc">
-                  Recorded locally, searchable in the Clipboard tab. Password-manager
-                  secrets are never stored.
+                  {t(
+                    "Recorded locally, searchable in the Clipboard tab. Password-manager secrets are never stored.",
+                  )}
                 </span>
               </div>
               <div className="pill-row">
@@ -1678,7 +1780,7 @@ export default function App() {
                       }
                     }}
                   >
-                    {o.label}
+                    {t(o.label)}
                   </button>
                 ))}
               </div>
@@ -1688,7 +1790,7 @@ export default function App() {
               <>
                 <div className="set-row">
                   <div className="set-label">
-                    <span className="set-name">Keep at most</span>
+                    <span className="set-name">{t("Keep at most")}</span>
                   </div>
                   <div className="pill-row">
                     {[
@@ -1708,14 +1810,14 @@ export default function App() {
                           }
                         }}
                       >
-                        {o.label}
+                        {t(o.label)}
                       </button>
                     ))}
                   </div>
                 </div>
                 <div className="set-row">
                   <div className="set-label">
-                    <span className="set-name">Keep for</span>
+                    <span className="set-name">{t("Keep for")}</span>
                   </div>
                   <div className="pill-row">
                     {[
@@ -1735,15 +1837,17 @@ export default function App() {
                           }
                         }}
                       >
-                        {o.label}
+                        {t(o.label)}
                       </button>
                     ))}
                   </div>
                 </div>
                 <div className="set-row">
                   <div className="set-label">
-                    <span className="set-name">Clear history</span>
-                    <span className="set-desc">Delete every recorded clip permanently.</span>
+                    <span className="set-name">{t("Clear history")}</span>
+                    <span className="set-desc">
+                      {t("Delete every recorded clip permanently.")}
+                    </span>
                   </div>
                   <button
                     className="danger-btn"
@@ -1756,7 +1860,7 @@ export default function App() {
                       }
                     }}
                   >
-                    Clear
+                    {t("Clear")}
                   </button>
                 </div>
               </>
@@ -1764,22 +1868,22 @@ export default function App() {
           </div>
 
           {/* SYSTEM */}
-          <p className="set-eyebrow">System</p>
+          <p className="set-eyebrow">{t("System")}</p>
           <div className="set-group">
             <div className="set-row">
               <div className="set-label">
-                <span className="set-name">Updates</span>
+                <span className="set-name">{t("Updates")}</span>
                 <span className="set-desc">
                   {updPhase === "available" || updPhase === "downloading"
-                    ? `Version ${updVersion} is available.`
+                    ? tf("Version {v} is available.", { v: updVersion ?? "" })
                     : updPhase === "none"
-                      ? "You are on the latest version."
-                      : "Installed in place; your index and settings are kept."}
+                      ? t("You are on the latest version.")
+                      : t("Installed in place; your index and settings are kept.")}
                 </span>
               </div>
               {updPhase === "available" ? (
                 <button className="primary-btn" onClick={doInstallUpdate}>
-                  Update &amp; restart
+                  {t("Update & restart")}
                 </button>
               ) : updPhase === "downloading" ? (
                 <button className="primary-btn" disabled>
@@ -1791,7 +1895,7 @@ export default function App() {
                   onClick={() => doCheckUpdate(false)}
                   disabled={updPhase === "checking"}
                 >
-                  {updPhase === "checking" ? "Checking…" : "Check now"}
+                  {updPhase === "checking" ? t("Checking…") : t("Check now")}
                 </button>
               )}
             </div>
@@ -1821,7 +1925,9 @@ export default function App() {
                       </span>
                       {r.content.includes("\n") && (
                         <span className="row-sub">
-                          {r.content.split("\n").filter((l) => l.trim()).length} lines
+                          {tf("{n} lines", {
+                            n: r.content.split("\n").filter((l) => l.trim()).length,
+                          })}
                         </span>
                       )}
                     </div>
@@ -1836,10 +1942,10 @@ export default function App() {
                   <>
                     <div className="row-main">
                       <span className="row-title">{r.name}</span>
-                      <span className="row-sub">Application</span>
+                      <span className="row-sub">{t("Application")}</span>
                     </div>
                     <div className="row-meta">
-                      <span className="app-badge">App</span>
+                      <span className="app-badge">{t("App")}</span>
                     </div>
                   </>
                 ) : r.kind === "bookmark" ? (
@@ -1853,12 +1959,14 @@ export default function App() {
                     </div>
                     <div className="row-meta">
                       {webScope === "all" && (
-                        <span className="web-badge bookmark">Bookmark</span>
+                        <span className="web-badge bookmark">{t("Bookmark")}</span>
                       )}
                       {r.added_at != null && relTimeUnix(r.added_at) && (
                         <span
                           className="mono"
-                          title={`added ${new Date(r.added_at * 1000).toISOString().slice(0, 10)}`}
+                          title={tf("added {d}", {
+                            d: new Date(r.added_at * 1000).toISOString().slice(0, 10),
+                          })}
                         >
                           {relTimeUnix(r.added_at)}
                         </span>
@@ -1874,7 +1982,7 @@ export default function App() {
                     </div>
                     <div className="row-meta">
                       {webScope === "all" && (
-                        <span className="web-badge history">History</span>
+                        <span className="web-badge history">{t("History")}</span>
                       )}
                       {r.last_visit != null && relTimeUnix(r.last_visit) && (
                         <span className="mono">{relTimeUnix(r.last_visit)}</span>
@@ -1888,7 +1996,7 @@ export default function App() {
                       <span className="row-title">
                         <span className="dim-prefix">{r.full_name.split("/")[0]}/</span>
                         {r.full_name.split("/")[1]}
-                        {r.archived && <span className="badge">archived</span>}
+                        {r.archived && <span className="badge">{t("archived")}</span>}
                       </span>
                       {r.description && <span className="row-sub">{r.description}</span>}
                     </div>
@@ -1896,7 +2004,7 @@ export default function App() {
                       {relTime(r.pushed_at) && (
                         <span
                           className="mono"
-                          title={`last push ${r.pushed_at?.slice(0, 10)}`}
+                          title={tf("last push {d}", { d: r.pushed_at?.slice(0, 10) ?? "" })}
                         >
                           {relTime(r.pushed_at)}
                         </span>
@@ -1917,7 +2025,9 @@ export default function App() {
                       {relTimeUnix(r.mtime) && (
                         <span
                           className="mono"
-                          title={`modified ${new Date(r.mtime * 1000).toISOString().slice(0, 10)}`}
+                          title={tf("modified {d}", {
+                            d: new Date(r.mtime * 1000).toISOString().slice(0, 10),
+                          })}
                         >
                           {relTimeUnix(r.mtime)}
                         </span>
@@ -1948,46 +2058,46 @@ export default function App() {
       {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && (
         <div className="empty">
           {source === "github-stars"
-            ? "No matches in your stars"
+            ? t("No matches in your stars")
             : source === "web"
-              ? "No matching bookmarks or history"
+              ? t("No matching bookmarks or history")
               : source === "clips"
-                ? "No matching clips"
-                : "No matches in indexed folders"}
+                ? t("No matching clips")
+                : t("No matches in indexed folders")}
         </div>
       )}
 
       <div className="footer">
         <span className="hints">
           <span>
-            <kbd>↑↓</kbd> navigate
+            <kbd>↑↓</kbd> {t("navigate")}
           </span>
           <span>
-            <kbd>⏎</kbd> {source === "clips" ? "copy" : "open"}
+            <kbd>⏎</kbd> {source === "clips" ? t("copy") : t("open")}
           </span>
           <span>
-            <kbd>tab</kbd> source
+            <kbd>tab</kbd> {t("source")}
           </span>
           {source === "clips" && (
             <>
               <span>
-                <kbd>⇧↑↓</kbd> select
+                <kbd>⇧↑↓</kbd> {t("select")}
               </span>
               <span>
-                <kbd>ctrl⌦</kbd> delete
+                <kbd>ctrl⌦</kbd> {t("delete")}
               </span>
             </>
           )}
           {(source === "local" || source === "web" || source === "github-stars") && (
             <span>
-              <kbd>⇧tab</kbd> {source === "github-stars" ? "sort" : "scope"}
+              <kbd>⇧tab</kbd> {source === "github-stars" ? t("sort") : t("scope")}
             </span>
           )}
           <span>
-            <kbd>ctrl⏎</kbd> web
+            <kbd>ctrl⏎</kbd> {t("web")}
           </span>
           <span>
-            <kbd>esc</kbd> hide
+            <kbd>esc</kbd> {t("hide")}
           </span>
         </span>
         <span className="status">{footerStatus}</span>

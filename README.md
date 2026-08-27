@@ -63,7 +63,10 @@ you vaguely remember (or drop in an image), hit Enter.
   and installed apps — all behind `Alt+Space`.
 - **A real app launcher**: type an app name (prefix, substring, or acronym
   like `vsc`) and `Enter` launches it — Start Menu, `/Applications`, or Linux
-  `.desktop`.
+  `.desktop`. Chinese app names match by pinyin too: `wx`, `weixin`, or
+  `txhy` launch 微信 and 腾讯会议 without switching your input method.
+- **Speaks your language**: the whole UI (tray menu included) is available in
+  English and 简体中文 — auto-follows your OS, switchable in settings.
 - **Clipboard history that respects secrets**: opt-in, stored locally, and
   clips a password manager marks confidential are never recorded (honored on
   Windows and macOS). Cap it by count and age, multi-select and delete.
@@ -113,8 +116,12 @@ are obvious.
 
 Typing in the Local tab surfaces matching installed apps as top hits (an
 `App` badge marks them) — `Enter` launches. Names match by prefix, substring,
-or acronym (`vsc` → Visual Studio Code). Apps come from the Start Menu on
-Windows, `/Applications` on macOS, and `.desktop` entries on Linux.
+or acronym (`vsc` → Visual Studio Code). Chinese names also match by **full
+pinyin or initials** (`wx` / `weixin` → 微信, `wangyiyun` → 网易云音乐),
+heteronyms included (`cq` and `zq` both find 重庆…), so you never switch
+input methods to launch an app — toggleable in settings. Apps come from the
+Start Menu on Windows, `/Applications` on macOS, and `.desktop` entries on
+Linux.
 
 ### Web (bookmarks + history)
 
@@ -169,7 +176,8 @@ and the tab that opens on launch are both configurable.
 ## Settings (tray icon → Settings…)
 
 GitHub token (with connection badge) · indexed folders (add / remove /
-rebuild) · appearance (auto / light / dark) · summon shortcut (recordable) ·
+rebuild) · appearance (auto / light / dark) · **UI language (auto / English /
+中文)** · pinyin app matching · summon shortcut (recordable) ·
 model download source (huggingface.co or **hf-mirror.com** for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · tab order and default tab · clipboard history controls ·
 model download status · one-click in-place updates (signed, verified) ·
