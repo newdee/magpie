@@ -287,8 +287,14 @@ pub fn search_bookmarks(
     };
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
-    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
-    bookmarks::bookmarks_by_ids(conn, &ids, &scores)
+    // over-fetch, then collapse the same URL bookmarked in several browsers
+    // (Edge + Edge SxS…) into its best-ranked row
+    let ids: Vec<i64> = fused.iter().take(limit * 2).map(|(id, _)| *id).collect();
+    let mut hits = bookmarks::bookmarks_by_ids(conn, &ids, &scores)?;
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|h| seen.insert(h.url.clone()));
+    hits.truncate(limit);
+    Ok(hits)
 }
 
 /// Hybrid search over browser history: title/url FTS + one e5 vector each,
@@ -311,7 +317,8 @@ pub fn search_history(
     };
     let fused = rank_hybrid(fts, vecs);
     let scores: std::collections::HashMap<i64, f32> = fused.iter().copied().collect();
-    let ids: Vec<i64> = fused.iter().take(limit).map(|(id, _)| *id).collect();
+    // over-fetch so the cross-browser URL dedup below can't starve the limit
+    let ids: Vec<i64> = fused.iter().take(limit * 2).map(|(id, _)| *id).collect();
     let mut hits = history::history_by_ids(conn, &ids, &scores)?;
     // light visit-count boost: log-scaled so a popular page nudges ahead of a
     // once-visited one at similar relevance, without dominating the ranking
@@ -319,6 +326,11 @@ pub fn search_history(
         h.score += 0.001 * ((h.visit_count.max(1) as f32).ln());
     }
     hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    // the same page visited in several browsers (Edge + Edge SxS…) collapses
+    // into its best-scoring row
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|h| seen.insert(h.url.clone()));
+    hits.truncate(limit);
     Ok(hits)
 }
 
@@ -402,6 +414,49 @@ mod tests {
         assert_eq!(ids.len(), 3);
         // deterministic tie-break: 1 (rank 0) vs 3 (rank 1) → 1 scores higher
         assert_eq!(ids, vec![2, 1, 3]);
+    }
+
+    #[test]
+    fn web_search_finds_mid_token_substrings_and_dedupes_browsers() {
+        // repro of issue #1: "sms" must reach "longsms" (FTS tokenizes it as
+        // one token, so only the LIKE supplement can), and the same URL from
+        // Edge + Edge SxS must collapse to one row
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO bookmarks (url, title, folder, browser, added_at) VALUES
+               ('https://longsms.net/app/shop', '选购号码 · longsms', '公网', 'edge', 1),
+               ('https://longsms.net/app/shop', '选购号码 · longsms', '公网', 'edge sxs', 1);
+             INSERT INTO history (url, title, browser, visit_count, last_visit) VALUES
+               ('https://hero-sms.com/cn', '接码平台 – HeroSMS', 'edge', 5, 1),
+               ('https://longsms.net/app/shop', 'Buy numbers · longsms', 'edge', 11, 1),
+               ('https://longsms.net/app/shop', 'Buy numbers · longsms', 'edge sxs', 11, 1);",
+        )
+        .unwrap();
+        let store = VectorStore::empty();
+
+        // raw FTS really cannot see it (guards the root-cause diagnosis)
+        assert!(!crate::db::build_fts_query("sms").is_empty());
+        let raw: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bookmarks_fts WHERE bookmarks_fts MATCH 'sms*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(raw, 0, "unicode61 FTS matches token prefixes only");
+
+        let hits = search_bookmarks(&conn, &store, "sms", None, 10).unwrap();
+        assert_eq!(hits.len(), 1, "substring supplement + cross-browser dedup");
+        assert!(hits[0].url.contains("longsms"));
+
+        let hits = search_history(&conn, &store, "sms", None, 10).unwrap();
+        assert_eq!(hits.len(), 2, "hero-sms (FTS) + longsms (substring), deduped");
+        let urls: Vec<&str> = hits.iter().map(|h| h.url.as_str()).collect();
+        assert!(urls.contains(&"https://hero-sms.com/cn"));
+        assert!(urls.contains(&"https://longsms.net/app/shop"));
+
+        // LIKE wildcards in user input stay literal
+        assert!(search_bookmarks(&conn, &store, "%", None, 10).unwrap().is_empty());
     }
 
     #[test]

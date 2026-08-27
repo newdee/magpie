@@ -293,9 +293,20 @@ pub fn history_fts_search(conn: &Connection, query: &str, limit: usize) -> Resul
         "SELECT rowid FROM history_fts WHERE history_fts MATCH ?1
          ORDER BY bm25(history_fts, 5.0, 1.0) LIMIT ?2",
     )?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(params![fts_query, limit as i64], |r| r.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // mid-token substring supplement (FTS only matches token prefixes;
+    // "sms" must still find "longsms.net") — see bookmarks_fts_search
+    crate::bookmarks::append_substring_matches(
+        conn,
+        query,
+        "SELECT id FROM history
+         WHERE title LIKE ?1 ESCAPE '\\' OR url LIKE ?1 ESCAPE '\\'
+         LIMIT ?2",
+        limit,
+        &mut rows,
+    )?;
     Ok(rows)
 }
 

@@ -442,10 +442,51 @@ pub fn bookmarks_fts_search(conn: &Connection, query: &str, limit: usize) -> Res
         "SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?1
          ORDER BY bm25(bookmarks_fts, 8.0, 2.0, 3.0) LIMIT ?2",
     )?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(params![fts_query, limit as i64], |r| r.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // FTS matches token *prefixes* only — "sms" can never reach "longsms",
+    // and domains concatenate words all the time. A LIKE scan over the same
+    // columns supplements mid-token matches, appended below the FTS ranks.
+    append_substring_matches(
+        conn,
+        query,
+        "SELECT id FROM bookmarks
+         WHERE title LIKE ?1 ESCAPE '\\' OR url LIKE ?1 ESCAPE '\\' OR folder LIKE ?1 ESCAPE '\\'
+         LIMIT ?2",
+        limit,
+        &mut rows,
+    )?;
     Ok(rows)
+}
+
+/// Append ids whose text contains `query` as a raw substring (case-insensitive
+/// for ASCII) and are not already in `ids`. Shared by bookmark/history search.
+pub(crate) fn append_substring_matches(
+    conn: &Connection,
+    query: &str,
+    sql: &str,
+    limit: usize,
+    ids: &mut Vec<i64>,
+) -> Result<()> {
+    let q = query.trim();
+    if q.len() < 2 {
+        return Ok(());
+    }
+    let pat = format!(
+        "%{}%",
+        q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    );
+    let mut stmt = conn.prepare(sql)?;
+    let extra = stmt
+        .query_map(params![pat, limit as i64], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for id in extra {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(())
 }
 
 pub fn bookmarks_by_ids(
