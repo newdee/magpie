@@ -12,7 +12,7 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 
 <p align="center">
   <a href="https://github.com/newdee/magpie/releases/download/v0.1.17/magpie-demo.mp4">
-    <img src="docs/img/magpie-demo.gif" width="640" alt="40 秒看完 magpie：唤出、启动应用、全文检索、以图搜图、全部数据源"></a>
+    <img src="docs/img/magpie-demo.gif" width="640" alt="46 秒看完 magpie：唤出、启动应用、全文检索、以图搜图、全部数据源"></a>
   <br>
   <sub>▶ <a href="https://github.com/newdee/magpie/releases/download/v0.1.17/magpie-demo.mp4">带声音的完整高清版</a> · 46s · 4 MB</sub>
 </p>
@@ -84,7 +84,7 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
   解析（扫描版/乱码 PDF 仍可按文件名找到）
 - **Word / Excel / PowerPoint**（docx、xlsx、pptx）
 - 其余一切——视频、压缩包、二进制——按文件名索引
-- 范围切换（点选或 `Shift+Tab`）：**全部 / 仅文本 / 仅图片**
+- 范围切换（点选或 `Shift+Tab`）：**全部 / 仅文本 / 仅图片 / 仅视频**
 
 **图片**经 **SigLIP 2** 嵌入，按画面内容检索：
 

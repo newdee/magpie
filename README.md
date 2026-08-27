@@ -13,7 +13,7 @@ you vaguely remember (or drop in an image), hit Enter.
 
 <p align="center">
   <a href="https://github.com/newdee/magpie/releases/download/v0.1.17/magpie-demo.mp4">
-    <img src="docs/img/magpie-demo.gif" width="640" alt="magpie in 40 seconds: summon, launch apps, full-text search, image similarity, all sources"></a>
+    <img src="docs/img/magpie-demo.gif" width="640" alt="magpie in 46 seconds: summon, launch apps, full-text search, image similarity, all sources"></a>
   <br>
   <sub>▶ <a href="https://github.com/newdee/magpie/releases/download/v0.1.17/magpie-demo.mp4">full-quality demo with sound</a> · 46s · 4 MB</sub>
 </p>
@@ -99,7 +99,7 @@ name, and understood formats are searched in full text:
   (scanned/garbled PDFs stay findable by name)
 - **Word / Excel / PowerPoint** (docx, xlsx, pptx)
 - Everything else — video, archives, binaries — indexes by filename
-- Scope pills (or `Shift+Tab`) narrow results: **all / text / images**
+- Scope pills (or `Shift+Tab`) narrow results: **all / text / images / videos**
 
 **Images** are embedded with **SigLIP 2** and searchable by content:
 
