@@ -2251,6 +2251,22 @@ export default function App() {
 
             <div className="set-row">
               <div className="set-label">
+                <span className="set-name">{t("Logs")}</span>
+                <span className="set-desc">
+                  {t("Local activity log (errors, model/ffmpeg status) — attach it to a bug report. Queries are never logged.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                <button
+                  className="ghost-btn"
+                  onClick={() => invoke("open_log_dir").catch((e) => setLastError(String(e)))}
+                >
+                  {t("Open log folder")}
+                </button>
+              </div>
+            </div>
+            <div className="set-row">
+              <div className="set-label">
                 <span className="set-name">{t("Settings file")}</span>
                 <span className="set-desc">
                   {t("Everything except the GitHub token — move your setup to another machine.")}

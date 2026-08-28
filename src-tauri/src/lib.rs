@@ -823,6 +823,7 @@ fn spawn_video_index(app: AppHandle) {
             let (_, label) = magpie_core::videos::ensure_ffmpeg_with(&model_dir, &mut move |m| {
                 *fs2.lock().unwrap() = m;
             })?;
+            log::info!("ffmpeg resolved: {label}");
             *ffmpeg_status.lock().unwrap() = label.to_string();
             let total = pending.len();
             let mut done = 0usize;
@@ -848,7 +849,7 @@ fn spawn_video_index(app: AppHandle) {
                     Err(e) => {
                         // a broken file must not wedge the queue: record the
                         // attempt at this mtime and move on
-                        eprintln!("video index {path}: {e}");
+                        log::warn!("video index {path}: {e}");
                         let _ = conn.execute(
                             "INSERT INTO video_index (file_id, mtime, duration_ms, shot_count, indexed_at)
                              VALUES (?1, ?2, 0, 0, strftime('%s','now'))
@@ -1278,7 +1279,7 @@ fn spawn_clip_watcher(app: AppHandle) {
             Ok(())
         })();
         if let Err(e) = result {
-            eprintln!("clipboard watcher stopped: {e}");
+            log::error!("clipboard watcher stopped: {e}");
         }
         alive.store(false, Ordering::SeqCst);
     });
@@ -1595,6 +1596,7 @@ fn spawn_model_init(app: AppHandle) {
             Ok(Ok(e)) => {
                 *embedder.lock().unwrap() = Some(e);
                 *status.lock().unwrap() = "ready".into();
+                log::info!("semantic model ready");
                 let _ = app.emit("model-status", "ready");
                 // catch up on vectors for repos/files ingested while the model was absent
                 let app2 = app.clone();
@@ -1638,6 +1640,7 @@ fn spawn_model_init(app: AppHandle) {
                 reinit.store(false, Ordering::SeqCst); // succeeded: nothing queued matters
             }
             Ok(Err(e)) => {
+                log::error!("semantic model init failed: {e}");
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg.clone();
                 let _ = app.emit("model-status", msg);
@@ -1648,6 +1651,7 @@ fn spawn_model_init(app: AppHandle) {
                 }
             }
             Err(e) => {
+                log::error!("semantic model init task panicked: {e}");
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg.clone();
                 let _ = app.emit("model-status", msg);
@@ -1789,6 +1793,15 @@ fn build_tray_menu(
     }
 }
 
+/// Open the OS log directory in the file manager — one click to grab the
+/// log file for a bug report.
+#[tauri::command]
+fn open_log_dir(app: AppHandle) -> Result<(), String> {
+    let dir = app.path().app_log_dir().map_err(err_str)?;
+    std::fs::create_dir_all(&dir).map_err(err_str)?;
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(err_str)
+}
+
 /// Retitle the tray menu with the stored language + current badge state.
 fn refresh_tray_menu(app: &AppHandle, lang: &str) -> tauri::Result<()> {
     let version = app
@@ -1818,6 +1831,9 @@ fn set_update_badge(
             return Ok(()); // periodic re-checks re-report the same version
         }
         *v = version.clone();
+    }
+    if !version.is_empty() {
+        log::info!("update available: v{version}");
     }
     let lang = db::open(&state.db_path)
         .ok()
@@ -1901,12 +1917,30 @@ fn show_window(app: &AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
+        // logging first, so every later plugin/setup line can log. Info level,
+        // one rotated file in the OS log dir — enough forensics for bug
+        // reports, small enough to attach to an issue. Queries are never
+        // logged (privacy).
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("magpie".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            log::info!("magpie v{} starting", app.package_info().version);
             let data_dir = app.path().app_data_dir()?;
             let db_path = data_dir.join("stars.db");
             let model_dir = data_dir.join("models");
@@ -2005,7 +2039,7 @@ pub fn run() {
                     .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
             };
             if let Err(e) = register_hotkey(app.handle(), &hotkey) {
-                eprintln!("global shortcut {hotkey} unavailable: {e}");
+                log::warn!("global shortcut {hotkey} unavailable: {e}");
             }
 
             spawn_model_init(app.handle().clone());
@@ -2078,6 +2112,7 @@ pub fn run() {
             export_settings,
             import_settings,
             set_update_badge,
+            open_log_dir,
             open_file
         ])
         .run(tauri::generate_context!())

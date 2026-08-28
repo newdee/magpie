@@ -174,6 +174,10 @@ const ZH: Record<string, string> = {
   "Update & restart": "更新并重启",
   "Check now": "检查更新",
   "Checking…": "检查中…",
+  Logs: "日志",
+  "Local activity log (errors, model/ffmpeg status) — attach it to a bug report. Queries are never logged.":
+    "本地运行日志（错误、模型/ffmpeg 状态）——报 issue 时附上。搜索内容永不记录。",
+  "Open log folder": "打开日志文件夹",
   "Settings file": "设置文件",
   "Everything except the GitHub token — move your setup to another machine.":
     "除 GitHub token 外的全部配置——换机器一键搬家。",

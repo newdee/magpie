@@ -119,7 +119,7 @@ pub fn ensure_ffmpeg_with(
             }
             Err(e) => {
                 let _ = std::fs::remove_file(&zip_path);
-                eprintln!("managed ffmpeg download failed: {e}");
+                log::warn!("managed ffmpeg download failed: {e}");
             }
         }
     }
@@ -301,7 +301,7 @@ pub fn detect_shots(path: &str, opts: DecodeOpts) -> Result<(Vec<Shot>, i64)> {
     match detect_shots_once(path, effective(opts)) {
         Ok(r) => Ok(r),
         Err(e) if effective(opts).hwaccel => {
-            eprintln!("hwaccel decode failed ({e}); falling back to software");
+            log::warn!("hwaccel decode failed ({e}); falling back to software");
             HWACCEL_BROKEN.store(true, std::sync::atomic::Ordering::Relaxed);
             detect_shots_once(path, effective(opts))
         }

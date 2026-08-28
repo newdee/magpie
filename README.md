@@ -232,7 +232,8 @@ model download source (huggingface.co or **hf-mirror.com** for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
 search toggle · decode limits (threads / hardware decode) · tab order and default tab · clipboard history controls ·
 model download status · one-click in-place updates (signed, verified) ·
-app version.
+settings export/import · open-log-folder (local activity log for bug
+reports; queries never logged) · app version.
 
 ## Install
 

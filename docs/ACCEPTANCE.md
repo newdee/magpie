@@ -1,3 +1,22 @@
+# 验收记录 2026-08-28（本地日志，拟 v0.1.19）
+
+此前全应用只有 5 处 eprintln 打 stderr——Windows 发布版无控制台，用户机器上
+一行日志不留，报 issue 拿不到现场。本次：
+1. tauri-plugin-log（log facade 后端，弃 tracing：桌面取证场景无调用链需求，
+   core 保持干依赖 log 宏，未来可平滑迁 tracing-subscriber）。Info 级，
+   LogDir 单文件轮转（2MB KeepOne）+ Stdout（dev）。插件挂 Builder 链最前。
+2. 5 处 eprintln 全部换 log::warn!/error!；新增 info 节点：启动版本行、
+   语义模型 ready/失败、ffmpeg 解析档位、更新可用。搜索词永不入日志（隐私）。
+3. 设置系统区「日志」行 + 「打开日志文件夹」按钮（open_log_dir 命令，
+   app_log_dir + opener，与 open_file 同模式）。i18n 3 键。
+
+三轮：53/53 ×2 复跑一致；clippy 0；tsc+build 过。真机 E2E：debug 版启动
+8 秒杀掉，%LOCALAPPDATA%\com.dfine.magpie\logs\magpie.log 从无到有，含
+"[INFO] magpie v0.1.18 starting" + "semantic model ready"（带时间戳/target/
+级别，UTC）。浏览器 demo：设置区日志行 + 「打开日志文件夹」按钮 + 中文
+描述渲染正确，位于设置文件行上方。
+
+---
 # 验收记录 2026-08-28（更新红点：定时检查 + 托盘/界面提示，拟 v0.1.19）
 
 此前更新只在启动后 15 秒静默查一次，且唯一提示藏在设置面板里——常驻不重启

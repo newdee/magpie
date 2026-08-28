@@ -21,10 +21,12 @@ magpie-core = { path = "../core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+log = { workspace = true }
 tokio = { workspace = true }
 base64 = "0.22"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+tauri-plugin-log = "2"
 enigo = "0.2"
 
 [target."cfg(windows)".dependencies]
