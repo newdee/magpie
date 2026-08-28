@@ -1,3 +1,33 @@
+# 验收记录 2026-08-28（扫描版 PDF OCR：独立子开关，拟 v0.1.22）
+
+用户要求 PDF OCR 且"是否 OCR 由用户决定"。认真评估了 pdf-inspector 自带
+OCR 管线（ocr feature = pdfium 整页渲染 + oar-ocr PP-OCRv6 + 融合
+markdown，接口很完整）——但其 ort 钉 load-dynamic，cargo feature 并集把
+我们静态链接的 ort（e5/SigLIP/PP-OCRv4 全在用）翻成运行时加载，实测
+verify_ocr 直接 STATUS_STACK_BUFFER_OVERRUN 崩。规避需分发 onnxruntime
+（~20MB）+ pdfium（~5MB）动态库或拆独立子进程，为复用一个已有的 OCR
+引擎不值。决策入代码注释。
+
+落地方案：pdf-inspector 只用它的**页面路由判定**（pages_needing_ocr，
+process_pdf 默认构建就有）+ 自研内嵌图提取（lopdf，已在依赖树）+ 现有
+PP-OCRv4 引擎：
+1. files::pdf_ocr_plan（判定 + 文字层 markdown）、pdf_page_images（每页
+   取最大 /Image XObject：DCTDecode=JPEG 直解、Flate 位图按 ColorSpace
+   重建；CCITT/JBIG2/JPX 跳过——抽取代替渲染的已知覆盖边界，典型扫描仪
+   输出为 JPEG）。≤50 页上限。
+2. worker：ocr_pdf 子开关（meta，默认关）才跑；文字层 + OCR 拼接写
+   content（正常 PDF pages 空只标 ocr_mtime 不动 content）；ocr_mtime
+   与图片共用一列按 ext 分流。
+3. UI：OCR 开启时显示「扫描版 PDF」子行 off/on；set_ocr_pdf 命令；
+   导出白名单含 ocr_pdf。
+
+三轮：58/58；clippy 0；tsc+build 过。E2E（verify_pdf_ocr 入库）：lopdf
+构造单页纯图 PDF → pdf-inspector 路由 pages=[1] → 抽回内嵌 JPEG → OCR
+三行逐字全对（含中文）。浏览器 demo：子行随主开关显隐、点开 active 正确
+——期间抓到 demo mock get_status 返回同一对象引用致 React 跳过重渲染
+（真后端每次新 JSON 无此问题），已修（返回拷贝）。
+
+---
 # 验收记录 2026-08-28（视频帧 OCR：文字直达镜头时刻，拟 v0.1.22）
 
 镜头切分已有代表帧与时间范围，OCR 挂上去 = "视频里的字 → 跳到出现时刻"。

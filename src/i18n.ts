@@ -109,6 +109,9 @@ const ZH: Record<string, string> = {
   "Reads the text inside indexed images and video frames (screenshots, scans, subtitles) so you can search it — video hits jump to the moment the text appears. Off by default; enabling downloads a small model (~15 MB).":
     "识别已索引图片和视频帧里的文字（截图、扫描件、字幕），让它们可以被搜到——视频命中直接跳到文字出现的时刻。默认关闭；开启后下载一个小模型（约 15 MB）。",
   "OCR model": "OCR 模型",
+  "Scanned PDFs": "扫描版 PDF",
+  "Also read pages of PDFs that have no text layer. Large scans take a while, so this is your call.":
+    "同时识别没有文字层的 PDF 页面。大部头扫描件较耗时，开不开由你。",
   "Decode limits": "解码限制",
   "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.":
     "限制视频索引时 ffmpeg 的占用，后台跑不打扰前台。硬件解码失败自动回退软解。",

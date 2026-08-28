@@ -837,6 +837,126 @@ fn substring_snippet(content: Option<&str>, query: &str) -> String {
     )
 }
 
+/// Which pages of a PDF need OCR (1-indexed), per pdf-inspector's own
+/// routing signals, plus whatever the text layer already yields. Cheap
+/// relative to OCR itself.
+///
+/// Why not pdf-inspector's built-in OCR pipeline (`ocr` feature): it pins
+/// ort with `load-dynamic`, and cargo's feature union flips OUR statically
+/// linked ort (e5/SigLIP/PP-OCRv4) into runtime loading too — verified to
+/// abort at startup without a distributed onnxruntime dylib. Shipping that
+/// dylib (~20MB) plus pdfium (~5MB) per platform to save re-using an OCR
+/// engine we already have is a bad trade; embedded-image extraction covers
+/// the typical scanner output instead.
+pub fn pdf_ocr_plan(path: &Path) -> Option<(Vec<u32>, String)> {
+    let result = pdf_inspector::process_pdf(path).ok()?;
+    let text = result.markdown.unwrap_or_default();
+    Some((result.pages_needing_ocr, text))
+}
+
+/// Largest embedded image of each requested (1-indexed) page of a PDF.
+/// Scanned PDFs are typically one full-page image per page (JPEG/DCTDecode
+/// or Flate bitmaps from scanner software); pages using other codecs
+/// (CCITT, JBIG2, JPX) are silently skipped — the accepted coverage gap of
+/// extracting instead of rendering (rendering would need pdfium).
+pub fn pdf_page_images(path: &Path, pages: &[u32], max_pages: usize) -> Vec<image::DynamicImage> {
+    let Ok(doc) = lopdf::Document::load(path) else {
+        return Vec::new();
+    };
+    let page_ids = doc.get_pages();
+    let mut out = Vec::new();
+    for page_no in pages.iter().take(max_pages) {
+        let Some(&page_id) = page_ids.get(page_no) else {
+            continue;
+        };
+        let (resources, _) = match doc.get_page_resources(page_id) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let Some(xobjects) = resources
+            .and_then(|r| r.get(b"XObject").ok())
+            .and_then(|o| resolve_dict(&doc, o))
+        else {
+            continue;
+        };
+        let mut best: Option<(u64, image::DynamicImage)> = None;
+        for (_, obj) in xobjects.iter() {
+            let Some(img) = xobject_image(&doc, obj) else {
+                continue;
+            };
+            let px = (img.width() as u64) * (img.height() as u64);
+            if best.as_ref().map(|(b, _)| px > *b).unwrap_or(true) {
+                best = Some((px, img));
+            }
+        }
+        if let Some((_, img)) = best {
+            out.push(img);
+        }
+    }
+    out
+}
+
+fn resolve_dict<'a>(
+    doc: &'a lopdf::Document,
+    obj: &'a lopdf::Object,
+) -> Option<&'a lopdf::Dictionary> {
+    match obj {
+        lopdf::Object::Dictionary(d) => Some(d),
+        lopdf::Object::Reference(id) => doc.get_object(*id).ok()?.as_dict().ok(),
+        _ => None,
+    }
+}
+
+/// Decode one /Image XObject: DCTDecode streams are plain JPEG; FlateDecode
+/// bitmaps are rebuilt from Width/Height/ColorSpace. Everything else: None.
+fn xobject_image(doc: &lopdf::Document, obj: &lopdf::Object) -> Option<image::DynamicImage> {
+    let stream = match obj {
+        lopdf::Object::Reference(id) => doc.get_object(*id).ok()?.as_stream().ok()?,
+        lopdf::Object::Stream(s) => s,
+        _ => return None,
+    };
+    let dict = &stream.dict;
+    if dict.get(b"Subtype").ok()?.as_name().ok()? != b"Image" {
+        return None;
+    }
+    let w = dict.get(b"Width").ok()?.as_i64().ok()? as u32;
+    let h = dict.get(b"Height").ok()?.as_i64().ok()? as u32;
+    if w < 64 || h < 64 {
+        return None; // icons/ornaments, not a scanned page
+    }
+    let filter = dict
+        .get(b"Filter")
+        .ok()
+        .and_then(|f| match f {
+            lopdf::Object::Name(n) => Some(n.clone()),
+            lopdf::Object::Array(a) => a.first().and_then(|o| o.as_name().ok()).map(|n| n.to_vec()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    match filter.as_slice() {
+        b"DCTDecode" => image::load_from_memory(&stream.content).ok(),
+        b"FlateDecode" | b"" => {
+            let data = stream.decompressed_content().ok()?;
+            let gray = dict
+                .get(b"ColorSpace")
+                .ok()
+                .and_then(|c| c.as_name().ok())
+                .map(|n| n == b"DeviceGray")
+                .unwrap_or(false);
+            if gray && data.len() >= (w as usize) * (h as usize) {
+                image::GrayImage::from_raw(w, h, data[..(w as usize) * (h as usize)].to_vec())
+                    .map(image::DynamicImage::ImageLuma8)
+            } else if data.len() >= (w as usize) * (h as usize) * 3 {
+                image::RgbImage::from_raw(w, h, data[..(w as usize) * (h as usize) * 3].to_vec())
+                    .map(image::DynamicImage::ImageRgb8)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn row_to_hit(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileHit> {
     use base64::Engine;
     let thumb: Option<Vec<u8>> = r.get(6)?;

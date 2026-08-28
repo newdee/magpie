@@ -128,6 +128,7 @@ interface Status {
   ocr_enabled: boolean;
   ocr_model: string;
   ocr_status: string;
+  ocr_pdf: boolean;
   syncing: boolean;
   local_indexing: boolean;
   max_file_mb: number;
@@ -1784,6 +1785,40 @@ export default function App() {
                 ))}
               </div>
             </div>
+
+            {status?.ocr_enabled && (
+              <div className="set-row">
+                <div className="set-label">
+                  <span className="set-name">{t("Scanned PDFs")}</span>
+                  <span className="set-desc">
+                    {t(
+                      "Also read pages of PDFs that have no text layer. Large scans take a while, so this is your call.",
+                    )}
+                  </span>
+                </div>
+                <div className="pill-row">
+                  {[
+                    { label: "off", on: false },
+                    { label: "on", on: true },
+                  ].map((o) => (
+                    <button
+                      key={o.label}
+                      className={`source ${(status?.ocr_pdf ?? false) === o.on ? "active" : ""}`}
+                      onClick={async () => {
+                        try {
+                          await invoke("set_ocr_pdf", { enabled: o.on });
+                          await refreshStatus();
+                        } catch (e) {
+                          setLastError(String(e));
+                        }
+                      }}
+                    >
+                      {t(o.label)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="set-row">
               <div className="set-label">

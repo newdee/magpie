@@ -59,6 +59,7 @@ const status = {
   ocr_enabled: false,
   ocr_model: "pp-ocr-v4",
   ocr_status: "",
+  ocr_pdf: false,
   syncing: false,
   local_indexing: false,
 };
@@ -204,7 +205,10 @@ mockIPC((cmd, args) => {
   const q = (args as { query?: string })?.query ?? "";
   switch (cmd) {
     case "get_status":
-      return status;
+      // fresh object each call: the real backend returns new JSON every
+      // time, and React's setState skips re-rendering on a same-reference
+      // value — returning `status` itself froze toggle UI in the demo
+      return { ...status };
     case "list_folders":
       return folders;
     case "add_folder":
@@ -283,6 +287,10 @@ mockIPC((cmd, args) => {
       const a = args as { enabled: boolean };
       status.ocr_enabled = a.enabled;
       status.ocr_status = a.enabled ? "ready" : "";
+      return null;
+    }
+    case "set_ocr_pdf": {
+      status.ocr_pdf = (args as { enabled: boolean }).enabled;
       return null;
     }
     case "plugin:event|listen":

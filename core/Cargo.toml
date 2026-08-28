@@ -27,6 +27,7 @@ hf-hub = { version = "0.5", default-features = false, features = ["ureq", "nativ
 ureq = { version = "3.4", default-features = false, features = ["native-tls"] }
 base64 = "0.22"
 pdf-inspector = "1.15.0"
+lopdf = "0.42"
 # deflate-flate2 (miniz_oxide) instead of default zlib-rs: zlib-rs 0.6 hits a
 # const-eval ICE on rustc 1.89 under the release LTO profile
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }

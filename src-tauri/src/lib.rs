@@ -139,6 +139,7 @@ const EXPORTABLE_META: &[&str] = &[
     "hf_endpoint",
     "ocr_enabled",
     "ocr_model",
+    "ocr_pdf",
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -285,6 +286,10 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .map_err(err_str)?
             .unwrap_or_else(|| magpie_core::ocr::OCR_MODEL_ID.into()),
         "ocr_status": state.ocr_status.lock().unwrap().clone(),
+        "ocr_pdf": db::meta_get(&conn, "ocr_pdf")
+            .map_err(err_str)?
+            .map(|v| v == "1")
+            .unwrap_or(false),
         "syncing": state.sync_running.load(Ordering::SeqCst),
         "local_indexing": state.local_indexing.load(Ordering::SeqCst),
     }))
@@ -1805,6 +1810,63 @@ fn spawn_ocr_index(app: AppHandle) {
                 }
                 done += 1;
             }
+            // scanned PDFs, only when the user opted in (large scans are
+            // slow): pdf-inspector routes which pages need OCR, we pull each
+            // such page's embedded scan image and read it. Native text-layer
+            // markdown and OCR text land in `content` together.
+            let pdf_on = db::meta_get(&conn, "ocr_pdf")
+                .ok()
+                .flatten()
+                .map(|v| v == "1")
+                .unwrap_or(false);
+            if pdf_on {
+                let pdfs: Vec<(i64, String, i64)> = {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, path, mtime FROM files
+                         WHERE lower(ext) = 'pdf'
+                           AND (ocr_mtime IS NULL OR ocr_mtime != mtime)",
+                    )?;
+                    let rows = stmt.query_map([], |r| {
+                        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                    })?;
+                    rows.collect::<magpie_core::rusqlite::Result<Vec<_>>>()?
+                };
+                for (id, path, mtime) in pdfs {
+                    let text = match ocr.lock().unwrap().as_mut() {
+                        Some(engine) => {
+                            let p = std::path::Path::new(&path);
+                            match files::pdf_ocr_plan(p) {
+                                Some((pages, native)) if !pages.is_empty() => {
+                                    let mut parts = vec![native];
+                                    for img in files::pdf_page_images(p, &pages, 50) {
+                                        match engine.extract_text(&img) {
+                                            Ok(t) if !t.trim().is_empty() => parts.push(t),
+                                            Ok(_) => {}
+                                            Err(e) => log::warn!("pdf ocr {path}: {e}"),
+                                        }
+                                    }
+                                    parts.join("\n").chars().take(2_000_000).collect()
+                                }
+                                // text-layer PDF or unreadable: nothing to add
+                                _ => String::new(),
+                            }
+                        }
+                        None => return Ok(done),
+                    };
+                    if text.trim().is_empty() {
+                        conn.execute(
+                            "UPDATE files SET ocr_mtime = ?2 WHERE id = ?1",
+                            magpie_core::rusqlite::params![id, mtime],
+                        )?;
+                    } else {
+                        conn.execute(
+                            "UPDATE files SET content = ?2, ocr_mtime = ?3 WHERE id = ?1",
+                            magpie_core::rusqlite::params![id, text, mtime],
+                        )?;
+                    }
+                    done += 1;
+                }
+            }
             // then video shots: re-grab each unprocessed shot's frame at OCR
             // resolution (960px — the stored thumbs are 96px) and read it
             let decode = decode_opts_from_meta(&conn);
@@ -1974,6 +2036,19 @@ fn build_tray_menu(
         let upd = MenuItem::with_id(app, "update", &label, true, None::<&str>)?;
         Menu::with_items(app, &[&upd, &show, &sync_item, &settings_item, &quit])
     }
+}
+
+/// Sub-switch: also OCR scanned PDFs (pages pdf-inspector routes to OCR).
+/// Separate from the main toggle because large scans are slow — the user
+/// decides. Off by default.
+#[tauri::command]
+fn set_ocr_pdf(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "ocr_pdf", if enabled { "1" } else { "0" }).map_err(err_str)?;
+    if enabled {
+        spawn_ocr_index(app); // no-op until the engine is up
+    }
+    Ok(())
 }
 
 /// Toggle OCR text extraction for indexed images. Turning it on downloads
@@ -2339,6 +2414,7 @@ pub fn run() {
             import_settings,
             set_update_badge,
             set_ocr,
+            set_ocr_pdf,
             open_log_dir,
             open_file
         ])
