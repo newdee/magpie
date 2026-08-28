@@ -1,3 +1,19 @@
+# 验收记录 2026-08-28（hotfix：导出设置 ACL 缺 dialog:allow-save）
+
+用户 mac 实测报 "plugin:dialog|save not allowed by ACL"。根因：capabilities/
+default.json 只声明了 dialog:allow-open（添加文件夹/导入用），导出的
+saveDialog 需要 dialog:allow-save——缺失，**全平台**导出按钮都被 ACL 拦，
+不只 mac。v0.1.19 验收未抓住的原因：浏览器 demo 走 mockIPC，根本不经过
+Tauri ACL，capability 执法只在真运行时发生——假绿。
+
+修复：capability 加一行 dialog:allow-save。验证：cargo build 后
+gen/schemas/acl-manifests.json 与 capabilities.json 均含 allow-save（运行时
+ACL 数据源）；全面对照前端全部插件调用（dialog open/save、updater、
+process relaunch、core event/window/webview）与 permissions 清单，无其他
+缺口。教训入册：凡新增前端 plugin API 调用，必须对照 capabilities 清单做
+静态检查，demo 验证不覆盖 ACL。
+
+---
 # 验收记录 2026-08-28（本地日志，拟 v0.1.19）
 
 此前全应用只有 5 处 eprintln 打 stderr——Windows 发布版无控制台，用户机器上
