@@ -1,5 +1,11 @@
 # 验收记录 2026-08-28（扫描版 PDF OCR：独立子开关，拟 v0.1.22）
 
+（补记：demo mock 修复后按规则重计三轮——R1' 58/58+clippy 0+tsc+build；
+R2' demo UI 子行显隐/开关交互 + 双 E2E；R3' 可复现性复跑（58/58、两个
+E2E 输出与前次逐字一致）+ 静态对账（ocr_pdf meta 4 处闭环、set_ocr_pdf
+4 处对齐、i18n 2:2）。连续三轮发现 0，通过。首次汇报时 R3' 未跑即宣告
+完成，被用户问「三轮全绿吗」戳中——教训：修复后重计的轮次跑完才算数。）
+
 用户要求 PDF OCR 且"是否 OCR 由用户决定"。认真评估了 pdf-inspector 自带
 OCR 管线（ocr feature = pdfium 整页渲染 + oar-ocr PP-OCRv6 + 融合
 markdown，接口很完整）——但其 ort 钉 load-dynamic，cargo feature 并集把
