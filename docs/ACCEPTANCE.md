@@ -1,3 +1,15 @@
+# 验收记录 2026-08-28（图片档补 e5 语义路，拟 v0.1.22）
+
+用户问图片检索顺序时发现：search_files 在 Images 档跳过 e5 chunk 向量列表
+（OCR 之前的正确设计——图片无文本），OCR 落地后过时：OCR 文字进 e5 空间，
+「全部」档语义可命中而「图片」档反而缺席。修复：去掉 scope 排除（无文本
+图片本就不在 chunk 空间，零误伤）。图片档三路齐：FTS（名/路径/OCR 词 +
+LIKE 子串）+ e5（OCR 文本语义）+ SigLIP（画面语义），rank_hybrid 融合。
+
+验证：57/57（新增 images_scope_ranks_by_ocr_text_semantics：查询词不匹配
+文件名、仅 OCR chunk 向量对齐 → Images 档命中 receipt.png 且无文本图片
+不出现）；clippy 0。
+---
 # 验收记录 2026-08-28（图片 OCR：PP-OCRv4 + 内容子串检索补充，拟 v0.1.21）
 
 设置里可选的图片文字识别（默认关），模型可选（先只 PP-OCRv4），三源下载。

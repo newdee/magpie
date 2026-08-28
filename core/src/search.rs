@@ -242,15 +242,16 @@ pub fn search_files(
         .collect();
     let fts: Vec<i64> = fts_hits.into_iter().map(|(id, _)| id).collect();
     let mut vecs = Vec::new();
-    if scope != LocalScope::Images {
-        if let Some(qvec) = qvec {
-            // a file ranks by its best chunk
-            vecs.push(top_similar_grouped(
-                &store.file_chunks,
-                qvec,
-                CANDIDATES_PER_LIST,
-            ));
-        }
+    if let Some(qvec) = qvec {
+        // a file ranks by its best chunk. This used to be skipped for the
+        // Images scope (images had no text), but OCR text now lives in the
+        // same chunk space — images without text simply aren't in it, so
+        // there is nothing to exclude anymore.
+        vecs.push(top_similar_grouped(
+            &store.file_chunks,
+            qvec,
+            CANDIDATES_PER_LIST,
+        ));
     }
     if scope != LocalScope::Text {
         if let Some(image_qvec) = image_qvec {
@@ -527,6 +528,38 @@ mod tests {
 
         // LIKE wildcards in user input stay literal
         assert!(search_bookmarks(&conn, &store, "%", None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn images_scope_ranks_by_ocr_text_semantics() {
+        // an image whose only searchable signal is its OCR text's e5 chunk
+        // vector must surface in the Images scope (the old code skipped the
+        // chunk-vector list there, which predates OCR)
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO folders (path) VALUES ('/p');
+             INSERT INTO files (folder_id, path, name, ext, size, mtime, content) VALUES
+               (1, '/p/receipt.png', 'receipt.png', 'png', 1, 1, 'refund policy screenshot'),
+               (1, '/p/beach.png', 'beach.png', 'png', 1, 1, NULL);",
+        )
+        .unwrap();
+        let store = VectorStore {
+            file_chunks: vec![(1, vec![1.0, 0.0])],
+            ..VectorStore::empty()
+        };
+        // query vector aligned with the OCR chunk; query text matches no name
+        let hits = search_files(
+            &conn,
+            &store,
+            "退款截图",
+            Some(&[1.0, 0.0]),
+            None,
+            LocalScope::Images,
+            10,
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1, "OCR-text semantic hit must surface in Images scope");
+        assert_eq!(hits[0].name, "receipt.png");
     }
 
     #[test]
