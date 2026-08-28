@@ -28,7 +28,7 @@ const folders = [
 ];
 
 const status = {
-  version: "0.1.20",
+  version: "0.1.21",
   repo_count: 1778,
   file_count: 1695,
   folder_count: 2,
