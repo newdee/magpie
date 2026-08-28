@@ -83,9 +83,11 @@ you vaguely remember (or drop in an image), hit Enter.
 - **Copied images are history too**: screenshots and copied pictures join
   the clipboard history with thumbnails, and you can find them later by
   *describing* them ("that error dialog") — SigLIP works on your clips.
-- **Search the text inside your screenshots**: opt-in OCR (PP-OCRv4,
-  ~15 MB, Chinese + English) reads indexed images and makes every word in
-  them searchable — the model picker lives in settings, off by default.
+- **Search the text inside your screenshots — and your videos**: opt-in
+  OCR (PP-OCRv4, ~15 MB, Chinese + English) reads indexed images and each
+  video shot's frame, so subtitles, slides, and on-screen code become
+  searchable; a video hit jumps straight to the moment the text appears.
+  Model picker in settings, off by default.
 - **It learns your habits**: results you actually open float up over time
   (frequency + recency, decaying) — purely local statistics, never enough
   to override a better match.

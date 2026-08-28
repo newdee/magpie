@@ -1741,7 +1741,7 @@ export default function App() {
                 <span className="set-name">{t("Image text (OCR)")}</span>
                 <span className="set-desc">
                   {t(
-                    "Reads the text inside indexed images (screenshots, scans) so you can search it. Off by default; enabling downloads a small model (~15 MB).",
+                    "Reads the text inside indexed images and video frames (screenshots, scans, subtitles) so you can search it — video hits jump to the moment the text appears. Off by default; enabling downloads a small model (~15 MB).",
                   )}
                   {status?.ocr_enabled && status.ocr_status ? (
                     <>

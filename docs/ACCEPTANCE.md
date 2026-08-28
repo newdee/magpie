@@ -1,3 +1,24 @@
+# 验收记录 2026-08-28（视频帧 OCR：文字直达镜头时刻，拟 v0.1.22）
+
+镜头切分已有代表帧与时间范围，OCR 挂上去 = "视频里的字 → 跳到出现时刻"。
+1. video_shots 加 ocr_text（CREATE + ALTER 双处；NULL=未试 ''=试过无字）。
+2. frame_at 拆出 frame_at_sized(width)：OCR 用 960px（库内缩略图仅 96px，
+   重新抽帧），embed/预览维持 480。
+3. worker：spawn_ocr_index 图片扫完接镜头批（64/批循环，decode 限制沿用
+   设置；坏帧记 '' 不卡队列；引擎撤走即退）。视频索引完成后即时补 OCR
+   （periodic 30min 兜底）。同一 ocr_enabled 开关。
+4. 检索：videos 档第三路 video_ocr_search（LIKE 子串，OCR 文本无词界只能
+   子串；每视频取最早命中镜头）进 rrf_fuse；OCR 命中优先 pin 镜头（精确
+   文字命中的时间点比 SigLIP 画面 pin 更准），Enter 从文字出现处播放。
+
+三轮：58/58 ×2 复跑一致（新增 videos_scope_matches_shot_ocr_text_and_pins
+_the_shot：中文子串命中最早镜头 10000..20000ms、每视频一行、无关词空）；
+clippy 0；tsc+build 过。E2E（verify_video_ocr 入库为长期工具）：ocr-test.png
+合成 3s 视频 → detect_shots 1 镜头 → frame_at_sized 960 → OCR 三行全对
+（含"你好世界本地搜索"）→ pending/set/search 链全过、"本地搜索"命中镜头。
+真机 worker 通路结构同图片段（上轮已真机验证），未重复全量烟测。
+
+---
 # 验收记录 2026-08-28（图片档补 e5 语义路，拟 v0.1.22）
 
 用户问图片检索顺序时发现：search_files 在 Images 档跳过 e5 chunk 向量列表

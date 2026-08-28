@@ -56,6 +56,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     // mtime at which OCR last ran for this file (NULL = never); files are
     // re-OCRed when their mtime moves past it
     let _ = conn.execute("ALTER TABLE files ADD COLUMN ocr_mtime INTEGER", []);
+    let _ = conn.execute("ALTER TABLE video_shots ADD COLUMN ocr_text TEXT", []);
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -303,7 +304,10 @@ fn migrate(conn: &Connection) -> Result<()> {
             ts_ms     INTEGER NOT NULL,
             thumb     TEXT,
             embedding BLOB,
-            model     TEXT
+            model     TEXT,
+            -- OCR of the representative frame: NULL = not attempted yet,
+            -- '' = attempted, no readable text
+            ocr_text  TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_video_shots_file ON video_shots(file_id);
 

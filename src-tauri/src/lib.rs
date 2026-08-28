@@ -889,6 +889,8 @@ fn spawn_video_index(app: AppHandle) {
                 if n > 0 {
                     reload_store(&db_path, &store);
                     let _ = app.emit("local-done", json!({ "videos": n }));
+                    // fresh shots may need frame OCR (no-op when OCR is off)
+                    spawn_ocr_index(app.clone());
                 }
             }
             Err(e) => {
@@ -1802,6 +1804,33 @@ fn spawn_ocr_index(app: AppHandle) {
                     )?;
                 }
                 done += 1;
+            }
+            // then video shots: re-grab each unprocessed shot's frame at OCR
+            // resolution (960px — the stored thumbs are 96px) and read it
+            let decode = decode_opts_from_meta(&conn);
+            loop {
+                let batch = magpie_core::videos::pending_ocr_shots(&conn, 64)?;
+                if batch.is_empty() {
+                    break;
+                }
+                for (shot_id, path, ts_ms) in batch {
+                    let text = match ocr.lock().unwrap().as_mut() {
+                        Some(engine) => {
+                            match magpie_core::videos::frame_at_sized(&path, ts_ms, decode, 960)
+                                .and_then(|img| engine.extract_text(&img))
+                            {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    log::warn!("shot ocr {path}@{ts_ms}ms: {e}");
+                                    String::new() // mark attempted, move on
+                                }
+                            }
+                        }
+                        None => return Ok(done),
+                    };
+                    magpie_core::videos::set_shot_ocr(&conn, shot_id, &text)?;
+                    done += 1;
+                }
             }
             Ok(done)
         })

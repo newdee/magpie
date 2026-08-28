@@ -451,9 +451,17 @@ pub fn search_videos_scope(
         None => Vec::new(),
     };
     let sem_ids: Vec<i64> = shot_winners.iter().take(CANDIDATES_PER_LIST).map(|(f, _, _)| *f).collect();
-    let shot_of: std::collections::HashMap<i64, (i64, f32)> =
+    let mut shot_of: std::collections::HashMap<i64, (i64, f32)> =
         shot_winners.into_iter().map(|(f, s, sim)| (f, (s, sim))).collect();
-    let fused = rrf_fuse(&[name_ids, sem_ids]);
+    // third list: shots whose OCR text contains the query. An exact text hit
+    // pins the shot too — it wins over the SigLIP pick, so Enter jumps to
+    // where the text actually appears.
+    let ocr_hits = crate::videos::video_ocr_search(conn, query, CANDIDATES_PER_LIST)?;
+    let ocr_ids: Vec<i64> = ocr_hits.iter().map(|(f, _)| *f).collect();
+    for (file_id, shot_id) in ocr_hits {
+        shot_of.insert(file_id, (shot_id, 1.0));
+    }
+    let fused = rrf_fuse(&[name_ids, sem_ids, ocr_ids]);
     let mut out = Vec::new();
     for (file_id, score) in fused.into_iter().take(limit) {
         match shot_of.get(&file_id) {
@@ -602,6 +610,31 @@ mod tests {
 
         // non-video files never leak into the scope
         assert!(search_videos_scope(&conn, &store, "notes", None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn videos_scope_matches_shot_ocr_text_and_pins_the_shot() {
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO folders (path) VALUES ('/v');
+             INSERT INTO files (folder_id, path, name, ext, size, mtime) VALUES
+               (1, '/v/meeting.mp4', 'meeting.mp4', 'mp4', 1, 1);
+             INSERT INTO video_index (file_id, mtime, duration_ms, shot_count) VALUES (1, 1, 60000, 3);
+             INSERT INTO video_shots (file_id, start_ms, end_ms, ts_ms, thumb, ocr_text) VALUES
+               (1, 0, 10000, 5000, 'x', ''),
+               (1, 10000, 20000, 15000, 'x', '第三季度退款政策说明'),
+               (1, 20000, 30000, 25000, 'x', '退款政策附录');",
+        )
+        .unwrap();
+        let store = VectorStore::empty();
+        // CJK substring of the OCR text, no name match, no vectors: the hit
+        // must land on the EARLIEST matching shot's time range
+        let hits = search_videos_scope(&conn, &store, "退款政策", None, 10).unwrap();
+        assert_eq!(hits.len(), 1, "one row per video");
+        assert_eq!(hits[0].start_ms, 10000, "earliest matching shot pinned");
+        assert_eq!(hits[0].end_ms, 20000);
+        // no OCR match, nothing else to go on: empty
+        assert!(search_videos_scope(&conn, &store, "预算", None, 10).unwrap().is_empty());
     }
 
     #[test]

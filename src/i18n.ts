@@ -106,8 +106,8 @@ const ZH: Record<string, string> = {
   downloaded: "已下载",
   videos: "视频",
   "Image text (OCR)": "图片文字（OCR）",
-  "Reads the text inside indexed images (screenshots, scans) so you can search it. Off by default; enabling downloads a small model (~15 MB).":
-    "识别已索引图片里的文字（截图、扫描件），让它们可以被搜到。默认关闭；开启后下载一个小模型（约 15 MB）。",
+  "Reads the text inside indexed images and video frames (screenshots, scans, subtitles) so you can search it — video hits jump to the moment the text appears. Off by default; enabling downloads a small model (~15 MB).":
+    "识别已索引图片和视频帧里的文字（截图、扫描件、字幕），让它们可以被搜到——视频命中直接跳到文字出现的时刻。默认关闭；开启后下载一个小模型（约 15 MB）。",
   "OCR model": "OCR 模型",
   "Decode limits": "解码限制",
   "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.":

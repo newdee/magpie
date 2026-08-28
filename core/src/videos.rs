@@ -337,16 +337,28 @@ fn detect_shots_once(path: &str, opts: DecodeOpts) -> Result<(Vec<Shot>, i64)> {
 
 /// Grab one frame at `ts_ms` as a decoded image (480px wide).
 pub fn frame_at(path: &str, ts_ms: i64, opts: DecodeOpts) -> Result<image::DynamicImage> {
+    frame_at_sized(path, ts_ms, opts, 480)
+}
+
+/// [`frame_at`] with a chosen output width — OCR wants sharper frames (960)
+/// than embedding/preview does (480).
+pub fn frame_at_sized(
+    path: &str,
+    ts_ms: i64,
+    opts: DecodeOpts,
+    width: u32,
+) -> Result<image::DynamicImage> {
     use ffmpeg_sidecar::command::FfmpegCommand;
     use ffmpeg_sidecar::event::FfmpegEvent;
 
     let opts = effective(opts);
     let seek = format!("{}.{:03}", ts_ms / 1000, ts_ms % 1000);
+    let scale = format!("scale={width}:-2");
     let iter = FfmpegCommand::new_with_path(ffmpeg_bin())
         .args(decode_args(opts))
         .args(["-ss", &seek])
         .input(path)
-        .args(["-frames:v", "1", "-vf", "scale=480:-2", "-an", "-sn"])
+        .args(["-frames:v", "1", "-vf", &scale, "-an", "-sn"])
         .rawvideo()
         .spawn()?
         .iter()?;
@@ -487,6 +499,53 @@ pub fn all_shot_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
 
 /// Video files ranked by filename match: prefix beats substring, shorter
 /// names first. LIKE keeps mid-token matches working ("sms" → longsms.mp4).
+/// Shots whose representative frame hasn't been OCRed yet, oldest video
+/// first. Returns (shot_id, video path, frame timestamp).
+pub fn pending_ocr_shots(conn: &Connection, limit: usize) -> Result<Vec<(i64, String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, f.path, s.ts_ms FROM video_shots s
+         JOIN files f ON f.id = s.file_id
+         WHERE s.ocr_text IS NULL
+         ORDER BY s.file_id, s.start_ms LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Record a shot's OCR result ('' = attempted, nothing readable).
+pub fn set_shot_ocr(conn: &Connection, shot_id: i64, text: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE video_shots SET ocr_text = ?2 WHERE id = ?1",
+        params![shot_id, text],
+    )?;
+    Ok(())
+}
+
+/// Videos whose shot OCR text contains the query (plain substring — OCR text
+/// has no reliable word boundaries). One hit per video: its earliest
+/// matching shot, so Enter jumps to the first time the text appears.
+pub fn video_ocr_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<(i64, i64)>> {
+    let q = query.trim();
+    if q.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let pat = format!(
+        "%{}%",
+        q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    );
+    let mut stmt = conn.prepare(
+        "SELECT file_id, id, MIN(start_ms) FROM video_shots
+         WHERE ocr_text LIKE ?1 ESCAPE '\\'
+         GROUP BY file_id LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![pat, limit as i64], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn video_name_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<i64>> {
     let q = query.trim();
     if q.len() < 2 {
