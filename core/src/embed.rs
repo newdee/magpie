@@ -59,8 +59,13 @@ impl Embedder {
         let manual = cache_dir.join("manual-e5");
         let endpoint = download::hf_endpoint();
         for (remote, local) in E5_FILES {
-            let url = download::file_url(&endpoint, E5_REPO, remote);
-            download::fetch_file(&url, &manual.join(local), &mut |done, total| {
+            // user-selected HF endpoint first, then magpie's own release
+            // assets (asset name = "e5-" + local file name)
+            let urls = [
+                download::file_url(&endpoint, E5_REPO, remote),
+                format!("{}/e5-{local}", download::MODELS_BASE),
+            ];
+            download::fetch_file_any(&urls, &manual.join(local), &mut |done, total| {
                 progress(match total {
                     Some(t) if t > 0 => {
                         format!("downloading {local} {}%", done * 100 / t)

@@ -102,7 +102,9 @@ you vaguely remember (or drop in an image), hit Enter.
   you open.
 - **Yours to arrange**: reorder the tabs and pick which one opens on launch.
 - **Works where the network doesn't**: one-click switch to `hf-mirror.com`
-  for the model download, with resumable transfers and live progress.
+  for the model download, with resumable transfers and live progress — and
+  if both Hugging Face and the mirror are unreachable, the models fall back
+  to magpie's own GitHub release assets automatically (same as ffmpeg).
 - **Cross-platform**: Windows, macOS (Apple Silicon), and Linux.
 
 ## Sources (`Tab` cycles them)

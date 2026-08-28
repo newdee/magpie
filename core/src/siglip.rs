@@ -103,8 +103,13 @@ impl Siglip {
             ("tokenizer_config.json", "tokenizer_config.json", false),
         ];
         for (remote, local, required) in files {
-            let url = crate::download::file_url(&endpoint, REPO, remote);
-            let res = crate::download::fetch_file(&url, &manual.join(local), &mut |done, total| {
+            // user-selected HF endpoint first, then magpie's own release
+            // assets (asset name = "siglip-" + local file name)
+            let urls = [
+                crate::download::file_url(&endpoint, REPO, remote),
+                format!("{}/siglip-{local}", crate::download::MODELS_BASE),
+            ];
+            let res = crate::download::fetch_file_any(&urls, &manual.join(local), &mut |done, total| {
                 progress(match total {
                     Some(t) if t > 0 => format!("downloading {local} {}%", done * 100 / t),
                     _ => format!("downloading {local}"),

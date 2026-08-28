@@ -1,3 +1,23 @@
+# 验收记录 2026-08-28（模型下载第三级兜底：GitHub Release 资产，拟 v0.1.21）
+
+用户要求 hf.co 与镜像都失败时的兜底通道，与 ffmpeg 同模式。实现：
+1. models-1 prerelease 挂 10 个资产（e5 5 件 + siglip 5 件，扁平命名
+   e5-*/siglip-*），notes 注明上游仓库与许可（e5 MIT / siglip2 Apache-2.0）。
+   资产与本地 hf-hub 缓存原件逐字节同源，10/10 尺寸核对一致
+   （e5-model.onnx 470268510B 等）。
+2. download.rs：MODELS_BASE 常量 + fetch_file_any（多源依序尝试；失败源的
+   .part 由下一源续传——各源字节一致，且 fetch_file 的 range 校验兜底
+   拒绝错位服务器）。embed.rs/siglip.rs direct 路径改双 URL：用户所选
+   HF endpoint → github 资产（资产名 = 前缀 + local 名，规则即代码）。
+   hf-hub 协议主路径不动；siglip optional 文件兜底同样 optional。
+3. 下载链现为三级：hf-hub 协议 → 静态直连（用户 endpoint）→ magpie 资产。
+
+三轮：55/55（新增 2：空源列表报错不留文件、资产 URL 扁平不变量）复跑
+一致；clippy 0；E2E 真链路——死源 https://127.0.0.1:9 四次重试耗尽后
+落到 models-1 资产，拉回 e5-config.json 655B 且 JSON 解析 model_type=bert。
+前端无改动。
+
+---
 # 验收记录 2026-08-28（hotfix：导出设置 ACL 缺 dialog:allow-save）
 
 用户 mac 实测报 "plugin:dialog|save not allowed by ACL"。根因：capabilities/

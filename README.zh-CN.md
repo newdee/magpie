@@ -82,7 +82,9 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 - **一键预览**：`→` 原地展开选中结果——文件正文带命中高亮、图片大图、视频
   镜头条带、repo README 开头、剪贴条全文——先看清，再打开。
 - **顺序随你排**：自定义 tab 顺序、指定启动时打开哪个 tab。
-- **网络不通也能用**：一键切 `hf-mirror.com` 下模型，断点续传 + 实时进度。
+- **网络不通也能用**：一键切 `hf-mirror.com` 下模型，断点续传 + 实时进度——
+  Hugging Face 和镜像都不通时，自动回落到 magpie 自己的 GitHub Release
+  资产（和 ffmpeg 同一套兜底）。
 - **跨平台**：Windows、macOS（Apple Silicon）、Linux。
 
 ## 数据源（`Tab` 键切换）

@@ -26,6 +26,33 @@ pub fn file_url(endpoint: &str, repo: &str, path: &str) -> String {
     format!("{}/{repo}/resolve/main/{path}", endpoint.trim_end_matches('/'))
 }
 
+/// Self-hosted copies of the model files (magpie's `models-1` prerelease,
+/// same pattern as the `ffmpeg-1` assets) — the last resort when both
+/// huggingface.co and the user's mirror are unreachable.
+pub const MODELS_BASE: &str = "https://github.com/newdee/magpie/releases/download/models-1";
+
+/// Try `urls` in order until one downloads into `dest`. A `.part` file left
+/// by a failed source is resumed by the next one — every source serves the
+/// same bytes, so cross-source resume is safe (and the range check in
+/// [`fetch_file`] rejects a mismatched server anyway).
+pub fn fetch_file_any(
+    urls: &[String],
+    dest: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<()> {
+    let mut last: Option<anyhow::Error> = None;
+    for url in urls {
+        match fetch_file(url, dest, progress) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                log::warn!("model download source failed: {e:#}");
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("no download sources given")))
+}
+
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         // only the native-tls provider is compiled in (matching hf-hub's tree)
@@ -149,6 +176,24 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
+
+    #[test]
+    fn fetch_file_any_rejects_empty_source_list() {
+        let dest = std::env::temp_dir().join("magpie-test-noexist.bin");
+        let err = fetch_file_any(&[], &dest, &mut |_, _| {}).unwrap_err();
+        assert!(err.to_string().contains("no download sources"));
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn models_base_asset_urls_are_flat() {
+        // release assets can't contain path separators; the per-model prefix
+        // ("e5-", "siglip-") + local name must stay a single path segment
+        let url = format!("{MODELS_BASE}/e5-model.onnx");
+        let tail = url.rsplit('/').next().unwrap();
+        assert_eq!(tail, "e5-model.onnx");
+        assert!(MODELS_BASE.starts_with("https://github.com/"));
+    }
 
     #[test]
     fn builds_resolve_urls() {
