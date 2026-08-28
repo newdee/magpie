@@ -87,7 +87,8 @@ you vaguely remember (or drop in an image), hit Enter.
   OCR (PP-OCRv4, ~15 MB, Chinese + English) reads indexed images and each
   video shot's frame, so subtitles, slides, and on-screen code become
   searchable; a video hit jumps straight to the moment the text appears.
-  Model picker in settings, off by default. A separate sub-switch also
+  Pick PP-OCRv4 (15 MB) or the sharper PP-OCRv6 small (30 MB) in
+  settings, off by default. A separate sub-switch also
   reads scanned PDFs (pages with no text layer) — your call, since large
   scans take a while.
 - **It learns your habits**: results you actually open float up over time

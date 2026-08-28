@@ -1,3 +1,24 @@
+# 验收记录 2026-08-28（OCR 双模型：PP-OCRv4 / PP-OCRv6 small 可切换，拟 v0.1.22）
+
+用户要求兼容 v6、设置展示两模型大小、可切换、三源下载。实现：
+1. ocr.rs 参数化：OCR_MODELS 表（id + 带大小 label）、model_spec 每模型
+   声明文件来源与字典方式（v4 字典内嵌 rec metadata；v6 独立 dict.txt
+   18708 行）、独立缓存目录（manual-ocr / manual-ocr-v6，切换不混文件）。
+   同一推理路径服务两代（同 PaddleOCR 家族 DBNet+CTC，实测 v6 rec 48 高
+   与归一化兼容）。下载源：v4 = 用户 HF endpoint（含镜像）→ models-1；
+   v6 = oar-ocr v0.7.0 release → models-1（ocr-v6-* 三资产已传，200 可达，
+   notes 注明 Apache-2.0 来源）。
+2. shell：spawn_ocr_init 读 meta ocr_model（未知值兜底默认）；set_ocr 校验
+   is_known_model，切换时先 drop 旧引擎再 init（worker 不会用旧模型继续）。
+3. 前端：下拉两项带大小，onChange 即切换并持久化。
+
+三轮：60/60（新增 2：模型表可解析/资产名扁平/label 带 MB/默认在表内；
+缓存目录唯一）；clippy 0；tsc+build 过。E2E：同一文字图 v4 与 v6 双跑
+全对（v6 更优：保留中文词间空格）；v6 下载走 oar 源真实拉取；models-1
+兜底三资产 HEAD 200 尺寸一致。浏览器 demo：双选项渲染、切 v6 →
+status.ocr_model 持久生效。R3 复跑 60/60 + v6 E2E 输出一致。
+
+---
 # 验收记录 2026-08-28（扫描版 PDF OCR：独立子开关，拟 v0.1.22）
 
 （补记：demo mock 修复后按规则重计三轮——R1' 58/58+clippy 0+tsc+build；

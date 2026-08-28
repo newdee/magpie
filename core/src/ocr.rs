@@ -14,13 +14,82 @@ use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
 
-/// Identity of the OCR model; the settings dropdown stores this value and
-/// indexed text is re-extracted when it changes.
+/// Default OCR model (the settings dropdown stores one of [`OCR_MODELS`]).
 pub const OCR_MODEL_ID: &str = "pp-ocr-v4";
 
-const REPO: &str = "SWHL/RapidOCR";
-const DET_REMOTE: &str = "PP-OCRv4/ch_PP-OCRv4_det_infer.onnx";
-const REC_REMOTE: &str = "PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx";
+/// The selectable engines: (id, human label with download size). Both are
+/// PaddleOCR-family DBNet + CTC models, so one inference path serves both.
+pub const OCR_MODELS: &[(&str, &str)] = &[
+    ("pp-ocr-v4", "PP-OCRv4 (15 MB)"),
+    ("pp-ocr-v6-small", "PP-OCRv6 small (30 MB)"),
+];
+
+const RAPIDOCR_REPO: &str = "SWHL/RapidOCR";
+const OAR_BASE: &str = "https://github.com/GreatV/oar-ocr/releases/download/v0.7.0";
+
+/// Everything model-specific: where each file comes from (sources tried in
+/// order — the last is always magpie's own `models-1` mirror) and how the
+/// charset is obtained.
+struct ModelSpec {
+    /// Cache subdirectory, one per model so switching never mixes files.
+    dir: &'static str,
+    /// (primary url template kind, local file name)
+    det: FileSource,
+    rec: FileSource,
+    /// v4 embeds the charset in the rec model's ONNX metadata; v6 ships a
+    /// dictionary file.
+    dict: Option<FileSource>,
+}
+
+struct FileSource {
+    /// Primary download location. `HfPath` goes through the user-selected
+    /// endpoint (huggingface.co or the mirror); `Url` is absolute.
+    primary: Primary,
+    local: &'static str,
+}
+
+enum Primary {
+    HfPath(&'static str),
+    Url(&'static str),
+}
+
+fn model_spec(model_id: &str) -> Result<ModelSpec> {
+    match model_id {
+        "pp-ocr-v4" => Ok(ModelSpec {
+            dir: "manual-ocr",
+            det: FileSource {
+                primary: Primary::HfPath("PP-OCRv4/ch_PP-OCRv4_det_infer.onnx"),
+                local: "ocr-det.onnx",
+            },
+            rec: FileSource {
+                primary: Primary::HfPath("PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx"),
+                local: "ocr-rec.onnx",
+            },
+            dict: None,
+        }),
+        "pp-ocr-v6-small" => Ok(ModelSpec {
+            dir: "manual-ocr-v6",
+            det: FileSource {
+                primary: Primary::Url("pp-ocrv6_small_det.onnx"),
+                local: "ocr-v6-det.onnx",
+            },
+            rec: FileSource {
+                primary: Primary::Url("pp-ocrv6_small_rec.onnx"),
+                local: "ocr-v6-rec.onnx",
+            },
+            dict: Some(FileSource {
+                primary: Primary::Url("ppocrv6_dict.txt"),
+                local: "ocr-v6-dict.txt",
+            }),
+        }),
+        other => anyhow::bail!("unknown OCR model {other:?}"),
+    }
+}
+
+/// True when `model_id` names a selectable OCR model.
+pub fn is_known_model(model_id: &str) -> bool {
+    OCR_MODELS.iter().any(|(id, _)| *id == model_id)
+}
 
 /// Detection input is capped at this edge (multiple of 32), like RapidOCR.
 const DET_MAX_EDGE: u32 = 960;
@@ -39,29 +108,49 @@ pub struct Ocr {
 }
 
 impl Ocr {
-    /// Download (or reuse) the two model files and load both sessions.
-    /// Blocking; call off the UI thread. Sources per file: the user-selected
-    /// HF endpoint, then magpie's own `models-1` release assets.
+    /// [`Self::new_with_model`] with the default model.
     pub fn new(cache_dir: &Path, progress: &mut dyn FnMut(String)) -> Result<Self> {
-        let manual = cache_dir.join("manual-ocr");
+        Self::new_with_model(cache_dir, OCR_MODEL_ID, progress)
+    }
+
+    /// Download (or reuse) the selected model's files and load both
+    /// sessions. Blocking; call off the UI thread. Sources per file: the
+    /// primary location (user-selected HF endpoint for v4, the oar-ocr
+    /// release for v6), then magpie's own `models-1` release assets.
+    pub fn new_with_model(
+        cache_dir: &Path,
+        model_id: &str,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<Self> {
+        let spec = model_spec(model_id)?;
+        let manual = cache_dir.join(spec.dir);
         let endpoint = crate::download::hf_endpoint();
-        let files = [(DET_REMOTE, "ocr-det.onnx"), (REC_REMOTE, "ocr-rec.onnx")];
-        for (remote, local) in files {
-            let urls = [
-                crate::download::file_url(&endpoint, REPO, remote),
-                format!("{}/{local}", crate::download::MODELS_BASE),
-            ];
+        let fetch = |src: &FileSource, progress: &mut dyn FnMut(String)| -> Result<()> {
+            let primary = match src.primary {
+                Primary::HfPath(p) => crate::download::file_url(&endpoint, RAPIDOCR_REPO, p),
+                Primary::Url(name) => format!("{OAR_BASE}/{name}"),
+            };
+            let urls = [primary, format!("{}/{}", crate::download::MODELS_BASE, src.local)];
+            let local = src.local;
             crate::download::fetch_file_any(&urls, &manual.join(local), &mut |done, total| {
                 progress(match total {
                     Some(t) if t > 0 => format!("downloading {local} {}%", done * 100 / t),
                     _ => format!("downloading {local}"),
                 });
-            })?;
+            })
+        };
+        fetch(&spec.det, progress)?;
+        fetch(&spec.rec, progress)?;
+        if let Some(dict) = &spec.dict {
+            fetch(dict, progress)?;
         }
         progress("loading".into());
-        let det = Session::builder()?.commit_from_file(manual.join("ocr-det.onnx"))?;
-        let rec = Session::builder()?.commit_from_file(manual.join("ocr-rec.onnx"))?;
-        let charset = rec_charset(&rec)?;
+        let det = Session::builder()?.commit_from_file(manual.join(spec.det.local))?;
+        let rec = Session::builder()?.commit_from_file(manual.join(spec.rec.local))?;
+        let charset = match &spec.dict {
+            Some(dict) => file_charset(&manual.join(dict.local))?,
+            None => rec_charset(&rec)?,
+        };
         Ok(Self { det, rec, charset })
     }
 
@@ -247,6 +336,17 @@ impl Ocr {
     }
 }
 
+/// Charset from a PaddleOCR dictionary file: one entry per line (the v6
+/// distribution ships it separately instead of embedding it).
+fn file_charset(path: &Path) -> Result<Vec<String>> {
+    let raw = std::fs::read_to_string(path)?;
+    let charset: Vec<String> = raw.lines().map(str::to_string).collect();
+    if charset.len() < 100 {
+        bail!("dictionary suspiciously small ({} entries)", charset.len());
+    }
+    Ok(charset)
+}
+
 /// The recognition charset lives in the rec model's ONNX metadata under
 /// "character", one entry per line — the RapidOCR convention.
 fn rec_charset(rec: &Session) -> Result<Vec<String>> {
@@ -259,6 +359,39 @@ fn rec_charset(rec: &Session) -> Result<Vec<String>> {
         bail!("embedded charset suspiciously small ({} entries)", charset.len());
     }
     Ok(charset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_listed_model_has_a_resolvable_spec() {
+        for (id, label) in OCR_MODELS {
+            assert!(is_known_model(id));
+            let spec = model_spec(id).expect("listed model must resolve");
+            // release-asset names must be flat (no path separators)
+            for src in [Some(&spec.det), Some(&spec.rec), spec.dict.as_ref()].into_iter().flatten()
+            {
+                assert!(!src.local.contains('/'), "{id}: {}", src.local);
+            }
+            assert!(label.contains("MB"), "label should show the download size");
+        }
+        assert!(is_known_model(OCR_MODEL_ID), "default must be listed");
+        assert!(model_spec("nope").is_err());
+        assert!(!is_known_model("nope"));
+    }
+
+    #[test]
+    fn model_cache_dirs_are_distinct() {
+        // switching models must never mix files in one cache directory
+        let dirs: Vec<&str> = OCR_MODELS
+            .iter()
+            .map(|(id, _)| model_spec(id).unwrap().dir)
+            .collect();
+        let unique: std::collections::HashSet<&&str> = dirs.iter().collect();
+        assert_eq!(unique.len(), dirs.len());
+    }
 }
 
 #[derive(Debug)]

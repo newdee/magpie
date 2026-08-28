@@ -1756,10 +1756,22 @@ export default function App() {
                 <select
                   className="set-select"
                   value={status?.ocr_model ?? "pp-ocr-v4"}
-                  onChange={() => {}}
+                  onChange={async (e) => {
+                    try {
+                      // ids/labels mirror core::ocr::OCR_MODELS
+                      await invoke("set_ocr", {
+                        enabled: status?.ocr_enabled ?? false,
+                        model: e.target.value,
+                      });
+                      await refreshStatus();
+                    } catch (err) {
+                      setLastError(String(err));
+                    }
+                  }}
                   aria-label={t("OCR model")}
                 >
-                  <option value="pp-ocr-v4">PP-OCRv4</option>
+                  <option value="pp-ocr-v4">PP-OCRv4 (15 MB)</option>
+                  <option value="pp-ocr-v6-small">PP-OCRv6 small (30 MB)</option>
                 </select>
                 {[
                   { label: "off", on: false },

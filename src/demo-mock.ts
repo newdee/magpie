@@ -284,8 +284,9 @@ mockIPC((cmd, args) => {
     case "search_clips":
       return clipHits; // recent list on empty query, matches on typed ones
     case "set_ocr": {
-      const a = args as { enabled: boolean };
+      const a = args as { enabled: boolean; model: string };
       status.ocr_enabled = a.enabled;
+      status.ocr_model = a.model;
       status.ocr_status = a.enabled ? "ready" : "";
       return null;
     }

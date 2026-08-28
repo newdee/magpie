@@ -1701,6 +1701,11 @@ fn spawn_ocr_init(app: AppHandle) {
     let status = state.ocr_status.clone();
     let model_dir = state.model_dir.clone();
     let initing = state.ocr_initing.clone();
+    let model_id = db::open(&state.db_path)
+        .ok()
+        .and_then(|c| db::meta_get(&c, "ocr_model").ok().flatten())
+        .filter(|m| magpie_core::ocr::is_known_model(m))
+        .unwrap_or_else(|| magpie_core::ocr::OCR_MODEL_ID.into());
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let init = tokio::task::spawn_blocking({
@@ -1709,7 +1714,7 @@ fn spawn_ocr_init(app: AppHandle) {
             let app = app.clone();
             move || {
                 let mut last = String::new();
-                magpie_core::ocr::Ocr::new(&model_dir, &mut |msg| {
+                magpie_core::ocr::Ocr::new_with_model(&model_dir, &model_id, &mut |msg| {
                     if msg != last {
                         last = msg.clone();
                         *status.lock().unwrap() = msg.clone();
@@ -2061,13 +2066,16 @@ fn set_ocr(
     enabled: bool,
     model: String,
 ) -> Result<(), String> {
-    if model != magpie_core::ocr::OCR_MODEL_ID {
+    if !magpie_core::ocr::is_known_model(&model) {
         return Err(format!("unknown OCR model {model:?}"));
     }
     let conn = db::open(&state.db_path).map_err(err_str)?;
     db::meta_set(&conn, "ocr_enabled", if enabled { "1" } else { "0" }).map_err(err_str)?;
     db::meta_set(&conn, "ocr_model", &model).map_err(err_str)?;
     if enabled {
+        // drop any loaded engine first: the model may have changed, and the
+        // index worker must not keep extracting with the old one meanwhile
+        *state.ocr.lock().unwrap() = None;
         spawn_ocr_init(app);
     } else {
         *state.ocr.lock().unwrap() = None; // the index worker stops on its own
