@@ -52,6 +52,12 @@ struct AppState {
     /// Version string of a pending update ("" = none) — drives the tray
     /// badge and the extra tray menu item.
     update_badge: Arc<StdMutex<String>>,
+    /// OCR engine, present only while the setting is on and init succeeded.
+    ocr: Arc<StdMutex<Option<magpie_core::ocr::Ocr>>>,
+    /// "" (off/unchecked) / download progress / "ready" / "failed: <why>".
+    ocr_status: Arc<StdMutex<String>>,
+    ocr_initing: Arc<AtomicBool>,
+    ocr_indexing: Arc<AtomicBool>,
     /// Desired state of the clipboard watcher; the thread exits when false.
     clip_watch: Arc<AtomicBool>,
     /// Liveness guard so toggling can't stack watcher threads.
@@ -131,6 +137,8 @@ const EXPORTABLE_META: &[&str] = &[
     "clip_max_entries",
     "max_file_mb",
     "hf_endpoint",
+    "ocr_enabled",
+    "ocr_model",
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -176,11 +184,17 @@ async fn import_settings(
             }
         }
     }
-    // side effects that read meta live: aliases re-attach, tray language
+    // side effects that read meta live: aliases re-attach, tray language,
+    // OCR spin-up if the imported settings enable it
     spawn_app_scan(app.clone());
     if let Ok(conn) = db::open(&state.db_path) {
         if let Ok(Some(lang)) = db::meta_get(&conn, "ui_lang") {
             let _ = refresh_tray_menu(&app, &lang);
+        }
+        if let Ok(Some(v)) = db::meta_get(&conn, "ocr_enabled") {
+            if v == "1" {
+                spawn_ocr_init(app.clone());
+            }
         }
     }
     Ok(doc.get("frontend").cloned().unwrap_or(json!({})))
@@ -263,6 +277,14 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "has_token": has_token,
         "model": state.model_status.lock().unwrap().clone(),
         "image_model": state.siglip_status.lock().unwrap().clone(),
+        "ocr_enabled": db::meta_get(&conn, "ocr_enabled")
+            .map_err(err_str)?
+            .map(|v| v == "1")
+            .unwrap_or(false),
+        "ocr_model": db::meta_get(&conn, "ocr_model")
+            .map_err(err_str)?
+            .unwrap_or_else(|| magpie_core::ocr::OCR_MODEL_ID.into()),
+        "ocr_status": state.ocr_status.lock().unwrap().clone(),
         "syncing": state.sync_running.load(Ordering::SeqCst),
         "local_indexing": state.local_indexing.load(Ordering::SeqCst),
     }))
@@ -1661,6 +1683,138 @@ fn spawn_model_init(app: AppHandle) {
     });
 }
 
+/// Load the OCR models in the background (downloading on first run), then
+/// sweep any images that are waiting for text extraction.
+fn spawn_ocr_init(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.ocr_initing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let ocr = state.ocr.clone();
+    let status = state.ocr_status.clone();
+    let model_dir = state.model_dir.clone();
+    let initing = state.ocr_initing.clone();
+    tauri::async_runtime::spawn(async move {
+        *status.lock().unwrap() = "loading".into();
+        let init = tokio::task::spawn_blocking({
+            let model_dir = model_dir.clone();
+            let status = status.clone();
+            let app = app.clone();
+            move || {
+                let mut last = String::new();
+                magpie_core::ocr::Ocr::new(&model_dir, &mut |msg| {
+                    if msg != last {
+                        last = msg.clone();
+                        *status.lock().unwrap() = msg.clone();
+                        let _ = app.emit("model-status", msg);
+                    }
+                })
+            }
+        })
+        .await;
+        match init {
+            Ok(Ok(engine)) => {
+                // the user may have toggled OCR off while the download ran;
+                // installing the engine anyway would keep extracting forever
+                let still_on = {
+                    let state = app.state::<AppState>();
+                    db::open(&state.db_path)
+                        .ok()
+                        .and_then(|c| db::meta_get(&c, "ocr_enabled").ok().flatten())
+                        .map(|v| v == "1")
+                        .unwrap_or(false)
+                };
+                if still_on {
+                    *ocr.lock().unwrap() = Some(engine);
+                    *status.lock().unwrap() = "ready".into();
+                    log::info!("ocr engine ready");
+                    spawn_ocr_index(app.clone());
+                } else {
+                    *status.lock().unwrap() = String::new();
+                }
+            }
+            Ok(Err(e)) => {
+                log::error!("ocr init failed: {e}");
+                *status.lock().unwrap() = format!("failed: {e}");
+            }
+            Err(e) => {
+                log::error!("ocr init task panicked: {e}");
+                *status.lock().unwrap() = format!("failed: {e}");
+            }
+        }
+        initing.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Extract text from indexed images that OCR hasn't seen yet (or whose file
+/// changed since). Updates `files.content`, which flows into FTS via the
+/// existing triggers and into the e5 space on the next embed pass.
+fn spawn_ocr_index(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state.ocr_indexing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let ocr = state.ocr.clone();
+    let db_path = state.db_path.clone();
+    let indexing = state.ocr_indexing.clone();
+    tauri::async_runtime::spawn(async move {
+        let worked = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let conn = db::open(&db_path)?;
+            let exts = "'jpg','jpeg','png','webp','bmp','gif'";
+            let pending: Vec<(i64, String, i64)> = {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT id, path, mtime FROM files
+                     WHERE lower(ext) IN ({exts})
+                       AND (ocr_mtime IS NULL OR ocr_mtime != mtime)"
+                ))?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+                })?;
+                rows.collect::<magpie_core::rusqlite::Result<Vec<_>>>()?
+            };
+            let mut done = 0usize;
+            for (id, path, mtime) in pending {
+                // engine gone (setting turned off) — stop quietly
+                let text = match ocr.lock().unwrap().as_mut() {
+                    Some(engine) => {
+                        match engine.extract_text_from_path(std::path::Path::new(&path)) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                // unreadable file or inference error: log,
+                                // mark attempted, move on
+                                log::warn!("ocr {path}: {e}");
+                                String::new()
+                            }
+                        }
+                    }
+                    None => return Ok(done),
+                };
+                if text.trim().is_empty() {
+                    // nothing readable: only record the attempt
+                    conn.execute(
+                        "UPDATE files SET ocr_mtime = ?2 WHERE id = ?1",
+                        magpie_core::rusqlite::params![id, mtime],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE files SET content = ?2, ocr_mtime = ?3 WHERE id = ?1",
+                        magpie_core::rusqlite::params![id, text, mtime],
+                    )?;
+                }
+                done += 1;
+            }
+            Ok(done)
+        })
+        .await;
+        if let Ok(Ok(n)) = worked {
+            if n > 0 {
+                log::info!("ocr pass extracted text for {n} image(s)");
+            }
+        }
+        indexing.store(false, Ordering::SeqCst);
+    });
+}
+
 /// Load SigLIP in the background, then embed any images that are waiting.
 fn spawn_siglip_init(app: AppHandle) {
     let state = app.state::<AppState>();
@@ -1791,6 +1945,31 @@ fn build_tray_menu(
         let upd = MenuItem::with_id(app, "update", &label, true, None::<&str>)?;
         Menu::with_items(app, &[&upd, &show, &sync_item, &settings_item, &quit])
     }
+}
+
+/// Toggle OCR text extraction for indexed images. Turning it on downloads
+/// the models (first run) and sweeps pending images; turning it off drops
+/// the engine — extracted text stays searchable until a folder rebuild.
+#[tauri::command]
+fn set_ocr(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+    model: String,
+) -> Result<(), String> {
+    if model != magpie_core::ocr::OCR_MODEL_ID {
+        return Err(format!("unknown OCR model {model:?}"));
+    }
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "ocr_enabled", if enabled { "1" } else { "0" }).map_err(err_str)?;
+    db::meta_set(&conn, "ocr_model", &model).map_err(err_str)?;
+    if enabled {
+        spawn_ocr_init(app);
+    } else {
+        *state.ocr.lock().unwrap() = None; // the index worker stops on its own
+        *state.ocr_status.lock().unwrap() = String::new();
+    }
+    Ok(())
 }
 
 /// Open the OS log directory in the file manager — one click to grab the
@@ -1994,6 +2173,10 @@ pub fn run() {
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
                 apps: Arc::new(StdMutex::new(Vec::new())),
                 update_badge: Arc::new(StdMutex::new(String::new())),
+                ocr: Arc::new(StdMutex::new(None)),
+                ocr_status: Arc::new(StdMutex::new(String::new())),
+                ocr_initing: Arc::new(AtomicBool::new(false)),
+                ocr_indexing: Arc::new(AtomicBool::new(false)),
                 clip_watch: Arc::new(AtomicBool::new(clipboard_enabled)),
                 clip_thread_alive: Arc::new(AtomicBool::new(false)),
             });
@@ -2044,6 +2227,18 @@ pub fn run() {
 
             spawn_model_init(app.handle().clone());
             spawn_siglip_init(app.handle().clone());
+            // OCR is opt-in; only spin it up when the user enabled it
+            {
+                let state = app.state::<AppState>();
+                let on = db::open(&state.db_path)
+                    .ok()
+                    .and_then(|c| db::meta_get(&c, "ocr_enabled").ok().flatten())
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
+                if on {
+                    spawn_ocr_init(app.handle().clone());
+                }
+            }
             // refresh quietly at launch: stars (if token configured) + local folders
             spawn_sync(app.handle().clone());
             spawn_local_index(app.handle().clone());
@@ -2060,6 +2255,8 @@ pub fn run() {
                     spawn_local_index(periodic.clone());
                     spawn_bookmark_sync(periodic.clone());
                     spawn_video_index(periodic.clone());
+                    // no-op unless the engine is loaded (OCR setting on)
+                    spawn_ocr_index(periodic.clone());
                 }
             });
             Ok(())
@@ -2112,6 +2309,7 @@ pub fn run() {
             export_settings,
             import_settings,
             set_update_badge,
+            set_ocr,
             open_log_dir,
             open_file
         ])

@@ -125,6 +125,9 @@ interface Status {
   has_token: boolean;
   model: string;
   image_model: string;
+  ocr_enabled: boolean;
+  ocr_model: string;
+  ocr_status: string;
   syncing: boolean;
   local_indexing: boolean;
   max_file_mb: number;
@@ -1721,6 +1724,55 @@ export default function App() {
                     onClick={async () => {
                       try {
                         await invoke("set_video_indexing", { enabled: o.on });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Image text (OCR)")}</span>
+                <span className="set-desc">
+                  {t(
+                    "Reads the text inside indexed images (screenshots, scans) so you can search it. Off by default; enabling downloads a small model (~15 MB).",
+                  )}
+                  {status?.ocr_enabled && status.ocr_status ? (
+                    <>
+                      {" · "}
+                      {status.ocr_status === "ready" ? t("ready") : status.ocr_status}
+                    </>
+                  ) : null}
+                </span>
+              </div>
+              <div className="pill-row">
+                <select
+                  className="set-select"
+                  value={status?.ocr_model ?? "pp-ocr-v4"}
+                  onChange={() => {}}
+                  aria-label={t("OCR model")}
+                >
+                  <option value="pp-ocr-v4">PP-OCRv4</option>
+                </select>
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${(status?.ocr_enabled ?? false) === o.on ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_ocr", {
+                          enabled: o.on,
+                          model: status?.ocr_model ?? "pp-ocr-v4",
+                        });
                         await refreshStatus();
                       } catch (e) {
                         setLastError(String(e));

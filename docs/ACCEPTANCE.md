@@ -1,3 +1,34 @@
+# 验收记录 2026-08-28（图片 OCR：PP-OCRv4 + 内容子串检索补充，拟 v0.1.21）
+
+设置里可选的图片文字识别（默认关），模型可选（先只 PP-OCRv4），三源下载。
+1. core/ocr.rs：det（DBNet 4.5MB）+ rec（CRNN 10.4MB）直跑 ort。字典内嵌
+   rec 模型 metadata "character"（RapidOCR 惯例，无第三个文件）。det 后处理
+   简化为连通域 BFS + 外接矩形按面积/周长比扩张（文档/截图场景够用）；
+   rec 贪心 CTC + 置信度均值 <0.5 丢弃。下载三源：用户所选 HF endpoint →
+   镜像（同 endpoint 机制）→ models-1 资产（ocr-det/ocr-rec，已传，notes
+   注明 RapidOCR/PaddleOCR Apache-2.0 来源）。
+2. 索引：files.ocr_mtime 列（CREATE TABLE + 旧库 ALTER 双处——首轮 E2E 抓到
+   只写 ALTER 时新库缺列，"no such column"）；worker 挑图→提取→UPDATE
+   content，FTS 触发器自动同步，e5 嵌入 hash 感知自动重嵌。开关 off 时
+   engine 置 None，worker 自停；init 完成时复查 meta（修掉"下载中关掉、
+   完成后仍装回"竞态）。导出/导入白名单含 ocr 两键，导入 on 即拉起。
+3. 检索补充：FTS unicode61 把连续中文串当单 token，"本地搜索" 永不命中
+   "你好世界本地搜索"（issue #1 web 侧同款坑）——files_fts_search 追加
+   name/content LIKE 子串兜底 + 手工构造高亮 snippet（char boundary 安全，
+   OCR 无分隔文本全靠它）。
+4. UI：索引区「图片文字（OCR）」行——模型下拉（PP-OCRv4）+ off/on +
+   状态（下载%/就绪/失败）。
+
+三轮（重计一次：R3 review 抓到 init 竞态）：56/56（新增 snippet 边界测）；
+clippy 0；tsc+build 过。E2E×3：①引擎——GDI+ 合成三行已知文字图，输出
+"Hello World 2026 / magpie local search / 你好世界本地搜索" 逐字全对（HF
+下载链真跑）；②死源兜底（127.0.0.1:9 → models-1 资产拉回）；③真 app——
+meta 开 + debug 版启动，4 秒 "ocr engine ready"（15MB 真下载入 model_dir），
+真图库 "ocr pass extracted text for 8 image(s)"，检索通路 verify_ocr_index
+断言 pending→extract→update→FTS("Hello")+LIKE("本地搜索") 全命中。浏览器
+demo：OCR 行中文渲染、下拉、点开→active+「就绪」。
+
+---
 # 验收记录 2026-08-28（模型下载第三级兜底：GitHub Release 资产，拟 v0.1.21）
 
 用户要求 hf.co 与镜像都失败时的兜底通道，与 ffmpeg 同模式。实现：

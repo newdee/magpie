@@ -761,14 +761,80 @@ pub fn files_fts_search(
          FROM files_fts WHERE files_fts MATCH ?1
          ORDER BY bm25(files_fts, 8.0, 2.0, 1.0) LIMIT ?2",
     )?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(params![fts_query, limit as i64], |r| {
             // snippet() is NULL when the match is on a NULL-content row (images)
             let snip: Option<String> = r.get(1)?;
             Ok((r.get::<_, i64>(0)?, snip.unwrap_or_default()))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    // FTS unicode61 lumps a CJK run into one token, so "本地" never matches a
+    // "本地搜索…" document (the web sources hit the same wall — see the LIKE
+    // supplement in bookmarks.rs). Top up with plain substring matches over
+    // name and content; OCR text, which has no word separators at all,
+    // depends on this.
+    if rows.len() < limit {
+        let seen: std::collections::HashSet<i64> = rows.iter().map(|(id, _)| *id).collect();
+        let esc = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pat = format!("%{esc}%");
+        let mut like = conn.prepare(
+            "SELECT id, content FROM files
+             WHERE name LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\'
+             ORDER BY mtime DESC LIMIT ?2",
+        )?;
+        let extra = like
+            .query_map(params![pat, limit as i64], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, content) in extra {
+            if rows.len() >= limit {
+                break;
+            }
+            if seen.contains(&id) {
+                continue;
+            }
+            rows.push((id, substring_snippet(content.as_deref(), query)));
+        }
+    }
     Ok(rows)
+}
+
+/// Hand-built equivalent of the FTS snippet for a plain substring hit:
+/// `…before \u{1}match\u{2} after…`, char-boundary safe. Empty when the
+/// match was on the file name only.
+fn substring_snippet(content: Option<&str>, query: &str) -> String {
+    let (Some(content), false) = (content, query.is_empty()) else {
+        return String::new();
+    };
+    let Some(at) = content.find(query) else {
+        return String::new();
+    };
+    let start = content[..at]
+        .char_indices()
+        .rev()
+        .take(20)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(at);
+    let tail = &content[at + query.len()..];
+    let end = tail
+        .char_indices()
+        .take(30)
+        .last()
+        .map(|(i, c)| at + query.len() + i + c.len_utf8())
+        .unwrap_or(at + query.len());
+    format!(
+        "{}{}\u{1}{}\u{2}{}{}",
+        if start > 0 { "…" } else { "" },
+        &content[start..at],
+        query,
+        &content[at + query.len()..end],
+        if end < content.len() { "…" } else { "" },
+    )
 }
 
 fn row_to_hit(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileHit> {
@@ -823,6 +889,21 @@ pub fn path_is_allowed(conn: &Connection, path: &str) -> Result<bool> {
 mod tests {
     use super::*;
     use crate::db::open_in_memory;
+
+    #[test]
+    fn substring_snippet_is_char_boundary_safe_and_marked() {
+        // CJK context on both sides + markers around the exact match
+        let text = "第一段说明文字很长而且一定要超过二十个汉字才能触发前侧截断的部分本地搜索之后还有更多说明文字继续延伸到超过三十个字符的位置以便触发省略号";
+        let s = substring_snippet(Some(text), "本地搜索");
+        assert!(s.contains("\u{1}本地搜索\u{2}"), "markers present: {s:?}");
+        assert!(s.starts_with('…') && s.ends_with('…'), "elided both ends: {s:?}");
+        // name-only hits and misses produce no snippet
+        assert_eq!(substring_snippet(None, "x"), "");
+        assert_eq!(substring_snippet(Some("abc"), "zz"), "");
+        // match at the very start: no leading ellipsis, no panic
+        let s2 = substring_snippet(Some("本地搜索 tail"), "本地搜索");
+        assert!(s2.starts_with('\u{1}'), "no lead elide: {s2:?}");
+    }
 
     fn write(dir: &Path, rel: &str, content: &str) {
         let p = dir.join(rel);

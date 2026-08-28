@@ -1057,6 +1057,17 @@ input.query:active {
   white-space: nowrap;
 }
 
+/* compact dropdown used in settings rows (e.g. the OCR model picker) */
+.set-select {
+  background: var(--pill-bg, transparent);
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
 /* pending-update dot next to the settings hint (mirrors the tray badge) */
 .upd-dot {
   display: inline-block;

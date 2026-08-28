@@ -53,6 +53,9 @@ pub fn open_in_memory() -> Result<Connection> {
 fn migrate(conn: &Connection) -> Result<()> {
     // additive migration for dbs created before thumbnails existed
     let _ = conn.execute("ALTER TABLE files ADD COLUMN thumb BLOB", []);
+    // mtime at which OCR last ran for this file (NULL = never); files are
+    // re-OCRed when their mtime moves past it
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN ocr_mtime INTEGER", []);
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -128,7 +131,8 @@ fn migrate(conn: &Connection) -> Result<()> {
             size      INTEGER NOT NULL,
             mtime     INTEGER NOT NULL,
             content   TEXT,
-            thumb     BLOB
+            thumb     BLOB,
+            ocr_mtime INTEGER
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(

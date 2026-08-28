@@ -56,6 +56,9 @@ const status = {
   has_token: true,
   model: "ready",
   image_model: "ready",
+  ocr_enabled: false,
+  ocr_model: "pp-ocr-v4",
+  ocr_status: "",
   syncing: false,
   local_indexing: false,
 };
@@ -276,6 +279,12 @@ mockIPC((cmd, args) => {
       return q ? webHits : [];
     case "search_clips":
       return clipHits; // recent list on empty query, matches on typed ones
+    case "set_ocr": {
+      const a = args as { enabled: boolean };
+      status.ocr_enabled = a.enabled;
+      status.ocr_status = a.enabled ? "ready" : "";
+      return null;
+    }
     case "plugin:event|listen":
       return 1;
     case "plugin:updater|check":

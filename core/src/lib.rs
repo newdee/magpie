@@ -10,6 +10,7 @@ pub mod embed;
 pub mod files;
 pub mod github;
 pub mod history;
+pub mod ocr;
 pub mod search;
 pub mod frecency;
 pub mod siglip;
