@@ -11,10 +11,10 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 图），回车。
 
 <p align="center">
-  <a href="https://github.com/newdee/magpie/releases/download/v0.1.17/magpie-demo.mp4">
-    <img src="docs/img/magpie-demo.gif" width="640" alt="46 秒看完 magpie：唤出、启动应用、全文检索、以图搜图、全部数据源"></a>
+  <a href="https://github.com/newdee/magpie/releases/download/v0.1.24/magpie-demo.mp4">
+    <img src="docs/img/magpie-demo.gif" width="640" alt="60 秒看完 magpie：唤出、全域搜索、OCR 识别截图与视频、输入框工具带"></a>
   <br>
-  <sub>▶ <a href="https://github.com/newdee/magpie/releases/download/v0.1.17/magpie-demo.mp4">带声音的完整高清版</a> · 46s · 4 MB</sub>
+  <sub>▶ <a href="https://github.com/newdee/magpie/releases/download/v0.1.24/magpie-demo.mp4">带声音的完整高清版</a> · 60s · 2.4 MB</sub>
 </p>
 
 <p align="center"><img src="docs/img/palette-local.png" width="760" alt="magpie 本地检索：应用置顶命中、全文高亮"></p>
