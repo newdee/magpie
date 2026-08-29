@@ -141,6 +141,14 @@ const ZH: Record<string, string> = {
   "One rule per line: alias = app name. The alias matches like a second name (pinyin included).":
     "一行一条：别名 = 应用名。别名当作第二名字参与匹配（含拼音）。",
   "Save aliases": "保存别名",
+  "Web shortcuts": "网页快搜",
+  "One rule per line: prefix = URL with {q}. Type the prefix, a space, and your query — Enter opens the search.":
+    "一行一条：前缀 = 带 {q} 的 URL。输入前缀 + 空格 + 关键词，Enter 直达搜索。",
+  "Save shortcuts": "保存快搜",
+  "Search {s} for": "用 {s} 搜索",
+  "Enter copies the result": "Enter 复制结果",
+  calc: "计算",
+  "No matching emoji": "无匹配表情",
   "Summon shortcut": "唤出快捷键",
   Currently: "当前",
   "Click and press a new combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.":

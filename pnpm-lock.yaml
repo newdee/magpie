@@ -20,6 +20,9 @@ importers:
       '@tauri-apps/plugin-updater':
         specifier: ^2.10.1
         version: 2.10.1
+      emojilib:
+        specifier: ^4.0.3
+        version: 4.0.3
       react:
         specifier: ^19.1.0
         version: 19.2.8
@@ -771,6 +774,9 @@ packages:
   electron-to-chromium@1.5.411:
     resolution: {integrity: sha512-gglkxzokjHfawpGxq75XdBV2/l3BAPzrsMs70qgaZdTW5rpV1tC4MdgJVP9fN126bODA4ZJQkn1wryEzJyQXIg==}
 
+  emojilib@4.0.3:
+    resolution: {integrity: sha512-KbWiYre9aRSaPbHrHZIz9zmoM+21LAsK1VFJtnTh1VCtWE/rNMDviGhQTmselFl95dhqtGlY22iH0leG5BuW0g==}
+
   esbuild@0.28.2:
     resolution: {integrity: sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==}
     engines: {node: '>=18'}
@@ -1470,6 +1476,8 @@ snapshots:
   detect-libc@2.1.2: {}
 
   electron-to-chromium@1.5.411: {}
+
+  emojilib@4.0.3: {}
 
   esbuild@0.28.2:
     optionalDependencies:

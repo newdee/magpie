@@ -5,6 +5,15 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
+import {
+  BANGS_KEY,
+  DEFAULT_BANGS,
+  loadBangs,
+  matchBang,
+  searchEmoji,
+  type BangMatch,
+  type EmojiHit,
+} from "./extras";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
 import "./App.css";
@@ -156,6 +165,7 @@ const WINDOW_WIDTH_PREVIEW = 1100;
 
 /// localStorage keys included in a settings export/import.
 const LOCAL_KEYS = [
+  "magpie.bangs",
   "magpie.taborder",
   "magpie.tabhidden",
   "magpie.defaulttab",
@@ -455,6 +465,14 @@ export default function App() {
     localStorage.setItem("magpie.theme", theme);
   }, [theme]);
 
+  // query-box extras: inline calculator, bang web shortcuts, emoji lookup.
+  // topRowActive = Enter targets the calc/bang row until the user arrows
+  // down into the normal result list (reset on every query change).
+  const [calcHit, setCalcHit] = useState<{ value: string; alt: string | null } | null>(null);
+  const [bangHit, setBangHit] = useState<BangMatch | null>(null);
+  const [emojiHits, setEmojiHits] = useState<EmojiHit[] | null>(null);
+  const [topRowActive, setTopRowActive] = useState(true);
+  const [bangsDraft, setBangsDraft] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -587,6 +605,27 @@ export default function App() {
     setShowSettings(false);
     inputRef.current?.focus();
   }, []);
+
+  // extras react to the raw query synchronously (they're cheap and local)
+  useEffect(() => {
+    setTopRowActive(true);
+    const q = query.trim();
+    if (q.startsWith(":")) {
+      setEmojiHits(searchEmoji(q.slice(1)));
+      setCalcHit(null);
+      setBangHit(null);
+      return;
+    }
+    setEmojiHits(null);
+    setBangHit(matchBang(q, loadBangs()));
+    if (q.length >= 2) {
+      invoke<{ value: string; alt: string | null } | null>("calc_query", { query: q })
+        .then((r) => setCalcHit(r ?? null))
+        .catch(() => setCalcHit(null));
+    } else {
+      setCalcHit(null);
+    }
+  }, [query]);
 
   // live search, debounced; an active image query searches by similarity instead
   useEffect(() => {
@@ -992,11 +1031,19 @@ export default function App() {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          move((s) => Math.min(s + 1, max));
+          if (topRowActive && (calcHit || bangHit) && max >= 0) {
+            setTopRowActive(false); // step off the calc/bang row into the list
+          } else {
+            move((s) => Math.min(s + 1, max));
+          }
           break;
         case "ArrowUp":
           e.preventDefault();
-          move((s) => Math.max(s - 1, 0));
+          if (!topRowActive && (calcHit || bangHit) && selected === 0) {
+            setTopRowActive(true); // step back up onto the calc/bang row
+          } else {
+            move((s) => Math.max(s - 1, 0));
+          }
           break;
         case "PageDown":
           e.preventDefault();
@@ -1031,7 +1078,18 @@ export default function App() {
           break;
         case "Enter":
           e.preventDefault();
-          if (e.ctrlKey || e.metaKey) {
+          if (emojiHits && emojiHits.length > 0) {
+            // emoji mode: Enter copies the first match (click copies any)
+            void invoke("copy_clip", { text: emojiHits[0].emoji }).then(() =>
+              getCurrentWindow().hide(),
+            );
+          } else if (topRowActive && bangHit && !e.ctrlKey && !e.metaKey) {
+            void invoke("open_repo", { url: bangHit.url }).then(() => getCurrentWindow().hide());
+          } else if (topRowActive && calcHit && !e.ctrlKey && !e.metaKey) {
+            void invoke("copy_clip", { text: calcHit.value }).then(() =>
+              getCurrentWindow().hide(),
+            );
+          } else if (e.ctrlKey || e.metaKey) {
             openWeb();
           } else if (e.shiftKey && source === "clips" && max >= 0) {
             // Shift+Enter pastes straight into the app the palette covered
@@ -1053,6 +1111,26 @@ export default function App() {
             openHit(results[selected]);
           }
           break;
+        case "c":
+        case "C": {
+          // file rows: Ctrl+C copies the path, Ctrl+Shift+C the file itself.
+          // Text selected in the input keeps native copy behavior.
+          if (!(e.ctrlKey || e.metaKey) || showSettings) break;
+          const r = results[selected];
+          const isFileRow = r && (r.kind === "file" || r.kind === "video");
+          const inp = inputRef.current;
+          const hasSelection = inp && inp.selectionStart !== inp.selectionEnd;
+          if (isFileRow && !hasSelection) {
+            e.preventDefault();
+            const path = (r as { path: string }).path;
+            if (e.shiftKey) {
+              void invoke("copy_file_clip", { path }).catch((err) => setLastError(String(err)));
+            } else {
+              void invoke("copy_clip", { text: path });
+            }
+          }
+          break;
+        }
         case "Escape":
           e.preventDefault();
           if (imageQuery) {
@@ -1090,7 +1168,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, emojiHits, topRowActive],
   );
 
   const refresh = useCallback(async () => {
@@ -2046,6 +2124,41 @@ export default function App() {
 
             <div className="set-row stack">
               <div className="set-label">
+                <span className="set-name">{t("Web shortcuts")}</span>
+                <span className="set-desc">
+                  {t(
+                    "One rule per line: prefix = URL with {q}. Type the prefix, a space, and your query — Enter opens the search.",
+                  )}
+                </span>
+              </div>
+              <textarea
+                className="alias-input"
+                value={bangsDraft ?? (localStorage.getItem(BANGS_KEY) ?? DEFAULT_BANGS)}
+                onChange={(e) => setBangsDraft(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                spellCheck={false}
+                rows={4}
+              />
+              <div className="set-links">
+                <button
+                  className="link-btn"
+                  onClick={() => {
+                    try {
+                      localStorage.setItem(BANGS_KEY, bangsDraft ?? DEFAULT_BANGS);
+                    } catch {
+                      /* storage unavailable: rules just don't persist */
+                    }
+                    setBangsDraft(null);
+                  }}
+                  disabled={bangsDraft == null}
+                >
+                  {t("Save shortcuts")}
+                </button>
+              </div>
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-label">
                 <span className="set-name">{t("Summon shortcut")}</span>
                 <span className="set-desc">
                   {t("Currently")} <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>.{" "}
@@ -2424,15 +2537,68 @@ export default function App() {
 
           {lastError && <p className="error-line">{lastError}</p>}
         </div>
+      ) : emojiHits ? (
+        <div className="emoji-grid">
+          {emojiHits.length === 0 && <span className="emoji-empty">{t("No matching emoji")}</span>}
+          {emojiHits.map((h, i) => (
+            <button
+              key={h.emoji}
+              className={`emoji-cell ${i === 0 ? "first" : ""}`}
+              title={h.name}
+              onClick={() =>
+                void invoke("copy_clip", { text: h.emoji }).then(() => getCurrentWindow().hide())
+              }
+            >
+              {h.emoji}
+            </button>
+          ))}
+        </div>
       ) : (
-        results.length > 0 && (
+        (results.length > 0 || calcHit != null || bangHit != null) && (
           <div className={`body-row ${previewOpen ? "with-preview" : ""}`}>
           <div className="results" ref={listRef}>
+            {bangHit && (
+              <div
+                className={`row extra-row ${topRowActive ? "selected" : ""}`}
+                onClick={() =>
+                  void invoke("open_repo", { url: bangHit.url }).then(() =>
+                    getCurrentWindow().hide(),
+                  )
+                }
+              >
+                <div className="row-main">
+                  <span className="row-title">
+                    {tf("Search {s} for", { s: bangHit.host })} “{bangHit.rest}”
+                  </span>
+                  <span className="row-sub">{bangHit.url}</span>
+                </div>
+                <span className="badge">{t("web")}</span>
+              </div>
+            )}
+            {!bangHit && calcHit && (
+              <div
+                className={`row extra-row ${topRowActive ? "selected" : ""}`}
+                onClick={() =>
+                  void invoke("copy_clip", { text: calcHit.value }).then(() =>
+                    getCurrentWindow().hide(),
+                  )
+                }
+              >
+                <div className="row-main">
+                  <span className="row-title calc-value">= {calcHit.value}</span>
+                  <span className="row-sub">
+                    {calcHit.alt ? `${calcHit.alt} · ` : ""}
+                    {t("Enter copies the result")}
+                  </span>
+                </div>
+                <span className="badge">{t("calc")}</span>
+              </div>
+            )}
             {results.map((r, i) => (
               <div
                 key={`${r.kind}-${r.kind === "app" ? r.target : r.id}`}
                 data-idx={i}
-                className={`row ${i >= selLo && i <= selHi ? "selected" : ""}`}
+                className={`row ${i >= selLo && i <= selHi && !(topRowActive && (calcHit || bangHit)) ? "selected" : ""}`}
                 onMouseMove={() => {
                   if (selAnchor == null) setSelected(i);
                 }}

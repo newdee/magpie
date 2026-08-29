@@ -100,6 +100,17 @@ you vaguely remember (or drop in an image), hit Enter.
   is on.
 - **Settings travel with you**: one-click export/import (everything except
   the GitHub token).
+- **A calculator lives in the query box**: `3*(5+2)^2`, `0xff + 1`,
+  `100 mb to gb`, `32 f to c` — the answer appears as the top row and
+  `Enter` copies it.
+- **Bang-style web shortcuts**: `gh magpie` searches GitHub, `g …` Google,
+  `bd …` Baidu — prefixes are editable rules in settings (`prefix = URL
+  with {q}`).
+- **Emoji lookup**: type `:` then a keyword (`:fire`, `:火`) and click or
+  `Enter` to copy.
+- **Files come with next steps**: `Ctrl+C` copies a hit's path,
+  `Ctrl+Shift+C` puts the file itself on the clipboard — paste it straight
+  into chat or mail as an attachment.
 - **Stays current on its own**: signed, verified in-place auto-updates from
   this version on — no reinstalling. Checked at launch and every 24 h while
   resident; a pending release shows a red dot on the tray icon and next to

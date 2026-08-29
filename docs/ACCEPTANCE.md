@@ -1,3 +1,32 @@
+# 验收记录 2026-08-29（计算器 + 网页快搜 + emoji + 文件快捷操作，拟 v0.1.23）
+
+四件套（用户选 1+2+3+5）：
+1. 计算器：core/calc.rs 手写 Pratt 解析（零依赖）——四则/取模/右结合幂/
+   括号/0x/0b 字面量（整数结果附 hex），单位换算（数据 1024 基/长度/重量/
+   温度，"100 mb to gb" 与 "1.5gb to mb" 两种写法）。calc_query 命令；
+   结果行置顶，Enter 复制（topRowActive 机制：↓ 进列表 ↑ 回顶行）。
+2. 网页快搜（bang）：纯前端，规则存 localStorage（magpie.bangs，入导出
+   LOCAL_KEYS），默认 g/b/gh/bd；"gh magpie" 顶行显示目标域名，Enter 开
+   浏览器。设置里 textarea 编辑（prefix = 带 {q} URL，畸形行静默跳过）。
+3. emoji：":" 前缀触发网格；emojilib 英文关键词 + 手写 40 组中文层；
+   排序三级——首关键词精确 > 任意关键词精确 > 子串（实测抓到 ":fire" 出
+   消防员在前的问题后加的层级）；空查询给常用 40 个；点击/Enter 复制。
+4. 文件快捷操作：Ctrl+C 复制路径、Ctrl+Shift+C 复制文件本体（Windows
+   Set-Clipboard -LiteralPath 隐窗子进程 / mac osascript POSIX file /
+   Linux 降级路径文本），输入框有选区时放行原生复制；路径先过
+   path_is_allowed（与 open_file 同护栏）。footer 不加新提示（已 8 项，
+   取舍：README 记载）。
+
+三轮：64/64（calc 4 测：优先级/右结合/进制 alt/换算/非算式拒绝——含
+1/0、5%0、纯数字"42"不劫持）；clippy 0；tsc+build 过；复跑一致。浏览器
+demo 全链实测：计算行 "= 147"+Enter 复制 42、bang 行 "用 github.com 搜索"、
+:fire→🔥 首位、:火→🔥🚀 中文层、":" 40 常用格、文件行 Ctrl+C→copy_clip
+路径 + Ctrl+Shift+C→copy_file_clip、设置快搜编辑区默认规则、静态对账
+（命令 4/3 处、bangs 键 6 处、i18n 5 键 1:1）。demo mock calc 不支持 0x
+（JS 近似实现的已知限制，Rust 端单测覆盖）。测试中两次 reload 后设置面板
+自开未定位复现（仅 demo 环境,真机无 reload 语义,留观）。
+
+---
 # 验收记录 2026-08-28（OCR 双模型：PP-OCRv4 / PP-OCRv6 small 可切换，拟 v0.1.22）
 
 用户要求兼容 v6、设置展示两模型大小、可切换、三源下载。实现：

@@ -2084,6 +2084,62 @@ fn set_ocr(
     Ok(())
 }
 
+/// Inline calculator / unit conversion for the query box. None = the query
+/// is not a formula (the frontend then shows plain search results).
+#[tauri::command]
+fn calc_query(query: String) -> Option<serde_json::Value> {
+    magpie_core::calc::eval(&query).map(|r| json!({ "value": r.value, "alt": r.alt }))
+}
+
+/// Put the FILE itself (not its path) on the clipboard, so pasting into a
+/// chat app or mail client attaches it. Uses the OS-native tooling per
+/// platform; Linux clipboards have no portable file flavor, so it degrades
+/// to the path as text.
+#[tauri::command]
+async fn copy_file_clip(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let allowed = {
+        let conn = state.db.lock().await;
+        files::path_is_allowed(&conn, &path).map_err(err_str)?
+    };
+    if !allowed {
+        return Err("path is outside indexed folders".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let escaped = path.replace('\'', "''");
+        let status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("Set-Clipboard -LiteralPath '{escaped}'"),
+            ])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status()
+            .map_err(err_str)?;
+        if !status.success() {
+            return Err("Set-Clipboard failed".into());
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        let status = std::process::Command::new("osascript")
+            .args(["-e", &format!("set the clipboard to POSIX file \"{escaped}\"")])
+            .status()
+            .map_err(err_str)?;
+        if !status.success() {
+            return Err("osascript clipboard failed".into());
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        copy_clip(path) // best effort: the path as text
+    }
+}
+
 /// Open the OS log directory in the file manager — one click to grab the
 /// log file for a bug report.
 #[tauri::command]
@@ -2423,6 +2479,8 @@ pub fn run() {
             set_update_badge,
             set_ocr,
             set_ocr_pdf,
+            calc_query,
+            copy_file_clip,
             open_log_dir,
             open_file
         ])

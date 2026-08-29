@@ -1057,6 +1057,42 @@ input.query:active {
   white-space: nowrap;
 }
 
+/* calc / bang rows pinned above the result list */
+.extra-row .calc-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+
+/* emoji lookup grid (":" prefix) */
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  padding: 10px 14px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.emoji-cell {
+  font-size: 22px;
+  line-height: 1.6;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.emoji-cell:hover,
+.emoji-cell.first {
+  background: var(--row-hover, rgba(127, 127, 127, 0.12));
+  border-color: var(--border);
+}
+.emoji-empty {
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  padding: 8px 0;
+}
+
 /* compact dropdown used in settings rows (e.g. the OCR model picker) */
 .set-select {
   background: var(--pill-bg, transparent);

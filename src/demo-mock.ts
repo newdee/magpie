@@ -290,6 +290,17 @@ mockIPC((cmd, args) => {
       status.ocr_status = a.enabled ? "ready" : "";
       return null;
     }
+    case "calc_query": {
+      // demo-only approximation of core::calc (real math lives in Rust)
+      const q = (args as { query: string }).query.trim();
+      if (!/^[\d\s.+\-*/%^()]+$/.test(q) || !/[+*/%^]/.test(q)) return null;
+      try {
+        const v = Function(`"use strict";return (${q.replace(/\^/g, "**")})`)();
+        return Number.isFinite(v) ? { value: String(v), alt: null } : null;
+      } catch {
+        return null;
+      }
+    }
     case "set_ocr_pdf": {
       status.ocr_pdf = (args as { enabled: boolean }).enabled;
       return null;

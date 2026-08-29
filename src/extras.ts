@@ -1,0 +1,109 @@
+// Query-box extras: bang-style web shortcuts and emoji lookup.
+// Pure functions over localStorage-backed config — no backend involvement.
+import emojilib from "emojilib";
+
+export const BANGS_KEY = "magpie.bangs";
+export const DEFAULT_BANGS = `g = https://www.google.com/search?q={q}
+b = https://www.bing.com/search?q={q}
+gh = https://github.com/search?q={q}&type=repositories
+bd = https://www.baidu.com/s?wd={q}`;
+
+/** One rule per line: `prefix = url-with-{q}`. Bad lines are skipped. */
+export function parseBangs(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq < 1) continue;
+    const prefix = line.slice(0, eq).trim().toLowerCase();
+    const url = line.slice(eq + 1).trim();
+    if (prefix && !prefix.includes(" ") && url.includes("{q}") && /^https?:\/\//i.test(url)) {
+      out.set(prefix, url);
+    }
+  }
+  return out;
+}
+
+export function loadBangs(): Map<string, string> {
+  try {
+    return parseBangs(localStorage.getItem(BANGS_KEY) ?? DEFAULT_BANGS);
+  } catch {
+    return parseBangs(DEFAULT_BANGS);
+  }
+}
+
+export interface BangMatch {
+  prefix: string;
+  url: string;
+  host: string;
+  rest: string;
+}
+
+/** `g rust tokio` -> the g rule with rest "rust tokio". Needs a space and a
+ * non-empty query so plain prefixes still search normally. */
+export function matchBang(query: string, bangs: Map<string, string>): BangMatch | null {
+  const sp = query.indexOf(" ");
+  if (sp < 1) return null;
+  const prefix = query.slice(0, sp).toLowerCase();
+  const rest = query.slice(sp + 1).trim();
+  const tpl = bangs.get(prefix);
+  if (!tpl || !rest) return null;
+  const url = tpl.replace("{q}", encodeURIComponent(rest));
+  let host = "";
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+  return { prefix, url, host, rest };
+}
+
+// ---------- emoji ----------
+
+export interface EmojiHit {
+  emoji: string;
+  name: string;
+}
+
+// A hand-picked Chinese keyword layer over emojilib's English keywords, for
+// the emoji people actually reach for.
+const ZH: Record<string, string> = {
+  "😂": "笑哭 大笑", "❤️": "爱心 红心", "👍": "赞 好", "🔥": "火 热",
+  "😭": "哭", "🎉": "庆祝 撒花", "😄": "笑 开心", "🙏": "拜托 感谢 祈祷",
+  "😅": "尬笑 汗", "🤣": "笑翻", "💪": "加油 肌肉", "👏": "鼓掌",
+  "🌹": "玫瑰 花", "😊": "微笑", "🎂": "蛋糕 生日", "☕": "咖啡",
+  "😎": "酷 墨镜", "🤔": "思考 疑惑", "👌": "OK 没问题", "💯": "满分",
+  "😴": "困 睡觉", "🍺": "啤酒 干杯", "🌙": "月亮 晚安", "☀️": "太阳",
+  "🐶": "狗", "🐱": "猫", "🚀": "火箭 起飞", "⭐": "星星",
+  "💰": "钱", "🎁": "礼物", "😡": "生气 愤怒", "🥰": "喜欢 爱",
+  "🤝": "握手 合作", "✅": "对勾 完成", "❌": "叉 错误", "⚠️": "警告 注意",
+  "🙈": "捂脸", "🍉": "西瓜 吃瓜", "🧧": "红包", "🐂": "牛",
+};
+
+const ALL: [string, string[]][] = Object.entries(emojilib as Record<string, string[]>);
+
+/** Search by English keywords (emojilib) or the Chinese layer. Empty query
+ * returns a popular starter set. */
+export function searchEmoji(q: string, limit = 40): EmojiHit[] {
+  const query = q.trim().toLowerCase();
+  if (!query) {
+    return Object.keys(ZH).slice(0, limit).map((e) => ({ emoji: e, name: ZH[e] }));
+  }
+  // primary-name match first, then any exact keyword, then substrings
+  const primary: EmojiHit[] = [];
+  const exact: EmojiHit[] = [];
+  const partial: EmojiHit[] = [];
+  for (const [emoji, keywords] of ALL) {
+    const zh = ZH[emoji];
+    const zhWords = zh ? zh.split(" ") : [];
+    const hit = { emoji, name: zh ?? keywords[0].replace(/_/g, " ") };
+    if (keywords[0] === query || zhWords[0] === query) {
+      primary.push(hit);
+    } else if (keywords.includes(query) || zhWords.includes(query)) {
+      exact.push(hit);
+    } else if (keywords.some((k) => k.includes(query)) || zhWords.some((w) => w.includes(query))) {
+      partial.push(hit);
+    }
+    if (primary.length >= limit) break;
+  }
+  return primary.concat(exact, partial).slice(0, limit);
+}
