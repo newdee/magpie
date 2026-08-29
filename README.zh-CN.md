@@ -214,15 +214,8 @@ GitHub token（带连接徽章）· 索引文件夹（添加/移除/重建）· 
 从 [Releases](https://github.com/newdee/magpie/releases) 下载：Windows NSIS
 安装包、macOS dmg（Apple Silicon）、Linux AppImage/deb/rpm。
 
-**macOS 提示**——构建未签名，浏览器下载的 dmg 会触发 Gatekeeper。用 curl 安装
-可完全跳过隔离标记：
-
-```sh
-curl -L https://github.com/newdee/magpie/releases/latest/download/magpie_aarch64.app.tar.gz | tar xz -C /Applications
-```
-
-（或者：右键 app → 打开；若提示"已损坏"，执行
-`xattr -cr /Applications/magpie.app`。）
+macOS 构建自 v0.1.24 起已 **Developer ID 签名并公证**——像普通应用一样直接
+打开，升级后文件夹授权保持不失效。
 
 首次启动自动下载嵌入模型（共约 700MB）；预热期间关键词搜索立即可用。
 

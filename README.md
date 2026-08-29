@@ -264,15 +264,8 @@ reports; queries never logged) · app version.
 Grab the latest build from [Releases](https://github.com/newdee/magpie/releases):
 Windows NSIS installer, macOS dmg (Apple Silicon), Linux AppImage/deb/rpm.
 
-**macOS tip** — builds are unsigned, so a browser-downloaded dmg triggers
-Gatekeeper. Installing via curl skips the quarantine flag entirely:
-
-```sh
-curl -L https://github.com/newdee/magpie/releases/latest/download/magpie_aarch64.app.tar.gz | tar xz -C /Applications
-```
-
-(Or: right-click the app → Open; if it says "damaged", run
-`xattr -cr /Applications/magpie.app`.)
+macOS builds are **Developer ID signed and notarized** (since v0.1.24) —
+they open like any other app, and folder-permission grants survive updates.
 
 First launch downloads the embedding models (~700 MB total); keyword search
 works immediately while they warm up.
