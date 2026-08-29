@@ -84,6 +84,7 @@ interface ClipHit {
   thumb: string | null;
   width: number | null;
   height: number | null;
+  pinned: boolean;
   score: number;
 }
 
@@ -468,7 +469,11 @@ export default function App() {
   // query-box extras: inline calculator, bang web shortcuts, emoji lookup.
   // topRowActive = Enter targets the calc/bang row until the user arrows
   // down into the normal result list (reset on every query change).
-  const [calcHit, setCalcHit] = useState<{ value: string; alt: string | null } | null>(null);
+  const [calcHit, setCalcHit] = useState<{
+    value: string;
+    alt: string | null;
+    swatch?: string | null;
+  } | null>(null);
   const [bangHit, setBangHit] = useState<BangMatch | null>(null);
   const [emojiHits, setEmojiHits] = useState<EmojiHit[] | null>(null);
   const [topRowActive, setTopRowActive] = useState(true);
@@ -1086,7 +1091,8 @@ export default function App() {
           } else if (topRowActive && bangHit && !e.ctrlKey && !e.metaKey) {
             void invoke("open_repo", { url: bangHit.url }).then(() => getCurrentWindow().hide());
           } else if (topRowActive && calcHit && !e.ctrlKey && !e.metaKey) {
-            void invoke("copy_clip", { text: calcHit.value }).then(() =>
+            // color results copy the hex, not the whole display string
+            void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(() =>
               getCurrentWindow().hide(),
             );
           } else if (e.ctrlKey || e.metaKey) {
@@ -1111,6 +1117,19 @@ export default function App() {
             openHit(results[selected]);
           }
           break;
+        case "p":
+        case "P": {
+          // Ctrl+P pins/unpins the selected clip (survives pruning, sorts first)
+          if (!(e.ctrlKey || e.metaKey) || showSettings) break;
+          const r = results[selected];
+          if (r && r.kind === "clip") {
+            e.preventDefault();
+            void invoke("toggle_pin_clip", { clipId: r.id })
+              .then(() => runSearch(queryRef.current, sourceRef.current))
+              .catch((err) => setLastError(String(err)));
+          }
+          break;
+        }
         case "c":
         case "C": {
           // file rows: Ctrl+C copies the path, Ctrl+Shift+C the file itself.
@@ -1168,7 +1187,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, emojiHits, topRowActive],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, emojiHits, topRowActive, runSearch],
   );
 
   const refresh = useCallback(async () => {
@@ -2579,13 +2598,18 @@ export default function App() {
               <div
                 className={`row extra-row ${topRowActive ? "selected" : ""}`}
                 onClick={() =>
-                  void invoke("copy_clip", { text: calcHit.value }).then(() =>
+                  void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(() =>
                     getCurrentWindow().hide(),
                   )
                 }
               >
                 <div className="row-main">
-                  <span className="row-title calc-value">= {calcHit.value}</span>
+                  <span className="row-title calc-value">
+                    {calcHit.swatch && (
+                      <i className="color-swatch" style={{ background: calcHit.swatch }} />
+                    )}
+                    {calcHit.swatch ? calcHit.value : `= ${calcHit.value}`}
+                  </span>
                   <span className="row-sub">
                     {calcHit.alt ? `${calcHit.alt} · ` : ""}
                     {t("Enter copies the result")}
@@ -2626,6 +2650,7 @@ export default function App() {
                   <>
                     <div className="row-main">
                       <span className="row-title clip-text" title={r.content}>
+                        {r.pinned && <span className="pin-mark">📌 </span>}
                         {r.content.split("\n")[0].slice(0, 200)}
                       </span>
                       {r.content.includes("\n") && (

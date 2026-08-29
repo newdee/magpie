@@ -29,11 +29,12 @@ pub struct ClipHit {
     pub thumb: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
+    pub pinned: bool,
     pub score: f32,
 }
 
 const CLIP_COLS: &str =
-    "id, content, first_copied, last_copied, copy_count, kind, thumb, width, height";
+    "id, content, first_copied, last_copied, copy_count, kind, thumb, width, height, pinned";
 
 fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<ClipHit> {
     Ok(ClipHit {
@@ -46,8 +47,17 @@ fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<ClipHit> {
         thumb: r.get(6)?,
         width: r.get(7)?,
         height: r.get(8)?,
+        pinned: r.get::<_, i64>(9)? != 0,
         score: 0.0,
     })
+}
+
+/// Flip a clip's pinned flag. Returns the new state.
+pub fn toggle_pin(conn: &Connection, clip_id: i64) -> Result<bool> {
+    conn.execute("UPDATE clips SET pinned = 1 - pinned WHERE id = ?1", params![clip_id])?;
+    Ok(conn.query_row("SELECT pinned FROM clips WHERE id = ?1", params![clip_id], |r| {
+        r.get::<_, i64>(0)
+    })? != 0)
 }
 
 /// Store one clipboard capture. Repeats bump `last_copied`/`copy_count`
@@ -81,7 +91,10 @@ pub fn prune_clips(conn: &Connection, retention_days: u32, now: i64) -> Result<u
         return Ok(0);
     }
     let cutoff = now - i64::from(retention_days) * 86_400;
-    let n = conn.execute("DELETE FROM clips WHERE last_copied < ?1", params![cutoff])?;
+    let n = conn.execute(
+        "DELETE FROM clips WHERE last_copied < ?1 AND pinned = 0",
+        params![cutoff],
+    )?;
     conn.execute(
         "DELETE FROM clip_vecs WHERE clip_id NOT IN (SELECT id FROM clips)",
         [],
@@ -96,8 +109,9 @@ pub fn prune_clips_to_count(conn: &Connection, max_entries: u32) -> Result<usize
         return Ok(0);
     }
     let n = conn.execute(
-        "DELETE FROM clips WHERE id IN (
-            SELECT id FROM clips ORDER BY last_copied DESC, id DESC
+        "DELETE FROM clips WHERE pinned = 0 AND id IN (
+            SELECT id FROM clips WHERE pinned = 0
+            ORDER BY last_copied DESC, id DESC
             LIMIT -1 OFFSET ?1
         )",
         params![i64::from(max_entries)],
@@ -238,7 +252,7 @@ pub fn clips_by_ids(
 /// Most recently copied first — what an empty query shows.
 pub fn recent_clips(conn: &Connection, limit: usize) -> Result<Vec<ClipHit>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {CLIP_COLS} FROM clips ORDER BY last_copied DESC, id DESC LIMIT ?1"
+        "SELECT {CLIP_COLS} FROM clips ORDER BY pinned DESC, last_copied DESC, id DESC LIMIT ?1"
     ))?;
     let rows = stmt
         .query_map([limit as i64], row_to_hit)?
@@ -485,6 +499,28 @@ fn sensitive_clip_present() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pinned_clips_survive_pruning_and_sort_first() {
+        let conn = crate::db::open_in_memory().unwrap();
+        // three clips, oldest first; pin the oldest
+        for (i, text) in ["oldest pinned", "middle clip", "newest clip"].iter().enumerate() {
+            super::record_clip(&conn, text, 1000 + i as i64 * 100, 0).unwrap();
+        }
+        assert!(super::toggle_pin(&conn, 1).unwrap(), "toggle on");
+        // age prune with a cutoff past every clip: only the pin survives
+        let removed = super::prune_clips(&conn, 1, 1_000_000_000).unwrap();
+        assert_eq!(removed, 2);
+        // re-add two fresh clips, then cap to 1: pinned is exempt from the cap
+        super::record_clip(&conn, "fresh a", 2000, 0).unwrap();
+        super::record_clip(&conn, "fresh b", 2100, 0).unwrap();
+        super::prune_clips_to_count(&conn, 1).unwrap();
+        let recent = super::recent_clips(&conn, 10).unwrap();
+        assert_eq!(recent.len(), 2, "pin + newest unpinned");
+        assert_eq!(recent[0].content, "oldest pinned", "pin sorts first");
+        assert!(recent[0].pinned);
+        assert!(!super::toggle_pin(&conn, 1).unwrap(), "toggle off");
+    }
+
     #[test]
     fn image_clip_roundtrip_and_dedupe() {
         let conn = crate::db::open_in_memory().unwrap();

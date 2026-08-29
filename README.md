@@ -79,7 +79,8 @@ you vaguely remember (or drop in an image), hit Enter.
 - **Clipboard history that respects secrets**: opt-in, stored locally, and
   clips a password manager marks confidential are never recorded (honored on
   Windows and macOS). Cap it by count and age, multi-select and delete —
-  and `Shift+Enter` pastes straight into the app you came from.
+  and `Shift+Enter` pastes straight into the app you came from. `Ctrl+P`
+  pins a clip: it sorts first and survives count/age pruning.
 - **Copied images are history too**: screenshots and copied pictures join
   the clipboard history with thumbnails, and you can find them later by
   *describing* them ("that error dialog") — SigLIP works on your clips.
@@ -102,7 +103,9 @@ you vaguely remember (or drop in an image), hit Enter.
   the GitHub token).
 - **A calculator lives in the query box**: `3*(5+2)^2`, `0xff + 1`,
   `100 mb to gb`, `32 f to c` — the answer appears as the top row and
-  `Enter` copies it.
+  `Enter` copies it. Its siblings: `uuid`, `now` / `ts 1700000000`,
+  `pwd 24` (CSPRNG passwords), `b64` / `unb64` / `url` / `unurl`, and
+  `#ff6600` shows a color chip with rgb/hsl conversions.
 - **Bang-style web shortcuts**: `gh magpie` searches GitHub, `g …` Google,
   `bd …` Baidu — prefixes are editable rules in settings (`prefix = URL
   with {q}`).

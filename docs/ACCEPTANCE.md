@@ -1,3 +1,26 @@
+# 验收记录 2026-08-29（生成器/编解码/颜色 + 剪贴板钉住，拟 v0.1.24）
+
+四件套：
+1. core/transform.rs（calc 的兄弟，同顶行 UI）：uuid v4（getrandom 直出，
+   version/variant 位正确）、now/ts（chrono，ts <数字> 反解为本地时间，
+   毫秒自动降秒）、pwd N（拒绝采样消偏差的 CSPRNG 密码，4..=128，非数字
+   参数不劫持搜索）、b64/unb64、url/unurl（手写 percent 编解码）、
+   #hex/rgb() 互转（含 #rgb 短格式）+ swatch 色块。calc_query 命令统一
+   出口：先 calc 后 transform；颜色行 Enter/点击复制 hex 而非整串。
+2. 剪贴板钉住：clips.pinned 列（CREATE+ALTER 双处）；Ctrl+P 切换
+   （toggle_pin_clip）；置顶排序（recent 列表 pinned DESC 先）；条数与
+   时限清理双双豁免 pinned；行首 📌 标记。
+3. chrono/getrandom 依赖均已在树（间接转直接，零新增重量）。
+
+三轮：69/69（transform 4 测：uuid 形状与唯一性/编解码往返含中文/颜色
+双向+短格式/普通查询不劫持——"pwd abc" 落搜索；pin 1 测：年龄清理删 2
+留 pin、条数上限豁免、置顶排序、toggle 开关往返）；clippy 0；tsc+build
+过；复跑一致。浏览器 demo：Ctrl+P → 📌 出现并置顶；#ff6600 色块
+computed rgb(255,102,0)、无 "=" 前缀（swatch 分支）；uuid 行 label
+"UUID v4"。销案一桩：三次"设置面板自开"实为 demo 模式有意默认开
+（VITE_DEMO 初始 state，demo 诞生即有，供截设置图）——非产品问题。
+
+---
 # 验收记录 2026-08-29（计算器 + 网页快搜 + emoji + 文件快捷操作，拟 v0.1.23）
 
 四件套（用户选 1+2+3+5）：

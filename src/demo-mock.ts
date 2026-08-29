@@ -193,12 +193,12 @@ const imageHits = [
 };
 
 const clipHits = [
-  { id: 6, content: "", first_copied: now - 120, last_copied: now - 120, copy_count: 1, clip_kind: "image", thumb: scenePng(mountainScene), width: 1600, height: 1000, score: 0 },
-  { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
-  { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
-  { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
-  { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
-  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, score: 0 },
+  { id: 6, content: "", first_copied: now - 120, last_copied: now - 120, copy_count: 1, clip_kind: "image", thumb: scenePng(mountainScene), width: 1600, height: 1000, pinned: false, score: 0 },
+  { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
+  { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
+  { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
+  { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
+  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
 ];
 
 mockIPC((cmd, args) => {
@@ -290,9 +290,22 @@ mockIPC((cmd, args) => {
       status.ocr_status = a.enabled ? "ready" : "";
       return null;
     }
+    case "toggle_pin_clip": {
+      const id = (args as { clipId: number }).clipId;
+      const hit = clipHits.find((c) => c.id === id) as { pinned: boolean } | undefined;
+      if (hit) hit.pinned = !hit.pinned;
+      return hit?.pinned ?? false;
+    }
     case "calc_query": {
-      // demo-only approximation of core::calc (real math lives in Rust)
+      // demo-only approximation of core::calc/transform (real logic in Rust)
       const q = (args as { query: string }).query.trim();
+      const hex = /^#([0-9a-f]{6})$/i.exec(q);
+      if (hex) {
+        const n = parseInt(hex[1], 16);
+        const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255];
+        return { value: `${q.toLowerCase()}  ·  rgb(${r}, ${g}, ${b})`, alt: "color", swatch: q.toLowerCase() };
+      }
+      if (q === "uuid") return { value: "3f2c9a1e-8b4d-4e7a-9c21-d5f0a6b83e14", alt: "UUID v4", swatch: null };
       if (!/^[\d\s.+\-*/%^()]+$/.test(q) || !/[+*/%^]/.test(q)) return null;
       try {
         const v = Function(`"use strict";return (${q.replace(/\^/g, "**")})`)();

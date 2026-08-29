@@ -17,3 +17,4 @@ pub mod frecency;
 pub mod siglip;
 pub mod videos;
 pub mod sync;
+pub mod transform;

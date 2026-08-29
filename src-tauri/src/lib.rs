@@ -2084,11 +2084,23 @@ fn set_ocr(
     Ok(())
 }
 
-/// Inline calculator / unit conversion for the query box. None = the query
-/// is not a formula (the frontend then shows plain search results).
+/// Inline calculator / unit conversion / text transforms for the query box.
+/// None = the query is neither (the frontend shows plain search results).
 #[tauri::command]
 fn calc_query(query: String) -> Option<serde_json::Value> {
-    magpie_core::calc::eval(&query).map(|r| json!({ "value": r.value, "alt": r.alt }))
+    if let Some(r) = magpie_core::calc::eval(&query) {
+        return Some(json!({ "value": r.value, "alt": r.alt }));
+    }
+    magpie_core::transform::transform(&query)
+        .map(|t| json!({ "value": t.value, "alt": t.label, "swatch": t.swatch }))
+}
+
+/// Pin/unpin a clipboard entry; pinned clips sort first and are exempt from
+/// count/age pruning. Returns the new state.
+#[tauri::command]
+async fn toggle_pin_clip(state: State<'_, AppState>, clip_id: i64) -> Result<bool, String> {
+    let conn = state.db.lock().await;
+    clips::toggle_pin(&conn, clip_id).map_err(err_str)
 }
 
 /// Put the FILE itself (not its path) on the clipboard, so pasting into a
@@ -2480,6 +2492,7 @@ pub fn run() {
             set_ocr,
             set_ocr_pdf,
             calc_query,
+            toggle_pin_clip,
             copy_file_clip,
             open_log_dir,
             open_file

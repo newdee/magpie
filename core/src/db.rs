@@ -57,6 +57,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     // re-OCRed when their mtime moves past it
     let _ = conn.execute("ALTER TABLE files ADD COLUMN ocr_mtime INTEGER", []);
     let _ = conn.execute("ALTER TABLE video_shots ADD COLUMN ocr_text TEXT", []);
+    let _ = conn.execute("ALTER TABLE clips ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0", []);
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -250,7 +251,9 @@ fn migrate(conn: &Connection) -> Result<()> {
             content_hash TEXT NOT NULL UNIQUE,
             first_copied INTEGER NOT NULL,
             last_copied  INTEGER NOT NULL,
-            copy_count   INTEGER NOT NULL DEFAULT 1
+            copy_count   INTEGER NOT NULL DEFAULT 1,
+            -- pinned clips float to the top and survive count/age pruning
+            pinned       INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS clips_fts USING fts5(
