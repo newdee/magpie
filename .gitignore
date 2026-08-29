@@ -32,3 +32,8 @@ dist-ssr
 /.agents/
 /.claude/
 /skills-lock.json
+
+# never let signing material near the repo
+*.p12
+*.certSigningRequest
+Anureka-DeveloperID*

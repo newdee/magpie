@@ -169,6 +169,58 @@ const cityScene = (c: CanvasRenderingContext2D, w: number, h: number) => {
   }
 };
 
+// OCR fixtures: a Windows-style error dialog and a talk slide — the shapes
+// screenshots and recorded meetings actually take
+const errorDialogScene = (c: CanvasRenderingContext2D, w: number, h: number) => {
+  c.fillStyle = "hsl(220 15% 14%)";
+  c.fillRect(0, 0, w, h);
+  // dialog box
+  c.fillStyle = "hsl(220 12% 24%)";
+  c.fillRect(w * 0.14, h * 0.2, w * 0.72, h * 0.56);
+  c.fillStyle = "hsl(220 12% 30%)";
+  c.fillRect(w * 0.14, h * 0.2, w * 0.72, h * 0.1);
+  // red error badge
+  c.fillStyle = "hsl(0 70% 52%)";
+  c.beginPath();
+  c.arc(w * 0.24, h * 0.45, 22, 0, Math.PI * 2);
+  c.fill();
+  c.strokeStyle = "#fff";
+  c.lineWidth = 5;
+  c.beginPath();
+  c.moveTo(w * 0.24 - 9, h * 0.45 - 9); c.lineTo(w * 0.24 + 9, h * 0.45 + 9);
+  c.moveTo(w * 0.24 + 9, h * 0.45 - 9); c.lineTo(w * 0.24 - 9, h * 0.45 + 9);
+  c.stroke();
+  // text lines
+  c.fillStyle = "rgba(255,255,255,0.75)";
+  c.fillRect(w * 0.32, h * 0.38, w * 0.42, 8);
+  c.fillRect(w * 0.32, h * 0.46, w * 0.34, 8);
+  c.fillStyle = "rgba(255,255,255,0.4)";
+  c.fillRect(w * 0.32, h * 0.56, w * 0.28, 7);
+  // OK button
+  c.fillStyle = "hsl(215 60% 45%)";
+  c.fillRect(w * 0.62, h * 0.64, w * 0.16, h * 0.08);
+};
+
+const slideScene = (c: CanvasRenderingContext2D, w: number, h: number) => {
+  c.fillStyle = "hsl(226 40% 14%)";
+  c.fillRect(0, 0, w, h);
+  c.fillStyle = "hsl(38 90% 58%)";
+  c.fillRect(w * 0.08, h * 0.14, w * 0.05, h * 0.18);
+  c.fillStyle = "rgba(255,255,255,0.9)";
+  c.fillRect(w * 0.18, h * 0.16, w * 0.5, 14);
+  c.fillStyle = "rgba(255,255,255,0.5)";
+  for (let i = 0; i < 4; i++) c.fillRect(w * 0.18, h * 0.4 + i * 34, w * (0.55 - i * 0.06), 9);
+  c.strokeStyle = "hsl(200 70% 55%)";
+  c.lineWidth = 8;
+  c.beginPath();
+  c.arc(w * 0.82, h * 0.62, 46, 0, Math.PI * 1.4);
+  c.stroke();
+};
+
+// text-in-image hits (OCR): exact substrings from screenshots and video frames
+const ocrFileHit = { kind: "file", id: 105, path: "C:\\Users\\dfine\\Pictures\\screenshots\\deploy-error.png", name: "deploy-error.png", ext: "png", size: 182_330, mtime: now - 3 * day, score: 11.2, thumb: scenePng(errorDialogScene), snippet: "Error \u00010x80070005\u0002: Access is denied. Retry the deployment with elevated \u2026" };
+const ocrVideoHit = { kind: "video", id: 203, shot_id: 3400, path: "C:\\Users\\dfine\\Documents\\projects\\clips\\arch-review-talk.mp4", name: "arch-review-talk.mp4", start_ms: 725_000, end_ms: 744_000, ts_ms: 733_000, thumb: scenePng(slideScene), duration_ms: 2_710_000, score: 0.91 };
+
 const queryImageB64 = scenePng(sunsetScene(28));
 const imageHits = [
   { kind: "file", id: 101, path: "C:\\Users\\dfine\\Pictures\\screenshots\\sunset-cliff.jpg", name: "sunset-cliff.jpg", ext: "jpg", size: 482133, mtime: now - 12 * day, score: 0.94, thumb: scenePng(sunsetScene(24)), snippet: null },
@@ -226,6 +278,7 @@ mockIPC((cmd, args) => {
     }
     case "search_local": {
       if ((args as { scope?: string })?.scope === "videos") {
+        if (q.toLowerCase().includes("retry")) return [ocrVideoHit]; // OCR text -> shot
         return q
           ? [
               imageHits[1], // the drone-coast shot hit
@@ -234,6 +287,7 @@ mockIPC((cmd, args) => {
           : [];
       }
       const ql = q.toLowerCase();
+      if (ql.includes("0x800")) return [ocrFileHit]; // OCR text inside a screenshot
       return ql && ("vector search".startsWith(ql) || ql.includes("vector"))
         ? fileHits.map((f) => ({ kind: "file", ...f }))
         : [];
