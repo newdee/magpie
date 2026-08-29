@@ -176,12 +176,9 @@ fn color(q: &str) -> Option<TransformResult> {
             ),
             _ => return None,
         }
-    } else if let Some(inner) = q
-        .to_lowercase()
-        .strip_prefix("rgb(")
-        .and_then(|s| s.strip_suffix(')'))
-        .map(str::to_string)
-    {
+    } else {
+        let lower = q.to_lowercase();
+        let inner = lower.strip_prefix("rgb(").and_then(|s| s.strip_suffix(')'))?;
         let parts: Vec<u8> = inner
             .split(',')
             .map(|p| p.trim().parse::<u8>())
@@ -191,8 +188,6 @@ fn color(q: &str) -> Option<TransformResult> {
             return None;
         }
         (parts[0], parts[1], parts[2])
-    } else {
-        return None;
     };
     let hex = format!("#{r:02x}{g:02x}{b:02x}");
     let (h, s, l) = rgb_to_hsl(r, g, b);
