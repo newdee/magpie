@@ -8,9 +8,12 @@ import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import {
   BANGS_KEY,
   DEFAULT_BANGS,
+  TIPS_KEY,
   loadBangs,
   matchBang,
+  randomTip,
   searchEmoji,
+  tipsEnabled,
   type BangMatch,
   type EmojiHit,
 } from "./extras";
@@ -167,6 +170,7 @@ const WINDOW_WIDTH_PREVIEW = 1100;
 /// localStorage keys included in a settings export/import.
 const LOCAL_KEYS = [
   "magpie.bangs",
+  "magpie.tips",
   "magpie.taborder",
   "magpie.tabhidden",
   "magpie.defaulttab",
@@ -478,6 +482,10 @@ export default function App() {
   const [emojiHits, setEmojiHits] = useState<EmojiHit[] | null>(null);
   const [topRowActive, setTopRowActive] = useState(true);
   const [bangsDraft, setBangsDraft] = useState<string | null>(null);
+  // a fresh discoverability tip on every summon; the row lives only in the
+  // empty state, so typing anything replaces it with results
+  const [tip, setTip] = useState(randomTip);
+  const [showTips, setShowTips] = useState(tipsEnabled);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -761,6 +769,7 @@ export default function App() {
       listen("palette-shown", () => {
         inputRef.current?.focus();
         inputRef.current?.select();
+        setTip(randomTip());
         refreshStatus();
       }),
       // drop an image file anywhere on the palette to search by it
@@ -2104,6 +2113,36 @@ export default function App() {
               </div>
             </div>
 
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Launch tips")}</span>
+                <span className="set-desc">
+                  {t("A one-line tip below the empty search box, fresh on every summon.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${showTips === o.on ? "active" : ""}`}
+                    onClick={() => {
+                      setShowTips(o.on);
+                      try {
+                        localStorage.setItem(TIPS_KEY, o.on ? "1" : "0");
+                      } catch {
+                        /* preference just won't persist */
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="set-row stack">
               <div className="set-label">
                 <span className="set-name">{t("App aliases")}</span>
@@ -2823,6 +2862,12 @@ export default function App() {
               : source === "clips"
                 ? t("No matching clips")
                 : t("No matches in indexed folders")}
+        </div>
+      )}
+
+      {showTips && !showSettings && query.trim() === "" && !imageQuery && (
+        <div className="tip-row">
+          <span className="tip-bulb">💡</span> {t(tip)}
         </div>
       )}
 

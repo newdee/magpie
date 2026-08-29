@@ -57,6 +57,46 @@ export function matchBang(query: string, bangs: Map<string, string>): BangMatch 
   return { prefix, url, host, rest };
 }
 
+// ---------- launch tips ----------
+
+export const TIPS_KEY = "magpie.tips";
+
+/** One-liner discoverability tips, shown in the empty state. English text
+ * doubles as the i18n key (translated in i18n.ts like everything else). */
+export const TIPS: string[] = [
+  "Ctrl+P pins a clip — it sorts first and never gets pruned",
+  "The query box is a calculator: 3*(5+2)^2 — Enter copies the answer",
+  "Type : then a keyword to find emoji — :fire or :火",
+  "gh magpie searches GitHub straight from the box — prefixes are editable in settings",
+  "Shift+Enter pastes a clip straight into the app you came from",
+  "→ previews the selected result — file text, images, a video's shots",
+  "Ctrl+Shift+C puts the file itself on the clipboard — paste it as an attachment",
+  "Drop or paste an image to search your files by visual similarity",
+  "ts 1700000000 turns a unix timestamp into local time",
+  "#ff6600 shows the color with rgb/hsl — Enter copies the hex",
+  "pwd 24 generates a cryptographically random password",
+  "Enable OCR in settings — words inside screenshots and videos become searchable",
+  "Enter on a video hit starts playback right at the matched scene",
+  "App names match by pinyin too — wx finds 微信, vsc finds VS Code",
+  "Ctrl+Enter hands your query to the browser — URLs open directly",
+  "Unit conversion lives in the box: 100 mb to gb, 32 f to c",
+  "Give apps aliases in settings: proxy = clash",
+  "Shift+Tab cycles the local scope: all / text / images / videos",
+  "Export your whole setup from Settings → System — the GitHub token stays out",
+];
+
+export function tipsEnabled(): boolean {
+  try {
+    return localStorage.getItem(TIPS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function randomTip(): string {
+  return TIPS[Math.floor(Math.random() * TIPS.length)];
+}
+
 // ---------- emoji ----------
 
 export interface EmojiHit {

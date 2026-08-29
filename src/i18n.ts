@@ -135,6 +135,48 @@ const ZH: Record<string, string> = {
   Language: "语言",
   "Palette and settings text; the tray menu follows.": "浮窗与设置文案；托盘菜单跟随。",
   "Pinyin app matching": "拼音匹配应用",
+  "Launch tips": "启动小贴士",
+  "A one-line tip below the empty search box, fresh on every summon.":
+    "空搜索框下方的一行使用技巧，每次唤出随机一条。",
+  // launch tips (extras.ts TIPS)
+  "Ctrl+P pins a clip — it sorts first and never gets pruned":
+    "Ctrl+P 钉住剪贴条——置顶显示且永不被清理",
+  "The query box is a calculator: 3*(5+2)^2 — Enter copies the answer":
+    "输入框就是计算器：3*(5+2)^2——Enter 复制结果",
+  "Type : then a keyword to find emoji — :fire or :火":
+    "输入 : 加关键词找表情——:fire 或 :火",
+  "gh magpie searches GitHub straight from the box — prefixes are editable in settings":
+    "gh magpie 直达 GitHub 搜索——前缀规则在设置里可编辑",
+  "Shift+Enter pastes a clip straight into the app you came from":
+    "Shift+Enter 把剪贴条直接粘贴回你刚才所在的应用",
+  "→ previews the selected result — file text, images, a video's shots":
+    "→ 预览选中结果——文件正文、图片大图、视频镜头条",
+  "Ctrl+Shift+C puts the file itself on the clipboard — paste it as an attachment":
+    "Ctrl+Shift+C 复制文件本体——粘贴出去就是附件",
+  "Drop or paste an image to search your files by visual similarity":
+    "拖入或粘贴一张图，按画面相似度搜你的文件",
+  "ts 1700000000 turns a unix timestamp into local time":
+    "ts 1700000000 把 unix 时间戳转成本地时间",
+  "#ff6600 shows the color with rgb/hsl — Enter copies the hex":
+    "#ff6600 显示色块和 rgb/hsl——Enter 复制 hex",
+  "pwd 24 generates a cryptographically random password":
+    "pwd 24 生成一枚密码学随机密码",
+  "Enable OCR in settings — words inside screenshots and videos become searchable":
+    "设置里开启 OCR——截图和视频里的文字都能搜",
+  "Enter on a video hit starts playback right at the matched scene":
+    "视频命中按 Enter，直接从匹配场景开始播放",
+  "App names match by pinyin too — wx finds 微信, vsc finds VS Code":
+    "应用名支持拼音——wx 找到微信，vsc 找到 VS Code",
+  "Ctrl+Enter hands your query to the browser — URLs open directly":
+    "Ctrl+Enter 把输入交给浏览器——网址直接打开",
+  "Unit conversion lives in the box: 100 mb to gb, 32 f to c":
+    "单位换算就在输入框：100 mb to gb、32 f to c",
+  "Give apps aliases in settings: proxy = clash":
+    "设置里给应用起别名：proxy = clash",
+  "Shift+Tab cycles the local scope: all / text / images / videos":
+    "Shift+Tab 循环本地范围：全部 / 文本 / 图片 / 视频",
+  "Export your whole setup from Settings → System — the GitHub token stays out":
+    "设置 → 系统可一键导出全部配置——GitHub token 除外",
   "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).":
     "拉丁输入按全拼或首字母匹配中文应用名（wx → 微信）。",
   "App aliases": "应用别名",

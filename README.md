@@ -123,6 +123,8 @@ you vaguely remember (or drop in an image), hit Enter.
   shot strip, README head for repos, complete clips — so you confirm before
   you open.
 - **Yours to arrange**: reorder the tabs and pick which one opens on launch.
+- **It teaches itself**: the empty palette shows a one-line tip — a
+  shortcut or hidden trick, fresh on every summon (off-switch in settings).
 - **Works where the network doesn't**: one-click switch to `hf-mirror.com`
   for the model download, with resumable transfers and live progress — and
   if both Hugging Face and the mirror are unreachable, the models fall back
