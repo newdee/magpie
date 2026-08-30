@@ -215,6 +215,100 @@ main {
   padding: 0 32px 100px;
 }
 
+/* the sticky header would otherwise sit on top of whatever you jumped to */
+.chapter,
+.row {
+  scroll-margin-top: 92px;
+}
+
+/* ---------- chapter rail ---------- */
+.rail {
+  position: fixed;
+  left: 28px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 15;
+  width: 178px;
+  max-height: 78vh;
+  overflow-y: auto;
+  scrollbar-width: none;
+  transition: opacity 0.3s ease;
+}
+.rail::-webkit-scrollbar {
+  display: none;
+}
+.rail.dim {
+  opacity: 0.42;
+}
+.rail-chapter {
+  border-left: 2px solid var(--line);
+  padding: 3px 0 3px 14px;
+  transition: border-color 0.25s ease;
+}
+.rail-chapter.active {
+  border-left-color: var(--accent);
+}
+.rail-link {
+  display: block;
+  padding: 5px 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--faint);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+.rail-link:hover {
+  color: var(--text);
+}
+.rail-chapter.active .rail-link {
+  color: var(--text);
+  font-weight: 550;
+}
+.rail-num {
+  display: inline-block;
+  min-width: 22px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.rail-chapter.active .rail-num {
+  color: var(--accent);
+}
+/* Only the chapter you're in unfolds; 23 links at once would out-weigh the
+   page. max-height rather than the 0fr→1fr grid trick: min-height:0 on the
+   child (which the trick needs to collapse) also zeroes the track's auto
+   minimum, so 1fr resolves to 0 in a container with no definite height.
+   The cap only has to clear the longest chapter (6 links). */
+.rail-subs {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.32s ease, opacity 0.25s ease;
+}
+.rail-chapter.active .rail-subs {
+  max-height: 320px;
+  opacity: 1;
+}
+.rail-sub {
+  display: block;
+  padding: 3px 0 3px 22px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--faint);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.rail-sub:hover {
+  color: var(--text);
+}
+
+/* no room for the rail next to a 1180px column until here */
+@media (max-width: 1460px) {
+  .rail {
+    display: none;
+  }
+}
+
 /* ---------- hero ---------- */
 .hero {
   position: relative;
