@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
@@ -165,7 +165,10 @@ interface LocalProgress {
 
 const PAGE = 8;
 const WINDOW_WIDTH = 720;
-const WINDOW_WIDTH_PREVIEW = 1100;
+// the palette keeps its own width and the preview pane is added beside it, so
+// the tab strip and the query row never reflow when the pane opens
+const PREVIEW_PANE_WIDTH = 372;
+const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
 
 /// localStorage keys included in a settings export/import.
 const LOCAL_KEYS = [
@@ -824,13 +827,22 @@ export default function App() {
     };
   }, [refreshStatus, refreshFolders, runSearch]);
 
+  // The pane renders only when there is a row to describe, so the reserved
+  // column and the wider window follow that same condition. Keying them off
+  // the open/closed flag alone leaves a blank strip when a query is cleared
+  // while the preview is open.
+  const previewShown =
+    previewOpen && !showSettings && (results.length > 0 || calcHit != null || bangHit != null);
+
   // window size follows content; the preview pane widens the palette
   useLayoutEffect(() => {
     const el = panelRef.current;
     if (!el) return;
     const h = Math.min(Math.max(el.offsetHeight, 96), 620);
-    const w = previewOpen && !showSettings ? WINDOW_WIDTH_PREVIEW : WINDOW_WIDTH;
-    getCurrentWindow().setSize(new LogicalSize(w, h)).catch(() => {});
+    const w = previewShown ? WINDOW_WIDTH_PREVIEW : WINDOW_WIDTH;
+    // through the backend, not setSize: widening for the preview pane has to
+    // move the window too, or its right edge ends up off the screen
+    invoke("resize_palette", { width: w, height: h }).catch(() => {});
   });
 
   // fetch preview content for the selected hit (index-local, so cheap); the
@@ -1480,7 +1492,9 @@ export default function App() {
 
   return (
     <div
-      className={`panel ${showSettings ? "settings-mode" : ""}`}
+      className={`panel ${showSettings ? "settings-mode" : ""} ${
+        previewShown ? "preview-open" : ""
+      }`}
       ref={panelRef}
       onKeyDown={onKeyDown}
     >
@@ -2640,7 +2654,7 @@ export default function App() {
         </div>
       ) : (
         (results.length > 0 || calcHit != null || bangHit != null) && (
-          <div className={`body-row ${previewOpen ? "with-preview" : ""}`}>
+          <div className="body-row">
           <div className="results" ref={listRef}>
             {bangHit && (
               <div

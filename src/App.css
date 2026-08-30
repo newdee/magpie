@@ -82,11 +82,20 @@ body {
 }
 
 .panel {
+  position: relative;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
   animation: pop-in 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* The preview pane is a column down the right edge, and the palette keeps its
+   own width beside it. Letting the pane widen the rows instead would stretch
+   the tab strip across the whole window and throw the scope pills, which sit
+   on a margin-left:auto, out to the far right. */
+.panel.preview-open {
+  padding-right: 372px;
 }
 
 /* no OS blur available (e.g. bare Linux compositor): fall back to near-opaque */
@@ -1225,12 +1234,14 @@ kbd {
   min-width: 0;
 }
 .preview-pane {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
   width: 372px;
-  flex-shrink: 0;
   border-left: 1px solid var(--border);
   padding: 12px 14px;
   overflow-y: auto;
-  max-height: 468px;
   display: flex;
   flex-direction: column;
   gap: 8px;

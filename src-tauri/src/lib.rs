@@ -2197,6 +2197,157 @@ fn set_ui_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Resu
     Ok(())
 }
 
+/// Where a palette should sit once it has been resized.
+///
+/// `set_size` alone anchors the top-left corner, so opening the preview pane
+/// grew the window rightwards and pushed its right edge off the screen on any
+/// display narrow enough. A width change keeps the centre where it was, so the
+/// pane opens symmetrically; a height change leaves the top alone, because the
+/// result list is meant to grow downwards. Whatever comes out is clamped onto
+/// the monitor, given as (position, size).
+fn placed_after_resize(
+    pos: (i32, i32),
+    before_w: i32,
+    after: (i32, i32),
+    monitor: Option<((i32, i32), (i32, i32))>,
+) -> (i32, i32) {
+    let mut x = pos.0 - (after.0 - before_w) / 2;
+    let mut y = pos.1;
+    if let Some(((mx, my), (mw, mh))) = monitor {
+        // a window larger than the monitor leaves no range to clamp into; pin
+        // it to the corner rather than panicking on an inverted range
+        let fit = |v: i32, lo: i32, span: i32, size: i32| {
+            let hi = lo + span - size;
+            if hi < lo {
+                lo
+            } else {
+                v.clamp(lo, hi)
+            }
+        };
+        x = fit(x, mx, mw, after.0);
+        y = fit(y, my, mh, after.1);
+    }
+    (x, y)
+}
+
+/// Resize the palette and keep it on screen. See [`placed_after_resize`].
+#[tauri::command]
+fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let Some(w) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let before = w.outer_size().map_err(err_str)?;
+    // React runs the effect behind this on every render, so most calls ask for
+    // the size the window already has. Typing would otherwise churn through a
+    // resize and a reposition per keystroke.
+    let scale = w.scale_factor().map_err(err_str)?;
+    let want = tauri::LogicalSize::new(width, height).to_physical::<u32>(scale);
+    if before.width == want.width && before.height == want.height {
+        return Ok(());
+    }
+    let pos = w.outer_position().map_err(err_str)?;
+    w.set_size(tauri::LogicalSize::new(width, height))
+        .map_err(err_str)?;
+    let after = w.outer_size().map_err(err_str)?;
+    let monitor = w.current_monitor().ok().flatten().map(|m| {
+        let (mp, ms) = (m.position(), m.size());
+        ((mp.x, mp.y), (ms.width as i32, ms.height as i32))
+    });
+    let (x, y) = placed_after_resize(
+        (pos.x, pos.y),
+        before.width as i32,
+        (after.width as i32, after.height as i32),
+        monitor,
+    );
+    if (x, y) != (pos.x, pos.y) {
+        w.set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(err_str)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::placed_after_resize;
+
+    const HD: Option<((i32, i32), (i32, i32))> = Some(((0, 0), (1366, 768)));
+
+    #[test]
+    fn width_growth_keeps_the_centre() {
+        // centred 720-wide palette on a 2560 screen, widened to 1100
+        let wide = Some(((0, 0), (2560, 1440)));
+        assert_eq!(
+            placed_after_resize((920, 456), 720, (1100, 480), wide),
+            (730, 456)
+        );
+        // centre before: 920 + 360 = 1280. After: 730 + 550 = 1280.
+    }
+
+    #[test]
+    fn the_bug_widening_no_longer_runs_off_a_narrow_screen() {
+        // centred on 1366: x = (1366 - 720) / 2 = 323. Anchoring the left edge
+        // would put the right edge at 323 + 1100 = 1423, i.e. 57px off screen.
+        let (x, _) = placed_after_resize((323, 200), 720, (1100, 480), HD);
+        assert_eq!(x, 133);
+        assert!(x + 1100 <= 1366, "right edge must stay on screen");
+    }
+
+    #[test]
+    fn a_palette_dragged_against_the_right_edge_is_pulled_back() {
+        let (x, _) = placed_after_resize((640, 200), 720, (1100, 480), HD);
+        assert_eq!(x, 266, "clamped so the right edge lands exactly on 1366");
+        assert_eq!(x + 1100, 1366);
+    }
+
+    #[test]
+    fn height_only_changes_leave_the_window_alone() {
+        // 100 + 620 = 720, inside the 768-tall screen, so nothing should move
+        assert_eq!(
+            placed_after_resize((323, 100), 720, (720, 620), HD),
+            (323, 100)
+        );
+    }
+
+    #[test]
+    fn a_tall_palette_is_pulled_up_onto_the_screen() {
+        let (_, y) = placed_after_resize((323, 600), 720, (720, 620), HD);
+        assert_eq!(y, 148);
+        assert_eq!(y + 620, 768);
+    }
+
+    #[test]
+    fn a_window_larger_than_the_monitor_pins_to_the_corner() {
+        assert_eq!(
+            placed_after_resize((100, 100), 720, (2000, 900), HD),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn a_second_monitor_clamps_to_its_own_offset() {
+        // a 1366-wide display sitting to the right of a 2560-wide primary
+        let right = Some(((2560, 0), (1366, 768)));
+        let (x, y) = placed_after_resize((2883, 200), 720, (1100, 480), right);
+        assert_eq!((x, y), (2693, 200));
+        assert!(x >= 2560 && x + 1100 <= 2560 + 1366);
+    }
+
+    #[test]
+    fn no_monitor_information_still_recentres() {
+        assert_eq!(
+            placed_after_resize((323, 200), 720, (1100, 480), None),
+            (133, 200)
+        );
+    }
+
+    #[test]
+    fn shrinking_back_restores_the_original_spot() {
+        let wide = Some(((0, 0), (2560, 1440)));
+        let grown = placed_after_resize((920, 456), 720, (1100, 480), wide);
+        assert_eq!(placed_after_resize(grown, 1100, (720, 480), wide), (920, 456));
+    }
+}
+
 /// Restart after installing an update.
 ///
 /// The single-instance lock has to be released first. `restart()` spawns the
@@ -2490,7 +2641,8 @@ pub fn run() {
             copy_file_clip,
             open_log_dir,
             open_file,
-            restart_for_update
+            restart_for_update,
+            resize_palette
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
