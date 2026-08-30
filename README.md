@@ -65,7 +65,7 @@ vaguely remember (or drop in an image), hit Enter.
 
 **One launcher for everything you keep.**
 
-- **Five things, one keystroke**: local files (full-text + by name), images
+- **Six things, one keystroke**: local files (full-text + by name), images
   by content, GitHub stars, browser bookmarks and history, your clipboard,
   and installed apps, all behind `Alt+Space`.
 - **Search inside your videos**: shots are detected and embedded, so a

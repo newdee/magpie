@@ -206,16 +206,30 @@ document.getElementById("lang")?.addEventListener("click", () => {
 function drawStarChart() {
   const host = document.getElementById("sc-plot");
   const section = document.getElementById("starchart");
-  if (!host || !starData?.series?.length) return;
-  const pts = starData.series.map(([t, n]) => [t, n]);
-  if (starTotal && starTotal > pts[pts.length - 1][1]) pts.push([Date.now(), starTotal]);
+  if (!host || !Array.isArray(starData?.series)) return;
+  // a hand-edited or truncated stars.json should leave the page alone rather
+  // than throw halfway through the load
+  const pts = starData.series.filter(
+    (p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]),
+  );
+  if (!pts.length) return;
+  // Only extend to the live count when the clock agrees that now is later than
+  // the last recorded star. A viewer whose clock runs behind would otherwise
+  // put the final point before the first one and mirror the whole axis.
+  const now = Date.now();
+  if (starTotal && starTotal > pts[pts.length - 1][1] && now > pts[pts.length - 1][0]) {
+    pts.push([now, starTotal]);
+  }
 
   const W = 900;
   const H = 190;
   const P = { l: 8, r: 8, t: 14, b: 26 };
   const t0 = pts[0][0];
   const t1 = pts[pts.length - 1][0];
-  const nMax = pts[pts.length - 1][1];
+  const total = pts[pts.length - 1][1]; // the label: where the count stands now
+  // the scale: max rather than last, so a non-monotonic file draws inside the
+  // box instead of running off the top
+  const nMax = pts.reduce((m, p) => (p[1] > m ? p[1] : m), 0);
   const x = (t) => P.l + ((t - t0) / Math.max(1, t1 - t0)) * (W - P.l - P.r);
   const y = (n) => H - P.b - (n / Math.max(1, nMax)) * (H - P.t - P.b);
 
@@ -229,7 +243,7 @@ function drawStarChart() {
 
   host.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" role="img"
-         aria-label="${nMax} stars since ${fmt(t0)}">
+         aria-label="${total} stars since ${fmt(t0)}">
       <defs>
         <linearGradient id="scg" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.28" />
@@ -239,9 +253,9 @@ function drawStarChart() {
       <path d="${area}" fill="url(#scg)" />
       <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2"
             stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
-      <circle cx="${x(t1).toFixed(1)}" cy="${y(nMax).toFixed(1)}" r="3.5" fill="var(--accent)" />
+      <circle cx="${x(t1).toFixed(1)}" cy="${y(total).toFixed(1)}" r="3.5" fill="var(--accent)" />
     </svg>
-    <div class="sc-axis"><span>${fmt(t0)}</span><span>${nMax.toLocaleString()} ★</span></div>`;
+    <div class="sc-axis"><span>${fmt(t0)}</span><span>${total.toLocaleString()} ★</span></div>`;
   section.hidden = false;
 }
 

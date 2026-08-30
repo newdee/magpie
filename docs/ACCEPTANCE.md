@@ -1,3 +1,68 @@
+# 验收记录 2026-08-30（star 曲线 + README 清 AI 腔，出包 v0.1.26）
+
+用户：右上角显示 star 数、底部放 star 增长曲线；README 的 AI 腔清掉，注意
+表达对象是用户；然后出包。
+
+取舍：曲线不嵌 star-history.com 的外链图，自己画 SVG。理由与自托管字体同源
+（该域名国内不稳，页面会开天窗）。数据烘焙进 docs/stars.json（37 采样点、
+1.4 KB），页面读本地文件，再用顶栏那次 GitHub API 的实时数字把尾巴续到今天。
+不实时拉全量的原因：stargazers 每页 100 条，未登录配额 60 次/小时，星数一涨
+每次加载就多一个请求。刷新脚本 magpie-promo/scripts/star-history.mjs。
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 静态一致 | README 写「Five things / 五类东西」，后面枚举 6 项，站点 stats 也写 6 sources | 双语改「Six / 六类」 |
+| 2 | 边界退化 | `stars.json` 的 `series` 若是字符串，`?.length` 为真、`.map` 抛错，畸形文件让加载期抛未捕获异常 | `Array.isArray` 守卫 + 逐点 `Number.isFinite` 过滤 |
+| 3 | 边界退化 | 观众时钟落后于最新 star 时间戳时，追加的实时点使 `t1 < t0`，x 轴整体翻转（实测 `d` 出现负坐标） | 仅当 `now >` 末点时间才追加 |
+| 4 | 逻辑 | 末端圆点与轴标签用 `nMax`（最大值）而非末点值，非单调数据下会标错 | 缩放用 max、标签/圆点用末点 `total` |
+
+编码期另有两处自查即时修掉，不计入轮次：`let starData` 声明在 `apply()`
+调用之后处于 TDZ（会抛 `Cannot access 'starData' before initialization`）；
+`preserveAspectRatio="none"` 让末端圆点在窄屏拉成椭圆（改等比缩放）。一次
+Edit 错位把函数头替换成滚动监听块，由 `node --check` + 定义计数扫描抓到。
+
+## 连续四轮干净（第 2/3/4 项修复后重新计数）
+
+- A 边界与退化 14/14：8 种畸形载荷（null 项/字符串坐标/NaN/全无效/嵌套错/
+  无 series/undefined/空）全部无抛错且不显示；单点 `d=M8.0 14.0` 无 NaN；
+  两点同时刻不除零；非单调数据 y 落在 14..147.3 未越出 190 视框
+- B 机制通路存活 5/5：冷加载真实请求 stars.json + api.github.com，13 个资源
+  仅 2 个外部主机、无 fonts.googleapis / star-history / cdn；新鲜缓存命中则
+  不发 API（header 4,242、曲线 37 段 = 36 烘焙 + 1 实时）；语言切换轴标签
+  8月21日 ↔ Aug 21 且始终单个 svg
+- C 可复现性 + 静态一致 4/4 + 0 FAIL：过期缓存被重新拉取（4242 → 73）；
+  固定输入 5 次渲染字节一致（distinct=1, len=1642）；含实时点时 3 次渲染
+  488/488 字符一致（墙钟变动低于 `toFixed(1)` 精度）；`node --check` 通过、
+  函数/变量各 1 份定义；README×站点静态扫描 23 项 0 FAIL
+- D 错误路径与不变量 7/7：早退不改动已画图；`starTotal` 为 0 或低于末点均
+  不追加幻影点；数据未到位时 `apply()` 不抛；全部 x∈[8,892]、y∈[14,164]
+  未越界
+
+Round B 另有 2 条 rail 断言为假失败：未聚焦标签页不派发 scroll 事件（本会话
+已知环境问题，同 `behavior:"smooth"` 静默失效）。`git diff` 证明本轮改动全部
+落在 `drawStarChart` 内、未触碰 rail 代码，直接调用 `syncRail()` 解析正确
+（active=c3 / c4）。Round B 另一条「等比缩放曲线不变」的 FAIL 为测试设计错误
+（图按自身最大值归一化，本就该对全体乘 3 不变，轴标签 73→219 已证通路存活），
+改测形状后通过。
+
+## README 双语重写
+
+破折号 42 → 0（en）、38 → 0（zh）；Tier-1 AI 词表 0 命中；去掉
+「privacy by architecture, not by promise」「meaning, not just keywords」
+两处 not-X-but-Y 与句中加粗。结构对称核对：标题 15:15、条目 37:37、
+快捷键行 12:12。数字与代码核对：TEXT_EXTS=78 对应「~80/近 80」、
+CHUNK_CHARS=1600、OCR 15/30 MB 与 `ocr.rs` 字符串一致。路线图删掉三项
+已发布条目（扫描版 PDF/截图 OCR、预览面板、macOS 签名公证）。
+
+## 未验证项
+
+- 「约 700 MB 模型」本机 `%LOCALAPPDATA%\magpie` 为空（开发机未装模型），
+  沿用历史轮次实测结论，本轮未复测
+- 曲线在真实窄屏设备上的观感（仅按 viewBox 等比缩放与无横向溢出核对）
+
+---
 # 验收记录 2026-08-30（GitHub Pages 功能站，随 v0.1.25 之后）
 
 用户：功能太多、README 三百行没人扫。做单页功能站（用户定：单页 + 语言
