@@ -11,6 +11,7 @@ import {
   TIPS_KEY,
   loadBangs,
   matchBang,
+  nextTip,
   randomTip,
   searchEmoji,
   tipsEnabled,
@@ -486,6 +487,8 @@ export default function App() {
   // empty state, so typing anything replaces it with results
   const [tip, setTip] = useState(randomTip);
   const [showTips, setShowTips] = useState(tipsEnabled);
+  // "in" while a tip is settling, "out" during the hand-off to the next one
+  const [tipPhase, setTipPhase] = useState<"in" | "out">("in");
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -618,6 +621,28 @@ export default function App() {
     setShowSettings(false);
     inputRef.current?.focus();
   }, []);
+
+  // tips rotate only while the empty state is on screen: typing, opening
+  // settings, or dropping an image stops the timer instead of burning one
+  // in the background
+  const tipsIdle = showTips && !showSettings && query.trim() === "" && !imageQuery;
+  useEffect(() => {
+    if (!tipsIdle) {
+      // leaving the empty state mid-hand-off would strand the phase on
+      // "out", and the next tip would render already fading away
+      setTipPhase("in");
+      return;
+    }
+    const OUT_MS = 140;
+    const iv = setInterval(() => {
+      setTipPhase("out");
+      setTimeout(() => {
+        setTip((t) => nextTip(t));
+        setTipPhase("in");
+      }, OUT_MS);
+    }, 8000);
+    return () => clearInterval(iv);
+  }, [tipsIdle]);
 
   // extras react to the raw query synchronously (they're cheap and local)
   useEffect(() => {
@@ -770,6 +795,7 @@ export default function App() {
         inputRef.current?.focus();
         inputRef.current?.select();
         setTip(randomTip());
+        setTipPhase("in");
         refreshStatus();
       }),
       // drop an image file anywhere on the palette to search by it
@@ -2865,9 +2891,12 @@ export default function App() {
         </div>
       )}
 
-      {showTips && !showSettings && query.trim() === "" && !imageQuery && (
+      {tipsIdle && (
         <div className="tip-row">
-          <span className="tip-bulb">💡</span> {t(tip)}
+          {/* keyed so React swaps the node and the enter animation replays */}
+          <span key={tip} className={`tip-text ${tipPhase === "out" ? "leaving" : ""}`}>
+            <span className="tip-bulb">💡</span> {t(tip)}
+          </span>
         </div>
       )}
 

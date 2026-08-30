@@ -97,6 +97,15 @@ export function randomTip(): string {
   return TIPS[Math.floor(Math.random() * TIPS.length)];
 }
 
+/** A different tip than `current` — the rotation must never repeat itself
+ * in place, which reads as a stuck UI. */
+export function nextTip(current: string): string {
+  if (TIPS.length < 2) return TIPS[0] ?? current;
+  let pick = current;
+  while (pick === current) pick = randomTip();
+  return pick;
+}
+
 // ---------- emoji ----------
 
 export interface EmojiHit {

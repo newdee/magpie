@@ -1129,6 +1129,40 @@ input.query:active {
 .tip-bulb {
   margin-right: 4px;
 }
+/* rotation: the outgoing tip fades up, the incoming one rises into place */
+.tip-text {
+  display: inline-block;
+  animation: tip-in 180ms ease-out both;
+}
+.tip-text.leaving {
+  animation: tip-out 140ms ease-in both;
+}
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes tip-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tip-text,
+  .tip-text.leaving {
+    animation: none;
+  }
+}
 
 /* pending-update dot next to the settings hint (mirrors the tray badge) */
 .upd-dot {
