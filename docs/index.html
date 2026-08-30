@@ -25,6 +25,15 @@
       <nav>
         <a class="nav-link" href="#tour" data-i18n="nav.tour">Tour</a>
         <a class="nav-link" href="https://github.com/newdee/magpie" data-i18n="nav.repo">Repo</a>
+        <a class="star-btn" id="star" href="https://github.com/newdee/magpie/stargazers">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+            />
+          </svg>
+          <span id="star-count">Star</span>
+        </a>
         <button id="lang" class="lang-btn" type="button">中文</button>
         <a class="btn small" href="https://github.com/newdee/magpie/releases/latest" data-i18n="nav.download">Download</a>
       </nav>
@@ -118,6 +127,14 @@
           <h2 data-i18n="g5.title">Privacy you can verify yourself</h2>
         </header>
         <ul class="claims" id="g5"></ul>
+      </section>
+
+      <section class="starchart" id="starchart" hidden>
+        <div class="sc-head">
+          <h3 data-i18n="stars.title">Star history</h3>
+          <a class="sc-link" href="https://github.com/newdee/magpie/stargazers" data-i18n="stars.cta">Add yours</a>
+        </div>
+        <div class="sc-plot" id="sc-plot"></div>
       </section>
 
       <section class="closing">

@@ -151,6 +151,31 @@ kbd {
   color: var(--text);
   background: var(--line-soft);
 }
+.star-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dim);
+  text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.star-btn:hover {
+  color: var(--text);
+  border-color: var(--faint);
+}
+.star-btn svg {
+  color: var(--accent);
+}
+#star-count {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
 .lang-btn {
   font: inherit;
   font-size: 13px;
@@ -617,6 +642,48 @@ main {
 }
 
 /* ---------- closing ---------- */
+/* star history */
+.starchart {
+  margin-top: 130px;
+  padding: 26px 28px 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+}
+.sc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+.sc-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.sc-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.sc-link:hover {
+  text-decoration: underline;
+}
+.sc-plot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.sc-axis {
+  display: flex;
+  justify-content: space-between;
+  font: 500 12px var(--mono);
+  color: var(--faint);
+  margin-top: -4px;
+}
+
 .closing {
   position: relative;
   margin-top: 150px;

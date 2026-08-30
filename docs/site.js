@@ -2,6 +2,12 @@
 // Switching only swaps text nodes — no reload, no second page to drift.
 const STORE_KEY = "magpie.site.lang";
 
+// Star curve state, declared up here because apply() draws the chart and runs
+// before the fetch below: a `let` further down would still be in its temporal
+// dead zone at that point.
+let starData = null;
+let starTotal = null;
+
 function initialLang() {
   const q = new URLSearchParams(location.search).get("lang");
   if (q === "en" || q === "zh") return q;
@@ -134,6 +140,7 @@ function apply(lang) {
   renderRows(lang);
   renderRail(lang);
   syncRail();
+  drawStarChart(); // no-op until the data lands; redraws dates on a switch
   const btn = document.getElementById("lang");
   if (btn) btn.textContent = lang === "zh" ? "English" : "中文";
   document.title =
@@ -194,6 +201,93 @@ document.getElementById("lang")?.addEventListener("click", () => {
   // merges both styles into one paint and the transition never runs.
   requestAnimationFrame(() => requestAnimationFrame(sweepReveals));
 });
+
+/** Draw the baked star curve, extending it to `starTotal` when we have one. */
+function drawStarChart() {
+  const host = document.getElementById("sc-plot");
+  const section = document.getElementById("starchart");
+  if (!host || !starData?.series?.length) return;
+  const pts = starData.series.map(([t, n]) => [t, n]);
+  if (starTotal && starTotal > pts[pts.length - 1][1]) pts.push([Date.now(), starTotal]);
+
+  const W = 900;
+  const H = 190;
+  const P = { l: 8, r: 8, t: 14, b: 26 };
+  const t0 = pts[0][0];
+  const t1 = pts[pts.length - 1][0];
+  const nMax = pts[pts.length - 1][1];
+  const x = (t) => P.l + ((t - t0) / Math.max(1, t1 - t0)) * (W - P.l - P.r);
+  const y = (n) => H - P.b - (n / Math.max(1, nMax)) * (H - P.t - P.b);
+
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1)).join(" ");
+  const area = `${line} L${x(t1).toFixed(1)} ${H - P.b} L${x(t0).toFixed(1)} ${H - P.b} Z`;
+  const fmt = (t) =>
+    new Date(t).toLocaleDateString(document.documentElement.lang === "zh-CN" ? "zh-CN" : "en-US", {
+      month: "short",
+      day: "numeric",
+    });
+
+  host.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img"
+         aria-label="${nMax} stars since ${fmt(t0)}">
+      <defs>
+        <linearGradient id="scg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.28" />
+          <stop offset="100%" stop-color="var(--accent)" stop-opacity="0" />
+        </linearGradient>
+      </defs>
+      <path d="${area}" fill="url(#scg)" />
+      <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2"
+            stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+      <circle cx="${x(t1).toFixed(1)}" cy="${y(nMax).toFixed(1)}" r="3.5" fill="var(--accent)" />
+    </svg>
+    <div class="sc-axis"><span>${fmt(t0)}</span><span>${nMax.toLocaleString()} ★</span></div>`;
+  section.hidden = false;
+}
+
+// Live star count. GitHub allows 60 unauthenticated calls an hour per IP, so
+// the answer is cached for an hour; a failed or rate-limited call just leaves
+// the button reading "Star".
+(async () => {
+  const el = document.getElementById("star-count");
+  const KEY = "magpie.site.stars";
+  const HOUR = 3600_000;
+
+  const history = await fetch("stars.json")
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+
+  let live = null;
+  try {
+    const cached = JSON.parse(localStorage.getItem(KEY) || "null");
+    if (cached && Date.now() - cached.at < HOUR) live = cached.n;
+  } catch {
+    /* unreadable cache: fetch a fresh count below */
+  }
+  if (live == null) {
+    try {
+      const r = await fetch("https://api.github.com/repos/newdee/magpie");
+      if (r.ok) {
+        const n = (await r.json()).stargazers_count;
+        if (typeof n === "number") {
+          live = n;
+          try {
+            localStorage.setItem(KEY, JSON.stringify({ n, at: Date.now() }));
+          } catch {
+            /* the count just won't be cached */
+          }
+        }
+      }
+    } catch {
+      /* offline or blocked: fall back to the baked total */
+    }
+  }
+
+  starData = history;
+  starTotal = live ?? history?.total ?? null;
+  if (el && starTotal != null) el.textContent = starTotal.toLocaleString();
+  drawStarChart();
+})();
 
 // the header grows a hairline once the hero scrolls past
 const header = document.querySelector(".top");
