@@ -55,8 +55,8 @@ function apply(lang) {
   if (btn) btn.textContent = lang === "zh" ? "English" : "中文";
   document.title =
     lang === "zh"
-      ? "magpie — 你存过的一切，一个快捷键之外"
-      : "magpie — everything you saved, one keystroke away";
+      ? "magpie · 你存过的一切，一个快捷键找回来"
+      : "magpie · everything you saved, one keystroke away";
 }
 
 // Reveal-on-scroll. The observer handles the common case; a scroll-driven

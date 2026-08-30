@@ -1,5 +1,5 @@
 // All page copy, in both languages. One source of truth so the two versions
-// can never drift apart — the page swaps text nodes, it never reloads.
+// can never drift apart: the page swaps text nodes, it never reloads.
 window.CONTENT = {
   en: {
     "nav.repo": "Repo",
@@ -12,19 +12,20 @@ window.CONTENT = {
     "nav.download": "Download",
     "hero.title": "Everything you saved.<br />One keystroke.",
     "hero.lede":
-      "Files, screenshots, videos, stars, bookmarks, clipboard — searched by meaning, not just by name. Nothing ever leaves your machine.",
+      "Files, screenshots, videos, stars, bookmarks, clipboard. Describe what you half-remember and magpie finds it. All of it runs on your own machine.",
     "hero.download": "Download",
     "hero.source": "View source",
     "hero.meta": "Free · MIT · Windows / macOS / Linux",
     "g1.title": "What it searches",
-    "g1.sub": "Six sources behind one box — <kbd>Tab</kbd> cycles them.",
+    "g1.sub": "Six sources, one box. <kbd>Tab</kbd> moves between them.",
     "g2.title": "It reads what's inside",
-    "g2.sub": "Not just filenames — pixels, frames, and the words printed in them.",
+    "g2.sub":
+      "Filenames are the easy part. magpie also reads pixels, video frames, and the words printed on them.",
     "g3.title": "A toolbelt in the query box",
-    "g3.sub": "Answers that need no search results at all. <kbd>Enter</kbd> copies.",
+    "g3.sub": "Some answers don't need search results. <kbd>Enter</kbd> copies whatever comes up.",
     "g4.title": "Everyday feel",
-    "g4.sub": "The small things that decide whether a launcher stays installed.",
-    "g5.title": "Private by architecture, not by promise",
+    "g4.sub": "The small stuff that decides whether a launcher survives its first week.",
+    "g5.title": "Why the privacy claims hold up",
     "close.title": "Press a hotkey. Find the thing.",
     "close.docs": "Full documentation",
     "footer.built": "Built with Rust + Tauri.",
@@ -38,21 +39,21 @@ window.CONTENT = {
     "stat.embed": "查询嵌入",
     "stat.platforms": "平台",
     "nav.download": "下载",
-    "hero.title": "你存过的一切，一个快捷键之外。",
+    "hero.title": "你存过的一切，<br />一个快捷键找回来。",
     "hero.lede":
-      "喜鹊爱收集闪亮的东西，又出了名地忘记藏在哪。人也一样。magpie 是一个小巧的桌面启动器，把它们统统找回来——按下快捷键，输入模糊的印象，回车。所有计算都在你自己的机器上。",
+      "文件、截图、视频、star、书签、剪贴板。凭你还记得的那点印象去搜，不用想起全名。全部跑在你自己的机器上。",
     "hero.download": "下载",
     "hero.source": "查看源码",
     "hero.meta": "免费 · MIT · Windows / macOS / Linux",
     "g1.title": "能搜什么",
-    "g1.sub": "六个数据源，一个输入框——<kbd>Tab</kbd> 循环切换。",
+    "g1.sub": "六个数据源共用一个输入框，<kbd>Tab</kbd> 键来回切。",
     "g2.title": "它看得懂内容",
-    "g2.sub": "不只是文件名——还有画面、视频帧，以及印在它们上面的字。",
+    "g2.sub": "文件名只是最表层。画面、视频帧、印在上面的字，magpie 都读得到。",
     "g3.title": "输入框里的工具带",
-    "g3.sub": "根本不需要搜索结果的答案。<kbd>Enter</kbd> 复制。",
+    "g3.sub": "有些答案根本不用搜。<kbd>Enter</kbd> 直接复制。",
     "g4.title": "日常手感",
-    "g4.sub": "决定一个启动器会不会被卸载的那些小事。",
-    "g5.title": "隐私靠架构保证，不靠承诺",
+    "g4.sub": "决定一个启动器能不能活过第一周的那些小事。",
+    "g5.title": "这些隐私说法凭什么站得住",
     "close.title": "按下快捷键，找到那个东西。",
     "close.docs": "完整文档",
     "footer.built": "用 Rust + Tauri 构建。",
@@ -67,11 +68,11 @@ window.FEATURES = {
       tag: "Local files",
       en: {
         t: "Local files, full text",
-        d: "Add the folders you actually work in. Every file is findable by name; ~80 text formats, PDF, and Office documents are searched by content, with the matching line highlighted.",
+        d: "Add the folders you actually work in. magpie finds any file by name, and reads inside ~80 text formats plus PDF and Office docs. Matching lines come back highlighted.",
       },
       zh: {
         t: "本地文件全文检索",
-        d: "把你真正在用的文件夹加进来。任何文件都能按名字找到；约 80 种文本格式、PDF 和 Office 文档按内容检索，命中行高亮显示。",
+        d: "把你天天在用的目录加进来。任何文件都能按名字找到，约 80 种文本格式外加 PDF、Office 文档还能搜内容，命中的那行会高亮。",
       },
     },
     {
@@ -79,11 +80,11 @@ window.FEATURES = {
       tag: "App launcher",
       en: {
         t: "An app launcher, too",
-        d: "Type a name — prefix, substring, or acronym like vsc — and Enter launches it. Chinese app names match by pinyin, and you can add your own aliases.",
+        d: "Type an app name and hit Enter. Prefixes work, so do substrings and acronyms like vsc. Chinese names match by pinyin, and you can teach it your own aliases.",
       },
       zh: {
         t: "同时是应用启动器",
-        d: "输入应用名——前缀、子串或首字母缩写如 vsc——回车启动。中文应用名支持拼音匹配，还能自定义别名。",
+        d: "输入应用名回车就启动。前缀、中间几个字、首字母缩写（比如 vsc）都认。中文名走拼音，还能自己加别名。",
       },
     },
     {
@@ -91,11 +92,11 @@ window.FEATURES = {
       tag: "GitHub stars",
       en: {
         t: "GitHub stars you forgot",
-        d: "Your whole starred list, READMEs included and chunk-embedded, so a repo surfaces from a sentence buried deep in its docs. Sort by relevance, date, or stars.",
+        d: "Your whole starred list, READMEs and all. magpie embeds them in chunks, so one sentence buried on page four is enough to find the repo again. Sort by relevance, date, or star count.",
       },
       zh: {
         t: "被你遗忘的 GitHub stars",
-        d: "整个 star 列表，README 全文分块嵌入——凭文档深处的一句话就能把项目翻出来。可按相关度、收藏时间、星数排序。",
+        d: "整个 star 列表连 README 一起收进来，分块嵌入之后，藏在文档第四页的一句话也够把项目翻出来。可按相关度、收藏时间、星数排序。",
       },
     },
     {
@@ -103,11 +104,11 @@ window.FEATURES = {
       tag: "Bookmarks + history",
       en: {
         t: "Bookmarks and history",
-        d: "Read straight from your browsers' local files — every Chromium-based browser plus Firefox, all profiles. Searched together, ranked with visit counts.",
+        d: "magpie reads your browsers' own files: every Chromium browser plus Firefox, all profiles. Bookmarks and history come back in one list, with the pages you open most ranked higher.",
       },
       zh: {
         t: "书签与浏览历史",
-        d: "直接读浏览器本地文件——所有 Chromium 内核浏览器加 Firefox，覆盖全部 profile。合并检索，按访问次数加权排序。",
+        d: "直接读浏览器自己的文件：Chromium 系全家桶加 Firefox，所有 profile 都覆盖。书签和历史在一个列表里出，你常开的页面排前面。",
       },
     },
     {
@@ -115,11 +116,11 @@ window.FEATURES = {
       tag: "Clipboard",
       en: {
         t: "Clipboard history",
-        d: "Opt-in and local. Copy anything back, paste it straight into the app you came from, or pin what you use daily. Password-manager secrets are never recorded.",
+        d: "Off until you turn it on, and stored locally. Copy something back, paste it into the app you were just in, or pin the lines you use every day. Anything your password manager flags as secret never gets stored.",
       },
       zh: {
         t: "剪贴板历史",
-        d: "默认关闭，纯本地。复制回任意一条、直接粘贴回上一个应用，或钉住每天都用的内容。密码管理器标记的机密永不记录。",
+        d: "默认不开，开了也只存本地。可以把某条复制回去、粘贴回你刚才那个应用，或者把天天用的钉住。密码管理器标成机密的内容一概不存。",
       },
     },
     {
@@ -127,11 +128,11 @@ window.FEATURES = {
       tag: "Video shots",
       en: {
         t: "Inside your videos",
-        d: "Videos are split into shots and embedded, so a description or a dropped image lands on the exact scene — with its time range, and playback starts right there.",
+        d: "magpie cuts each video into shots and embeds them. Describe a scene or drop in a picture, and you land on the right moment with its timestamp. Enter starts playback there.",
       },
       zh: {
         t: "视频内部",
-        d: "视频按镜头切分并嵌入——一句描述或一张图直接定位到具体场景，带精确时间范围，播放也从那一刻开始。",
+        d: "magpie 会把每个视频切成镜头再嵌入。描述一个画面或者丢一张图进去，就能落到对应那一段，带时间点，回车直接从那里开始播。",
       },
     },
   ],
@@ -141,11 +142,11 @@ window.FEATURES = {
       tag: "SigLIP 2",
       en: {
         t: "Images by what's in them",
-        d: "SigLIP 2 runs locally: describe a picture in any language, or drop one in to find visually similar files — ranked with a similarity percentage.",
+        d: "SigLIP 2 runs on your machine. Describe a picture in any language, or drop one in and get back visually similar files with a similarity score.",
       },
       zh: {
         t: "按画面内容搜图",
-        d: "SigLIP 2 本地运行：用任何语言描述一张图，或者拖一张进来找视觉相似的文件——带相似度百分比排序。",
+        d: "SigLIP 2 跑在你自己机器上。用任何语言描述一张图，或者把图拖进来找视觉上相近的文件，结果带相似度。",
       },
     },
     {
@@ -153,11 +154,11 @@ window.FEATURES = {
       tag: "OCR",
       en: {
         t: "The text in your screenshots",
-        d: "Opt-in OCR (PP-OCRv4 or v6, Chinese + English) reads indexed images, so an error code you screenshotted three weeks ago is one search away.",
+        d: "Turn on OCR (PP-OCRv4 or v6, Chinese and English) and magpie reads the text in your indexed images. That error code you screenshotted three weeks ago is one search away.",
       },
       zh: {
         t: "截图里的文字",
-        d: "可选 OCR（PP-OCRv4 或 v6，中英文）识别已索引图片——三周前截图里的那个错误码，一次搜索就能回来。",
+        d: "在设置里打开 OCR（PP-OCRv4 或 v6，中英文都行），magpie 就会读已索引图片里的字。三周前截图里那个报错码，搜一下就回来了。",
       },
     },
     {
@@ -165,11 +166,11 @@ window.FEATURES = {
       tag: "OCR / video",
       en: {
         t: "…and in your videos",
-        d: "The same engine reads every shot's frame, so subtitles, slides and on-screen code become searchable — and the hit jumps playback to the moment the text appears.",
+        d: "Same engine, every shot's frame. Subtitles, slides, code on someone's screen share: all searchable. Open the hit and playback starts where the text appears.",
       },
       zh: {
         t: "……以及视频里的文字",
-        d: "同一个引擎识别每个镜头帧——字幕、幻灯片、屏幕上的代码全都可搜，命中直接跳到文字出现的那一刻。",
+        d: "同一个引擎，逐个镜头帧地读。字幕、幻灯片、别人屏幕共享里的代码，全都能搜到，点开就从文字出现的那一刻开始播。",
       },
     },
     {
@@ -177,11 +178,11 @@ window.FEATURES = {
       tag: "Preview pane",
       en: {
         t: "Confirm before you open",
-        d: "<kbd>→</kbd> opens a preview beside the list: file text with your terms highlighted, full-size images, a video's shot strip, a repo's README head.",
+        d: "<kbd>→</kbd> opens a preview next to the list. File text with your terms highlighted, images at full size, a video's shot strip, the top of a repo's README.",
       },
       zh: {
         t: "打开之前先看清",
-        d: "<kbd>→</kbd> 在列表旁展开预览：文件正文带命中高亮、图片大图、视频镜头条带、仓库 README 开头。",
+        d: "<kbd>→</kbd> 在列表旁边开预览：文件正文带高亮、图片看大图、视频看镜头条、仓库看 README 开头。",
       },
     },
   ],
@@ -191,11 +192,11 @@ window.FEATURES = {
       tag: "Calculator",
       en: {
         t: "Calculator and unit conversion",
-        d: "3*(5+2)^2, 0xff + 1, 100 mb to gb, 32 f to c. The answer rides above the results and Enter copies it.",
+        d: "3*(5+2)^2, 0xff + 1, 100 mb to gb, 32 f to c. The answer shows up above your results, and Enter copies it.",
       },
       zh: {
         t: "计算器与单位换算",
-        d: "3*(5+2)^2、0xff + 1、100 mb to gb、32 f to c。答案显示在结果上方，Enter 复制。",
+        d: "3*(5+2)^2、0xff + 1、100 mb to gb、32 f to c。答案出现在结果上方，Enter 复制。",
       },
     },
     {
@@ -203,11 +204,11 @@ window.FEATURES = {
       tag: "Generators",
       en: {
         t: "Colors, UUIDs, passwords",
-        d: "#ff6600 shows a live swatch with rgb/hsl. uuid, ts 1700000000, pwd 24, b64 and url encoding — all in the same line.",
+        d: "#ff6600 gives you a swatch plus rgb and hsl. The same box does uuid, ts 1700000000, pwd 24, and b64 or url encoding both ways.",
       },
       zh: {
         t: "颜色、UUID、密码",
-        d: "#ff6600 显示实时色块和 rgb/hsl。uuid、ts 1700000000、pwd 24、b64 与 url 编解码——都在同一行里。",
+        d: "#ff6600 给你色块加 rgb、hsl。同一个框还能出 uuid、ts 1700000000、pwd 24，以及 b64 和 url 的正反编解码。",
       },
     },
     {
@@ -215,11 +216,11 @@ window.FEATURES = {
       tag: "Web shortcuts",
       en: {
         t: "Bang-style web shortcuts",
-        d: "gh magpie searches GitHub, g … Google, bd … Baidu. The prefix rules are yours to edit in settings.",
+        d: "gh magpie goes to GitHub search, g … to Google, bd … to Baidu. Edit the prefixes in settings, or add your own.",
       },
       zh: {
         t: "网页快搜前缀",
-        d: "gh magpie 直达 GitHub，g … Google，bd … 百度。前缀规则在设置里随你编辑。",
+        d: "gh magpie 去 GitHub 搜索，g … 走 Google，bd … 走百度。前缀规则在设置里改，也可以自己加。",
       },
     },
     {
@@ -227,11 +228,11 @@ window.FEATURES = {
       tag: "Emoji",
       en: {
         t: "Emoji lookup",
-        d: "Type : and a keyword — :fire or :火 — then click or press Enter to copy.",
+        d: "Type : and a keyword, like :fire or :火. Click one or hit Enter to copy it.",
       },
       zh: {
         t: "表情查找",
-        d: "输入 : 加关键词——:fire 或 :火——点击或回车复制。",
+        d: "输入 : 加关键词，比如 :fire 或者 :火。点一下或者回车就复制。",
       },
     },
   ],
@@ -241,28 +242,28 @@ window.FEATURES = {
       tag: "Discoverability",
       en: {
         t: "It teaches itself",
-        d: "The empty palette carries a one-line tip — a shortcut or a feature you may not have found yet — rotating every few seconds.",
+        d: "The empty box shows a one-line tip: a shortcut, or something you probably haven't found yet. It swaps for a new one every few seconds.",
       },
       zh: {
         t: "自己教你用",
-        d: "空搜索框下方一行小贴士——一个快捷键，或你可能还没发现的功能——每隔几秒换一条。",
+        d: "空着的输入框下面有一行提示：某个快捷键，或者你多半还没发现的功能。过几秒换一条。",
       },
     },
   ],
   g5: {
     en: [
-      "<b>No full-disk scanning, ever.</b> Only folders you explicitly add are read — .gitignore respected, hidden files skipped, symlinks never followed out.",
-      "<b>Nothing leaves your machine.</b> The index is one SQLite file in your profile; models run locally through ONNX and work offline after the first download.",
-      "<b>Queries are never logged.</b> The local activity log records errors and model status so you can file a useful bug report — never what you searched for.",
-      "<b>Secrets stay secret.</b> Clips a password manager marks confidential are never recorded, and the settings export leaves your GitHub token behind.",
-      "<b>Signed and notarized.</b> macOS builds carry a Developer ID signature and Apple notarization; updates are signature-verified in place.",
+      "<b>No full-disk scanning.</b> magpie only reads folders you added yourself. It respects .gitignore, skips hidden files, and won't follow a symlink out of the folder you chose.",
+      "<b>Nothing leaves your machine.</b> Your index is one SQLite file in your user profile. Models run locally through ONNX and work offline once they've downloaded.",
+      "<b>Queries never get logged.</b> The activity log keeps errors and model status so you can file a bug report worth reading. What you typed isn't in there.",
+      "<b>Secrets stay out.</b> Clips your password manager marks confidential never get stored, and exporting your settings leaves the GitHub token behind.",
+      "<b>Signed and notarized.</b> macOS builds carry a Developer ID signature and Apple's notarization. Updates install in place and check the signature first.",
     ],
     zh: [
-      "<b>永不全盘扫描。</b>只读取你显式添加的文件夹——尊重 .gitignore、跳过隐藏文件、绝不追踪符号链接越界。",
-      "<b>数据不出本机。</b>索引是用户目录里的一个 SQLite 文件；模型通过 ONNX 本地运行，首次下载后完全离线。",
-      "<b>搜索内容永不入日志。</b>本地运行日志只记录错误和模型状态，方便你报 issue——绝不记录你搜了什么。",
-      "<b>机密仍是机密。</b>密码管理器标记为机密的剪贴内容永不记录，配置导出也不会带上你的 GitHub token。",
-      "<b>已签名并公证。</b>macOS 构建带 Developer ID 签名与 Apple 公证；更新原地安装且校验签名。",
+      "<b>不做全盘扫描。</b>只读你自己添加的目录，尊重 .gitignore，跳过隐藏文件，也不会顺着符号链接跑出去。",
+      "<b>数据不出本机。</b>索引就是用户目录下的一个 SQLite 文件。模型通过 ONNX 本地跑，下载完就能离线用。",
+      "<b>搜索内容不进日志。</b>日志里只有错误和模型状态，够你提一个有用的 issue。你输入过什么，里面没有。",
+      "<b>机密不留痕。</b>密码管理器标成机密的剪贴内容一概不存，导出配置也不会带上 GitHub token。",
+      "<b>已签名并公证。</b>macOS 版带 Developer ID 签名和苹果公证，更新原地安装，装之前先验签名。",
     ],
   },
 };
