@@ -302,10 +302,34 @@ main {
   color: var(--text);
 }
 
-/* no room for the rail next to a 1180px column until here */
-@media (max-width: 1460px) {
+/* The rail is fixed to the left edge, so it needs the content column out of
+   its way rather than a viewport wide enough to ignore it. Three tiers:
+   wide enough to keep the column centred, narrow enough that the column
+   has to shift right, and too narrow for both. */
+.rail {
+  display: none;
+}
+@media (min-width: 1100px) {
   .rail {
-    display: none;
+    display: block;
+  }
+}
+/* the left gutter can't hold the rail yet, so the column stops centring */
+@media (min-width: 1100px) and (max-width: 1699px) {
+  .rail {
+    left: 20px;
+    width: 156px;
+  }
+  main {
+    margin-left: 196px;
+    margin-right: 20px;
+  }
+  .rail-link {
+    font-size: 12.5px;
+  }
+  .rail-sub {
+    font-size: 11.5px;
+    padding-left: 18px;
   }
 }
 
