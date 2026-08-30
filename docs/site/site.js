@@ -14,25 +14,33 @@ function initialLang() {
   return (navigator.language || "en").toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
-function renderCards(lang) {
+function renderRows(lang) {
   for (const [section, items] of Object.entries(window.FEATURES)) {
     const host = document.getElementById(section);
     if (!host || !Array.isArray(items)) continue;
     host.innerHTML = items
       .map(
         (f) => `
-        <article class="card">
-          <img src="img/${f.img}" alt="${f[lang].t}" loading="lazy" width="740" />
-          <h3>${f[lang].t}</h3>
-          <p>${f[lang].d}</p>
+        <article class="row reveal">
+          <div class="row-copy">
+            <span class="tag">${f.tag ?? ""}</span>
+            <h3>${f[lang].t}</h3>
+            <p>${f[lang].d}</p>
+          </div>
+          <div class="shot">
+            <img src="img/${f.img}" alt="${f[lang].t}" loading="lazy" />
+          </div>
         </article>`,
       )
       .join("");
   }
   const claims = document.getElementById("g5");
   if (claims) {
-    claims.innerHTML = window.FEATURES.g5[lang].map((c) => `<li>${c}</li>`).join("");
+    claims.innerHTML = window.FEATURES.g5[lang]
+      .map((c) => `<li class="reveal">${c}</li>`)
+      .join("");
   }
+  observeReveals();
 }
 
 function apply(lang) {
@@ -42,7 +50,7 @@ function apply(lang) {
     const v = dict[el.dataset.i18n];
     if (v != null) el.innerHTML = v;
   }
-  renderCards(lang);
+  renderRows(lang);
   const btn = document.getElementById("lang");
   if (btn) btn.textContent = lang === "zh" ? "English" : "中文";
   document.title =
@@ -50,6 +58,38 @@ function apply(lang) {
       ? "magpie — 你存过的一切，一个快捷键之外"
       : "magpie — everything you saved, one keystroke away";
 }
+
+// Reveal-on-scroll. The observer handles the common case; a scroll-driven
+// sweep is the safety net, because a programmatic jump (or a browser
+// restoring a scroll position) can land past elements before the observer's
+// first callback ever runs — those would sit invisible forever.
+let io;
+function sweepReveals() {
+  for (const el of document.querySelectorAll(".reveal:not(.in)")) {
+    const b = el.getBoundingClientRect();
+    if (b.top < innerHeight * 0.94 && b.bottom > 0) el.classList.add("in");
+  }
+}
+function observeReveals() {
+  io?.disconnect();
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          e.target.classList.add("in");
+          io.unobserve(e.target);
+        }
+      }
+    },
+    { rootMargin: "0px 0px -6% 0px", threshold: 0.05 },
+  );
+  for (const el of document.querySelectorAll(".reveal:not(.in)")) io.observe(el);
+}
+addEventListener("scroll", sweepReveals, { passive: true });
+addEventListener("resize", sweepReveals, { passive: true });
+// a browser restoring a scroll position lands mid-page without firing a
+// scroll event; one late sweep covers that without polling
+addEventListener("load", () => setTimeout(sweepReveals, 120));
 
 let current = initialLang();
 apply(current);
@@ -61,5 +101,19 @@ document.getElementById("lang")?.addEventListener("click", () => {
   } catch {
     /* the choice just won't persist */
   }
+  // keep the reader where they were: re-render swaps every row node, so
+  // without this the page would jump as the new content settles
+  const y = window.scrollY;
   apply(current);
+  window.scrollTo({ top: y, behavior: "instant" });
+  // rows already on screen must not sit at opacity 0 waiting for a scroll.
+  // Wait a frame first: adding the class in the same frame as the insert
+  // merges both styles into one paint and the transition never runs.
+  requestAnimationFrame(() => requestAnimationFrame(sweepReveals));
 });
+
+// the header grows a hairline once the hero scrolls past
+const header = document.querySelector(".top");
+const onScroll = () => header?.classList.toggle("scrolled", window.scrollY > 12);
+onScroll();
+addEventListener("scroll", onScroll, { passive: true });

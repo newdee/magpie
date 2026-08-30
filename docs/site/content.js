@@ -3,12 +3,18 @@
 window.CONTENT = {
   en: {
     "nav.repo": "Repo",
+    "nav.tour": "Tour",
+    "hero.eyebrow": "Local-first · Open source",
+    "stat.sources": "sources",
+    "stat.local": "on-device",
+    "stat.embed": "query embed",
+    "stat.platforms": "platforms",
     "nav.download": "Download",
-    "hero.title": "Everything you saved. One keystroke.",
+    "hero.title": "Everything you saved.<br />One keystroke.",
     "hero.lede":
-      "Magpies hoard shiny things and famously forget where they put them. So do we. magpie is a tiny desktop launcher that brings them all back — press a hotkey, type what you vaguely remember, hit Enter. Everything runs on your machine.",
+      "Files, screenshots, videos, stars, bookmarks, clipboard — searched by meaning, not just by name. Nothing ever leaves your machine.",
     "hero.download": "Download",
-    "hero.source": "Source",
+    "hero.source": "View source",
     "hero.meta": "Free · MIT · Windows / macOS / Linux",
     "g1.title": "What it searches",
     "g1.sub": "Six sources behind one box — <kbd>Tab</kbd> cycles them.",
@@ -25,12 +31,18 @@ window.CONTENT = {
   },
   zh: {
     "nav.repo": "代码仓库",
+    "nav.tour": "功能",
+    "hero.eyebrow": "本地优先 · 开源",
+    "stat.sources": "数据源",
+    "stat.local": "本机运行",
+    "stat.embed": "查询嵌入",
+    "stat.platforms": "平台",
     "nav.download": "下载",
     "hero.title": "你存过的一切，一个快捷键之外。",
     "hero.lede":
       "喜鹊爱收集闪亮的东西，又出了名地忘记藏在哪。人也一样。magpie 是一个小巧的桌面启动器，把它们统统找回来——按下快捷键，输入模糊的印象，回车。所有计算都在你自己的机器上。",
     "hero.download": "下载",
-    "hero.source": "源码",
+    "hero.source": "查看源码",
     "hero.meta": "免费 · MIT · Windows / macOS / Linux",
     "g1.title": "能搜什么",
     "g1.sub": "六个数据源，一个输入框——<kbd>Tab</kbd> 循环切换。",
@@ -52,6 +64,7 @@ window.FEATURES = {
   g1: [
     {
       img: "files.png",
+      tag: "Local files",
       en: {
         t: "Local files, full text",
         d: "Add the folders you actually work in. Every file is findable by name; ~80 text formats, PDF, and Office documents are searched by content, with the matching line highlighted.",
@@ -63,6 +76,7 @@ window.FEATURES = {
     },
     {
       img: "apps.png",
+      tag: "App launcher",
       en: {
         t: "An app launcher, too",
         d: "Type a name — prefix, substring, or acronym like vsc — and Enter launches it. Chinese app names match by pinyin, and you can add your own aliases.",
@@ -74,6 +88,7 @@ window.FEATURES = {
     },
     {
       img: "stars.png",
+      tag: "GitHub stars",
       en: {
         t: "GitHub stars you forgot",
         d: "Your whole starred list, READMEs included and chunk-embedded, so a repo surfaces from a sentence buried deep in its docs. Sort by relevance, date, or stars.",
@@ -85,6 +100,7 @@ window.FEATURES = {
     },
     {
       img: "web.png",
+      tag: "Bookmarks + history",
       en: {
         t: "Bookmarks and history",
         d: "Read straight from your browsers' local files — every Chromium-based browser plus Firefox, all profiles. Searched together, ranked with visit counts.",
@@ -96,6 +112,7 @@ window.FEATURES = {
     },
     {
       img: "clipboard.png",
+      tag: "Clipboard",
       en: {
         t: "Clipboard history",
         d: "Opt-in and local. Copy anything back, paste it straight into the app you came from, or pin what you use daily. Password-manager secrets are never recorded.",
@@ -107,6 +124,7 @@ window.FEATURES = {
     },
     {
       img: "videos.png",
+      tag: "Video shots",
       en: {
         t: "Inside your videos",
         d: "Videos are split into shots and embedded, so a description or a dropped image lands on the exact scene — with its time range, and playback starts right there.",
@@ -120,6 +138,7 @@ window.FEATURES = {
   g2: [
     {
       img: "images.png",
+      tag: "SigLIP 2",
       en: {
         t: "Images by what's in them",
         d: "SigLIP 2 runs locally: describe a picture in any language, or drop one in to find visually similar files — ranked with a similarity percentage.",
@@ -131,6 +150,7 @@ window.FEATURES = {
     },
     {
       img: "ocr.png",
+      tag: "OCR",
       en: {
         t: "The text in your screenshots",
         d: "Opt-in OCR (PP-OCRv4 or v6, Chinese + English) reads indexed images, so an error code you screenshotted three weeks ago is one search away.",
@@ -142,6 +162,7 @@ window.FEATURES = {
     },
     {
       img: "ocr-video.png",
+      tag: "OCR / video",
       en: {
         t: "…and in your videos",
         d: "The same engine reads every shot's frame, so subtitles, slides and on-screen code become searchable — and the hit jumps playback to the moment the text appears.",
@@ -153,6 +174,7 @@ window.FEATURES = {
     },
     {
       img: "preview.png",
+      tag: "Preview pane",
       en: {
         t: "Confirm before you open",
         d: "<kbd>→</kbd> opens a preview beside the list: file text with your terms highlighted, full-size images, a video's shot strip, a repo's README head.",
@@ -166,6 +188,7 @@ window.FEATURES = {
   g3: [
     {
       img: "calc.png",
+      tag: "Calculator",
       en: {
         t: "Calculator and unit conversion",
         d: "3*(5+2)^2, 0xff + 1, 100 mb to gb, 32 f to c. The answer rides above the results and Enter copies it.",
@@ -177,6 +200,7 @@ window.FEATURES = {
     },
     {
       img: "color.png",
+      tag: "Generators",
       en: {
         t: "Colors, UUIDs, passwords",
         d: "#ff6600 shows a live swatch with rgb/hsl. uuid, ts 1700000000, pwd 24, b64 and url encoding — all in the same line.",
@@ -188,6 +212,7 @@ window.FEATURES = {
     },
     {
       img: "bang.png",
+      tag: "Web shortcuts",
       en: {
         t: "Bang-style web shortcuts",
         d: "gh magpie searches GitHub, g … Google, bd … Baidu. The prefix rules are yours to edit in settings.",
@@ -199,6 +224,7 @@ window.FEATURES = {
     },
     {
       img: "emoji.png",
+      tag: "Emoji",
       en: {
         t: "Emoji lookup",
         d: "Type : and a keyword — :fire or :火 — then click or press Enter to copy.",
@@ -212,6 +238,7 @@ window.FEATURES = {
   g4: [
     {
       img: "tips.png",
+      tag: "Discoverability",
       en: {
         t: "It teaches itself",
         d: "The empty palette carries a one-line tip — a shortcut or a feature you may not have found yet — rotating every few seconds.",
