@@ -2,7 +2,7 @@
 
 > Spotlight-style search for everything you saved and forgot.
 
-[简体中文](README.zh-CN.md) · **[Feature tour →](https://newdee.github.io/magpie/site/)**
+[简体中文](README.zh-CN.md) · **[Feature tour →](https://dfine.tech/magpie/)**
 
 Magpies hoard shiny things and famously forget where they put them. So do we:
 GitHub stars we never open again, files buried in project folders, screenshots

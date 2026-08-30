@@ -28,7 +28,7 @@ function renderRows(lang) {
             <p>${f[lang].d}</p>
           </div>
           <div class="shot">
-            <img src="img/${f.img}" alt="${f[lang].t}" loading="lazy" />
+            <img src="shots/${f.img}" alt="${f[lang].t}" loading="lazy" />
           </div>
         </article>`,
       )
