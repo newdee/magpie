@@ -2,7 +2,6 @@
 // can never drift apart: the page swaps text nodes, it never reloads.
 window.CONTENT = {
   en: {
-    "nav.repo": "Repo",
     "nav.tour": "Tour",
     "hero.eyebrow": "Local-first · Open source",
     "stat.sources": "sources",
@@ -35,7 +34,6 @@ window.CONTENT = {
     "footer.built": "Built with Rust + Tauri.",
   },
   zh: {
-    "nav.repo": "代码仓库",
     "nav.tour": "功能",
     "hero.eyebrow": "本地优先 · 开源",
     "stat.sources": "数据源",
