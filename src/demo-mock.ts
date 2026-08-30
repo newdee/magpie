@@ -3,6 +3,10 @@
 // Also used to produce README screenshots — the fixtures below are styled
 // after real data so the shots look like the shipped app.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+// the version the fixture reports comes from the manifest, not a literal: a
+// hardcoded one goes stale on the next release and the settings screenshot on
+// the feature site keeps showing the old number
+import pkg from "../package.json";
 
 // stub the Tauri window/webview singletons so getCurrentWindow()/
 // getCurrentWebview() don't throw in a plain browser
@@ -28,7 +32,7 @@ const folders = [
 ];
 
 const status = {
-  version: "0.1.25",
+  version: pkg.version,
   repo_count: 1778,
   file_count: 1695,
   folder_count: 2,

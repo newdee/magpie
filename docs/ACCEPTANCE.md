@@ -1,3 +1,62 @@
+# 验收记录 2026-08-30（单实例：点图标不再开出多个，待出包 v0.1.27）
+
+用户报障：Win 下多次点击图标开出多个应用，任务栏里有好几个。
+
+根因：从来没装 `tauri-plugin-single-instance`，每次点击都是独立进程。日志把
+症状记得很清楚——修复前那一段有 4 条 `magpie v0.1.26 starting` 和 2 条
+`global shortcut Alt+Space unavailable: HotKey already registered`，也就是说
+多出来的实例连热键都是死的，唤不出来。
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 用户报障 | 无单实例守卫，点一次图标起一个进程，各带托盘图标、各自索引同一个库 | 注册 `tauri-plugin-single-instance`（放在所有插件之前，第二个进程在开库/占托盘前就退出），回调里 `show_window` 唤出已有实例 |
+| 2 | 逻辑/连带影响 | `AppHandle::restart` 先 spawn 后 exit（读 tauri-2.11.5 `process.rs` 确认），锁还握着会让替身进程一启动就退，更新后什么都不剩 | 新增 `restart_for_update` 命令，先 `single_instance::destroy` 再 restart；前端改调它。Windows 走不到这条路（更新器跑 NSIS 后 `process::exit`，已读 tauri-plugin-updater-2.10.1 源码确认） |
+| 3 | 静态一致 | 改完后 `tauri-plugin-process`、`process:allow-restart` capability、npm `@tauri-apps/plugin-process` 全部无人使用 | 三处删除 |
+| 4 | 静态一致 | `search_bookmarks` 注册为命令但前端零引用（书签+历史合并成 Web tab 后被 `search_web` 取代），白白暴露 IPC 面 | 删命令与注册；core 的 `search::search_bookmarks` 仍被 `search_web` 调用，保留 |
+| 5 | 静态一致 | `demo-mock.ts` 写死 `version: "0.1.25"`，站点 settings 截图会永远显示旧版本 | 改为 `import pkg from "../package.json"` 取版本，实测 demo 显示 v0.1.26 |
+
+## 连续三轮干净（第 5 项修复后重新计数）
+
+- A 功能全流程 23/23，0 控制台错误：空态小贴士、本地搜索 4 行带 3 处高亮、
+  计算器 147、uuid v4、`#ff6600` → rgb(255, 102, 0)、`:fire` → 🔥、bang 命中
+  GitHub、Tab 四源循环并回环（本地 > Stars > Web > 剪贴板 > 本地）、
+  Shift+Tab 档位循环（全部 > 文本 > 图片）、方向键选中 0>1>2>1、预览面板
+  开 723px 关 0px、Alt+, 开设置（66 个控件）Esc 退出、跨语言 star 查询
+  「视频超分辨率」命中 k4yt3x/video2x、Web 5 行、剪贴板空查询 6 行、以图搜图带
+  相似度百分比
+- B 静态一致 + 可复现：src/ 下无版本字面量残留，4 处清单（package.json /
+  tauri.conf.json / Cargo.toml / Cargo.lock）一致为 0.1.26；命令面 48 定义 =
+  48 注册且全部被引用；i18n 126 个 t() + 27 个 tf() 键全部有中文；19 个 meta
+  设置项写读平衡、无只写不读；15 个 set_/toggle_ 命令 UI 全可达；70 测试连跑
+  3 次逐次一致；clippy 0；tsc + vite 通过
+- C 真机单实例：3 轮 × 5 个并发启动，每轮都是 1 进程 / 1 条 starting /
+  4 条 summon / 0 热键冲突；每轮以 `Stop-Process -Force` 硬杀开局，下一轮照常
+  启动（锁不泄漏 3/3）；对真窗口发 WM_CLOSE 后进程存活、窗口存活但隐藏
+  （`prevent_close` 有效）；关闭后再启动仍去重且把窗口重新唤出
+
+## 两个测试仪器错误（记账，非产品缺陷）
+
+- 用 `.NET MainWindowHandle` 定位窗口，实际拿到的是插件自己的检测窗口
+  `com.dfine.magpie-sic`（它被创建为可见的 0 尺寸窗口）。销毁它当然会让去重
+  失效。枚举进程全部顶层窗口才看清：真窗口 class 是 `Tauri Window`，启动时
+  `visible=False`
+- 键盘事件打在 `document` 上，而 Tab/方向键由面板 div 的 React `onKeyDown`
+  处理（Escape 走的是 window 监听所以有效）。改在 input 上派发后全部通过
+
+顺带确认任务栏这件事：插件的检测窗口带 `WS_EX_TOOLWINDOW`（源码注释就是为此），
+实测 8 个顶层窗口里只有 `Tauri Window` 会拿到任务栏按钮，且仅在浮窗可见时。
+
+## 未验证项
+
+- macOS / Linux 的单实例实现（本机只有 Windows）。两处逻辑按平台源码核对过，
+  未真机跑
+- `100 mb to gb` 等单位换算在 demo mock 里没实现（mock 自述是近似实现），
+  真实后端由 core/src/calc.rs 的 `assert_eq!(v("100 mb to gb"), "0.097656 GB")`
+  覆盖。站点截图只用 mock 支持的查询，无坏图
+
+---
 # 验收记录 2026-08-30（star 曲线 + README 清 AI 腔，出包 v0.1.26）
 
 用户：右上角显示 star 数、底部放 star 增长曲线；README 的 AI 腔清掉，注意
