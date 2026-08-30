@@ -11,7 +11,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 
-use magpie_core::bookmarks::{self, BookmarkHit};
+use magpie_core::bookmarks;
 use magpie_core::clips::{self, ClipHit};
 use magpie_core::db;
 use magpie_core::embed::Embedder;
@@ -1316,33 +1316,6 @@ fn spawn_clip_watcher(app: AppHandle) {
 
 // ---------- bookmarks ----------
 
-#[tauri::command]
-async fn search_bookmarks(
-    state: State<'_, AppState>,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<BookmarkHit>, String> {
-    let limit = limit.unwrap_or(30).min(100);
-    let qvec = if query.trim().is_empty() {
-        None
-    } else {
-        let emb = state.embedder.clone();
-        let q = query.clone();
-        tokio::task::spawn_blocking(move || {
-            emb.try_lock()
-                .ok()
-                .and_then(|mut guard| guard.as_mut().map(|e| e.embed_query(&q)))
-        })
-        .await
-        .map_err(err_str)?
-        .transpose()
-        .map_err(err_str)?
-    };
-    let conn = state.db.lock().await;
-    let store = state.store.lock().unwrap();
-    search::search_bookmarks(&conn, &store, &query, qvec.as_deref(), limit).map_err(err_str)
-}
-
 /// Unified web search over bookmarks and/or history. `scope` is one of
 /// "all" | "bookmarks" | "history"; results are tagged and merged by score.
 #[tauri::command]
@@ -2224,6 +2197,21 @@ fn set_ui_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Resu
     Ok(())
 }
 
+/// Restart after installing an update.
+///
+/// The single-instance lock has to be released first. `restart()` spawns the
+/// replacement process and only then exits this one, so a lock still held here
+/// makes the replacement see a running instance and quit on startup, leaving
+/// the user with nothing after an update. Windows never reaches this path (the
+/// updater runs the NSIS installer and exits through `process::exit`), but
+/// macOS and Linux do.
+#[tauri::command]
+fn restart_for_update(app: AppHandle) {
+    log::info!("update installed; releasing the single-instance lock and restarting");
+    tauri_plugin_single_instance::destroy(&app);
+    app.restart();
+}
+
 fn toggle_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {
@@ -2276,6 +2264,14 @@ fn show_window(app: &AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
+        // Registered before everything else so a second launch exits before it
+        // opens the database or claims a tray icon. magpie lives in the tray
+        // and answers to a hotkey, so clicking the icon again means "show me
+        // the palette", never "start another copy".
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            log::info!("second launch requested; summoning the running instance");
+            show_window(app);
+        }))
         // logging first, so every later plugin/setup line can log. Info level,
         // one rotated file in the OS log dir — enough forensics for bug
         // reports, small enough to attach to an issue. Queries are never
@@ -2296,7 +2292,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             log::info!("magpie v{} starting", app.package_info().version);
@@ -2465,7 +2460,6 @@ pub fn run() {
             index_local,
             rebuild_folder,
             rebuild_stars,
-            search_bookmarks,
             search_web,
             search_apps,
             launch_app,
@@ -2495,7 +2489,8 @@ pub fn run() {
             toggle_pin_clip,
             copy_file_clip,
             open_log_dir,
-            open_file
+            open_file,
+            restart_for_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -18,7 +18,6 @@ import {
   type BangMatch,
   type EmojiHit,
 } from "./extras";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
 import "./App.css";
 
@@ -1400,7 +1399,9 @@ export default function App() {
           setUpdPct(100);
         }
       });
-      await relaunch();
+      // not plugin-process's relaunch: the backend has to release the
+      // single-instance lock first, or the replacement process quits on startup
+      await invoke("restart_for_update");
     } catch (e) {
       setUpdPhase("error");
       setUpdError(String(e));
