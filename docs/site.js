@@ -34,6 +34,12 @@ function renderRows(lang) {
       )
       .join("");
   }
+  const rest = document.getElementById("rest");
+  if (rest) {
+    rest.innerHTML = window.FEATURES.rest[lang]
+      .map(([term, desc]) => `<div class="rest-item reveal"><dt>${term}</dt><dd>${desc}</dd></div>`)
+      .join("");
+  }
   const claims = document.getElementById("g5");
   if (claims) {
     claims.innerHTML = window.FEATURES.g5[lang]

@@ -438,6 +438,29 @@ main {
   transform: none;
 }
 
+/* ---------- the rest: compact two-column definition list ---------- */
+.rest {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 4px 48px;
+  margin: 0;
+}
+.rest-item {
+  padding: 18px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.rest dt {
+  font-size: 15.5px;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+.rest dd {
+  margin: 0;
+  color: var(--dim);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
 /* ---------- privacy ---------- */
 .privacy .claims {
   list-style: none;

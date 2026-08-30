@@ -25,6 +25,8 @@ window.CONTENT = {
     "g3.sub": "Some answers don't need search results. <kbd>Enter</kbd> copies whatever comes up.",
     "g4.title": "Everyday feel",
     "g4.sub": "The small stuff that decides whether a launcher survives its first week.",
+    "rest.title": "The rest of it",
+    "rest.sub": "Everything else magpie does, without a screenshot each.",
     "g5.title": "Why the privacy claims hold up",
     "close.title": "Press a hotkey. Find the thing.",
     "close.docs": "Full documentation",
@@ -53,6 +55,8 @@ window.CONTENT = {
     "g3.sub": "有些答案根本不用搜。<kbd>Enter</kbd> 直接复制。",
     "g4.title": "日常手感",
     "g4.sub": "决定一个启动器能不能活过第一周的那些小事。",
+    "rest.title": "剩下这些",
+    "rest.sub": "magpie 还会做的事，不用每条都配张图。",
     "g5.title": "这些隐私说法凭什么站得住",
     "close.title": "按下快捷键，找到那个东西。",
     "close.docs": "完整文档",
@@ -124,6 +128,18 @@ window.FEATURES = {
       },
     },
     {
+      img: "clip-image.png",
+      tag: "Copied images",
+      en: {
+        t: "Screenshots you copied count too",
+        d: "Anything you copy as an image lands in the history with a thumbnail. Find it later by describing what was on screen, the same way you search your image files.",
+      },
+      zh: {
+        t: "复制的截图也在里面",
+        d: "以图片形式复制的东西会带缩略图进历史。之后描述一下当时屏幕上是什么就能找回来，和搜图片文件是同一套。",
+      },
+    },
+    {
       img: "videos.png",
       tag: "Video shots",
       en: {
@@ -171,6 +187,18 @@ window.FEATURES = {
       zh: {
         t: "……以及视频里的文字",
         d: "同一个引擎，逐个镜头帧地读。字幕、幻灯片、别人屏幕共享里的代码，全都能搜到，点开就从文字出现的那一刻开始播。",
+      },
+    },
+    {
+      img: "crosslang.png",
+      tag: "Cross-language",
+      en: {
+        t: "Ask in one language, match another",
+        d: "Search in Chinese and English READMEs come back, or the other way round. The embedding model covers 100+ languages, so you don't have to remember which language you read something in.",
+      },
+      zh: {
+        t: "中文提问，英文命中",
+        d: "用中文搜，英文 README 照样出得来，反过来也一样。嵌入模型覆盖 100 多种语言，你不用记当初看的是哪种语言写的。",
       },
     },
     {
@@ -250,6 +278,33 @@ window.FEATURES = {
       },
     },
   ],
+  // Chapter 05: everything that doesn't need a screenshot to explain.
+  rest: {
+    en: [
+      ["Hybrid retrieval", "SQLite FTS5 keyword search and local embeddings, merged with reciprocal rank fusion. Long files are chunked, so a sentence on page 100 still surfaces."],
+      ["It learns your habits", "Results you actually open drift upward over time. The stats are local and decay, and they never beat a better match."],
+      ["Files come with next steps", "<kbd>Ctrl+C</kbd> copies a hit's path. <kbd>Ctrl+Shift+C</kbd> puts the file itself on the clipboard, ready to paste as an attachment."],
+      ["Updates that find you", "magpie checks at launch and once a day. A pending release shows a red dot on the tray icon; installing is still your call."],
+      ["English and 简体中文", "The whole interface, tray menu included. Follows your OS by default, switchable in settings."],
+      ["Scanned PDFs", "A separate switch turns OCR loose on PDF pages that have no text layer. Off by default, since big scans take a while."],
+      ["Straight to the browser", "<kbd>Ctrl+Enter</kbd> hands your text to the default browser. URLs open, everything else becomes a web search."],
+      ["Multi-monitor", "The palette shows up on whichever display your cursor is on."],
+      ["Settings travel", "Export the whole setup to one JSON and import it on another machine. Your GitHub token stays behind."],
+      ["Models even behind a firewall", "Switch to hf-mirror.com in one click. If Hugging Face and the mirror are both unreachable, magpie falls back to its own release assets."],
+    ],
+    zh: [
+      ["混合检索", "SQLite FTS5 关键词加本地向量，用 RRF 融合排名。长文件分块存，第 100 页的一句话照样能被搜到。"],
+      ["越用越懂你", "真正被打开的结果会慢慢往上走。统计只在本地、随时间衰减，也压不过更匹配的结果。"],
+      ["文件命中带后续动作", "<kbd>Ctrl+C</kbd> 复制路径，<kbd>Ctrl+Shift+C</kbd> 把文件本体放上剪贴板，粘出去就是附件。"],
+      ["更新会自己找上门", "启动时查一次，之后每天查一次。有新版托盘图标亮红点，装不装还是你说了算。"],
+      ["English 和简体中文", "整个界面连托盘菜单都有。默认跟随系统，设置里能切。"],
+      ["扫描版 PDF", "单独一个开关，专门对付没有文字层的 PDF 页面。默认关着，大部头扫描件比较耗时。"],
+      ["直接去浏览器", "<kbd>Ctrl+Enter</kbd> 把输入交给默认浏览器。是网址就打开，不是就变成网页搜索。"],
+      ["多显示器", "浮窗出现在你鼠标所在的那块屏幕上。"],
+      ["配置带着走", "整套设置导出成一个 JSON，换台机器导进去。GitHub token 不会跟着走。"],
+      ["模型在墙内也能下", "一键切到 hf-mirror.com。要是 Hugging Face 和镜像都连不上，magpie 会回落到自己的 Release 资产。"],
+    ],
+  },
   g5: {
     en: [
       "<b>No full-disk scanning.</b> magpie only reads folders you added yourself. It respects .gitignore, skips hidden files, and won't follow a symlink out of the folder you chose.",
