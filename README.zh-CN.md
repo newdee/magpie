@@ -2,7 +2,7 @@
 
 > 一个 Spotlight 式启动器，找回你存过但忘掉的一切。
 
-[English](README.md)
+[English](README.md) · **[功能一览 →](https://newdee.github.io/magpie/site/?lang=zh)**
 
 喜鹊爱收集闪亮的东西，又出了名地忘记藏在哪。人也一样：star 过再也没打开过的
 GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不到的截图、迷失在浏览器

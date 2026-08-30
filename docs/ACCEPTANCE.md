@@ -1,3 +1,24 @@
+# 验收记录 2026-08-30（GitHub Pages 功能站，随 v0.1.25 之后）
+
+用户：功能太多、README 三百行没人扫。做单页功能站（用户定：单页 + 语言
+切换，不做两页——两页必然漂移）。
+1. 截图管线：magpie-promo/scripts/site-shots.mjs（复用 demo 采集模式），
+   15 态 2x 整面板出图 → magpie/docs/site/img。沿用 promo 教训：清
+   scope/webscope localStorage、截屏前隐藏 .empty 空态注（emoji/工具带态
+   会混进"无匹配"读作故障）。功能变了重跑一条命令。
+2. 页面：docs/site/{index.html,style.css,content.js,site.js}。零框架零构建。
+   语言：?lang= > localStorage > navigator.language；切换只换文本节点不
+   刷新，title/html lang 同步。文案全在 content.js 成对存放（单一真源）。
+   结构：首屏（视频 + 下载）→ 能搜什么 6 卡 → 看得懂内容 4 卡 → 工具带
+   4 卡 → 日常手感 1 卡 → 隐私 5 条主张 → 收尾 CTA。
+3. Pages 已开（main /docs），站点 https://newdee.github.io/magpie/site/
+   与 http://dfine.tech/magpie/site/ 均 200。README 双语顶部加入口。
+
+验证：本地起服务浏览器实测——首屏自动中文（系统语言）、切换 EN 后 title/
+h1/卡片标题/html lang/localStorage 全同步、15 卡 + 5 条主张齐、强制加载
+15 张图 0 失败、网格与隐私区排布正常。
+
+---
 # 验收记录 2026-08-30（小贴士轮换动效，拟 v0.1.26）
 
 用户要求：条目切换加动画 + 定时轮换。取舍：8 秒一条（一条约 20 字读完
