@@ -2197,22 +2197,25 @@ fn set_ui_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Resu
     Ok(())
 }
 
+/// The palette's footprint with the preview pane open, in logical pixels.
+/// Mirrors WINDOW_WIDTH + PREVIEW_PANE_WIDTH in src/App.tsx; `show_window`
+/// centres this box so the pane can open with a pure rightward resize.
+const PREVIEW_TOTAL_WIDTH: f64 = 1092.0;
+
 /// Where a palette should sit once it has been resized.
 ///
-/// `set_size` alone anchors the top-left corner, so opening the preview pane
-/// grew the window rightwards and pushed its right edge off the screen on any
-/// display narrow enough. A width change keeps the centre where it was, so the
-/// pane opens symmetrically; a height change leaves the top alone, because the
-/// result list is meant to grow downwards. Whatever comes out is clamped onto
-/// the monitor, given as (position, size).
+/// The left edge stays pinned: `show_window` already reserved room for the
+/// pane, so growing rightwards into it is the normal case and nothing should
+/// move. The clamp is the safety net for a display too small for the reserved
+/// box, or a palette dragged against an edge before opening the pane. Sizes
+/// are the REQUESTED ones, not re-read from the window: macOS applies
+/// `set_size` asynchronously, and geometry read straight after it is stale.
 fn placed_after_resize(
     pos: (i32, i32),
-    before_w: i32,
     after: (i32, i32),
     monitor: Option<((i32, i32), (i32, i32))>,
 ) -> (i32, i32) {
-    let mut x = pos.0 - (after.0 - before_w) / 2;
-    let mut y = pos.1;
+    let (mut x, mut y) = pos;
     if let Some(((mx, my), (mw, mh))) = monitor {
         // a window larger than the monitor leaves no range to clamp into; pin
         // it to the corner rather than panicking on an inverted range
@@ -2239,7 +2242,7 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
     let before = w.outer_size().map_err(err_str)?;
     // React runs the effect behind this on every render, so most calls ask for
     // the size the window already has. Typing would otherwise churn through a
-    // resize and a reposition per keystroke.
+    // resize per keystroke.
     let scale = w.scale_factor().map_err(err_str)?;
     let want = tauri::LogicalSize::new(width, height).to_physical::<u32>(scale);
     if before.width == want.width && before.height == want.height {
@@ -2248,15 +2251,13 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
     let pos = w.outer_position().map_err(err_str)?;
     w.set_size(tauri::LogicalSize::new(width, height))
         .map_err(err_str)?;
-    let after = w.outer_size().map_err(err_str)?;
     let monitor = w.current_monitor().ok().flatten().map(|m| {
         let (mp, ms) = (m.position(), m.size());
         ((mp.x, mp.y), (ms.width as i32, ms.height as i32))
     });
     let (x, y) = placed_after_resize(
         (pos.x, pos.y),
-        before.width as i32,
-        (after.width as i32, after.height as i32),
+        (want.width as i32, want.height as i32),
         monitor,
     );
     if (x, y) != (pos.x, pos.y) {
@@ -2268,83 +2269,82 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
 
 #[cfg(test)]
 mod placement_tests {
-    use super::placed_after_resize;
+    use super::{placed_after_resize, PREVIEW_TOTAL_WIDTH};
 
     const HD: Option<((i32, i32), (i32, i32))> = Some(((0, 0), (1366, 768)));
 
     #[test]
-    fn width_growth_keeps_the_centre() {
-        // centred 720-wide palette on a 2560 screen, widened to 1100
+    fn growing_into_the_reserved_box_never_moves_the_window() {
+        // show_window seats a 720-wide palette at the left edge of the centred
+        // 1092 box: x = (2560 - 1092) / 2 = 734. Opening the pane grows into
+        // room that is already reserved, so the position must not change.
         let wide = Some(((0, 0), (2560, 1440)));
         assert_eq!(
-            placed_after_resize((920, 456), 720, (1100, 480), wide),
-            (730, 456)
+            placed_after_resize((734, 456), (1092, 480), wide),
+            (734, 456)
         );
-        // centre before: 920 + 360 = 1280. After: 730 + 550 = 1280.
+        // and the whole box sits centred: 734 + 1092 = 1826, 2560 - 1826 = 734
+        assert_eq!(2560 - (734 + 1092), 734);
     }
 
     #[test]
-    fn the_bug_widening_no_longer_runs_off_a_narrow_screen() {
-        // centred on 1366: x = (1366 - 720) / 2 = 323. Anchoring the left edge
-        // would put the right edge at 323 + 1100 = 1423, i.e. 57px off screen.
-        let (x, _) = placed_after_resize((323, 200), 720, (1100, 480), HD);
-        assert_eq!(x, 133);
-        assert!(x + 1100 <= 1366, "right edge must stay on screen");
+    fn the_reserved_box_fits_a_1366_screen() {
+        // x = (1366 - 1092) / 2 = 137, and 137 + 1092 = 1229 <= 1366, so
+        // opening the pane must stay put
+        assert_eq!(placed_after_resize((137, 200), (1092, 480), HD), (137, 200));
     }
 
     #[test]
     fn a_palette_dragged_against_the_right_edge_is_pulled_back() {
-        let (x, _) = placed_after_resize((640, 200), 720, (1100, 480), HD);
-        assert_eq!(x, 266, "clamped so the right edge lands exactly on 1366");
-        assert_eq!(x + 1100, 1366);
+        let (x, _) = placed_after_resize((640, 200), (1092, 480), HD);
+        assert_eq!(x, 274, "clamped so the right edge lands exactly on 1366");
+        assert_eq!(x + 1092, 1366);
     }
 
     #[test]
     fn height_only_changes_leave_the_window_alone() {
         // 100 + 620 = 720, inside the 768-tall screen, so nothing should move
-        assert_eq!(
-            placed_after_resize((323, 100), 720, (720, 620), HD),
-            (323, 100)
-        );
+        assert_eq!(placed_after_resize((323, 100), (720, 620), HD), (323, 100));
     }
 
     #[test]
     fn a_tall_palette_is_pulled_up_onto_the_screen() {
-        let (_, y) = placed_after_resize((323, 600), 720, (720, 620), HD);
+        let (_, y) = placed_after_resize((323, 600), (720, 620), HD);
         assert_eq!(y, 148);
         assert_eq!(y + 620, 768);
     }
 
     #[test]
     fn a_window_larger_than_the_monitor_pins_to_the_corner() {
-        assert_eq!(
-            placed_after_resize((100, 100), 720, (2000, 900), HD),
-            (0, 0)
-        );
+        assert_eq!(placed_after_resize((100, 100), (2000, 900), HD), (0, 0));
     }
 
     #[test]
     fn a_second_monitor_clamps_to_its_own_offset() {
         // a 1366-wide display sitting to the right of a 2560-wide primary
         let right = Some(((2560, 0), (1366, 768)));
-        let (x, y) = placed_after_resize((2883, 200), 720, (1100, 480), right);
-        assert_eq!((x, y), (2693, 200));
-        assert!(x >= 2560 && x + 1100 <= 2560 + 1366);
+        let (x, y) = placed_after_resize((2883, 200), (1092, 480), right);
+        assert_eq!((x, y), (2834, 200));
+        assert!(x >= 2560 && x + 1092 <= 2560 + 1366);
     }
 
     #[test]
-    fn no_monitor_information_still_recentres() {
-        assert_eq!(
-            placed_after_resize((323, 200), 720, (1100, 480), None),
-            (133, 200)
-        );
+    fn no_monitor_information_leaves_the_window_alone() {
+        assert_eq!(placed_after_resize((323, 200), (1092, 480), None), (323, 200));
     }
 
     #[test]
-    fn shrinking_back_restores_the_original_spot() {
+    fn shrinking_back_keeps_the_left_edge() {
+        // close the pane: the palette stays where its left edge always was
         let wide = Some(((0, 0), (2560, 1440)));
-        let grown = placed_after_resize((920, 456), 720, (1100, 480), wide);
-        assert_eq!(placed_after_resize(grown, 1100, (720, 480), wide), (920, 456));
+        assert_eq!(placed_after_resize((734, 456), (720, 480), wide), (734, 456));
+    }
+
+    #[test]
+    fn the_reserved_width_matches_the_frontend_constants() {
+        // WINDOW_WIDTH (720) + PREVIEW_PANE_WIDTH (372) in src/App.tsx; the
+        // static sweep checks the TS side, this pins the Rust side to it
+        assert_eq!(PREVIEW_TOTAL_WIDTH, 1092.0);
     }
 }
 
@@ -2399,7 +2399,18 @@ fn show_window(app: &AppHandle) {
         if let (Some(monitor), Ok(size)) = (monitor, w.outer_size()) {
             let mp = monitor.position();
             let ms = monitor.size();
-            let x = mp.x + ((ms.width as i32 - size.width as i32) / 2).max(0);
+            // Centre the box the palette can GROW into, not the palette
+            // itself. The preview pane extends the window to the right, and
+            // moving the window at that moment does not work everywhere
+            // (macOS applies set_size asynchronously, so a reposition
+            // computed right after it reads stale geometry). Reserving the
+            // expanded footprint up front means opening and closing the pane
+            // is a pure resize with the left edge pinned: nothing has to
+            // move, on any platform. The palette sits slightly left of
+            // centre as a result; the pane opens into the reserved half.
+            let reserved = (PREVIEW_TOTAL_WIDTH * monitor.scale_factor()) as i32;
+            let span = reserved.max(size.width as i32);
+            let x = mp.x + ((ms.width as i32 - span) / 2).max(0);
             let y = mp.y + (ms.height as f64 * 0.22) as i32;
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }

@@ -840,8 +840,9 @@ export default function App() {
     if (!el) return;
     const h = Math.min(Math.max(el.offsetHeight, 96), 620);
     const w = previewShown ? WINDOW_WIDTH_PREVIEW : WINDOW_WIDTH;
-    // through the backend, not setSize: widening for the preview pane has to
-    // move the window too, or its right edge ends up off the screen
+    // through the backend, not setSize: the backend skips no-op resizes and
+    // clamps the window back onto the screen when the reserved room (see
+    // show_window) is not there, e.g. after a drag against the screen edge
     invoke("resize_palette", { width: w, height: h }).catch(() => {});
   });
 
