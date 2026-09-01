@@ -493,6 +493,8 @@ export default function App() {
   const [tipPhase, setTipPhase] = useState<"in" | "out">("in");
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // monotonic search ticket; see runSearch
+  const searchSeqRef = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef(query);
   queryRef.current = query;
@@ -565,6 +567,10 @@ export default function App() {
   }, []);
 
   const runSearch = useCallback(async (q: string, srcIdx: number) => {
+    // one ticket per search: only the latest request may publish results. The
+    // backend cancels the superseded query outright (see take_search_conn);
+    // this guard covers the tail where an older response is already in flight.
+    const seq = ++searchSeqRef.current;
     // empty input shows nothing: the palette stays a bare search box.
     // Clipboard is the exception — its whole point is "what did I just copy",
     // so an empty query lists the most recent clips.
@@ -606,7 +612,7 @@ export default function App() {
         ]);
         hits = [...apps.map((a) => ({ ...a, kind: "app" as const })), ...fs];
       }
-      if (queryRef.current === q && sourceRef.current === srcIdx) {
+      if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
         setResults(hits);
         setSelected(0);
         setSelAnchor(null);

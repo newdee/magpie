@@ -1,7 +1,7 @@
 //! Thin Tauri shell over magpie-core: window/tray/shortcut plumbing + commands.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
@@ -26,6 +26,15 @@ struct AppState {
     db_path: PathBuf,
     model_dir: PathBuf,
     db: AsyncMutex<magpie_core::rusqlite::Connection>,
+    /// Read-only twin of `db` for interactive searches. Separate so that
+    /// cancelling a stale search can never touch a write: the interrupt
+    /// handle below reaches only this connection, and WAL keeps its reads
+    /// out of the writer's way.
+    search_db: AsyncMutex<magpie_core::rusqlite::Connection>,
+    search_interrupt: magpie_core::rusqlite::InterruptHandle,
+    /// Bumped by every incoming search; a search that finds a newer ticket
+    /// than its own when it reaches the head of the queue skips its work.
+    search_gen: AtomicU64,
     embedder: Arc<StdMutex<Option<Embedder>>>,
     model_status: Arc<StdMutex<String>>,
     siglip: Arc<StdMutex<Option<Siglip>>>,
@@ -77,6 +86,39 @@ fn err_str<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// Take the search connection, cancelling whatever search still runs on it.
+///
+/// A new keystroke makes the previous query's answer worthless, but before
+/// this the query kept running anyway and held the connection: retyping
+/// "vscode" could queue every later search behind an expensive single-"v"
+/// scan. Interrupting makes the stale query error out and release the lock
+/// within a statement step.
+///
+/// Returns None when a newer search overtook this one while it waited for the
+/// lock: only the newest ticket does any work, the rest hand the lock straight
+/// on. Interrupting with no query mid-flight is harmless — SQLite only stops
+/// statements that were already running when the flag was raised.
+async fn take_search_conn<'a>(
+    db: &'a AsyncMutex<magpie_core::rusqlite::Connection>,
+    interrupt: &magpie_core::rusqlite::InterruptHandle,
+    gen: &AtomicU64,
+) -> Option<tokio::sync::MutexGuard<'a, magpie_core::rusqlite::Connection>> {
+    let ticket = gen.fetch_add(1, Ordering::SeqCst) + 1;
+    interrupt.interrupt();
+    let conn = db.lock().await;
+    if gen.load(Ordering::SeqCst) != ticket {
+        return None;
+    }
+    Some(conn)
+}
+
+/// [`take_search_conn`] with the pieces pulled out of the app state.
+async fn take_state_search_conn(
+    state: &AppState,
+) -> Option<tokio::sync::MutexGuard<'_, magpie_core::rusqlite::Connection>> {
+    take_search_conn(&state.search_db, &state.search_interrupt, &state.search_gen).await
+}
+
 // ---------- commands ----------
 
 #[tauri::command]
@@ -105,7 +147,9 @@ async fn search_stars(
         .transpose()
         .map_err(err_str)?
     };
-    let conn = state.db.lock().await;
+    let Some(conn) = take_state_search_conn(&state).await else {
+        return Ok(Vec::new()); // superseded; the frontend drops stale answers
+    };
     let store = state.store.lock().unwrap();
     let mut hits =
         search::search(&conn, &store, &query, qvec.as_deref(), sort, limit).map_err(err_str)?;
@@ -364,7 +408,9 @@ async fn search_local(
         .map_err(err_str)?
         .map_err(err_str)?
     };
-    let conn = state.db.lock().await;
+    let Some(conn) = take_state_search_conn(&state).await else {
+        return Ok(Vec::new()); // superseded; the frontend drops stale answers
+    };
     let store = state.store.lock().unwrap();
     // the videos scope is its own pipeline: filename + semantic shots, fused
     if matches!(scope, search::LocalScope::Videos) {
@@ -1022,7 +1068,9 @@ async fn search_clips(
             Err(_) => None,
         }
     };
-    let conn = state.db.lock().await;
+    let Some(conn) = take_state_search_conn(&state).await else {
+        return Ok(Vec::new()); // superseded; the frontend drops stale answers
+    };
     let store = state.store.lock().unwrap();
     search::search_clips(&conn, &store, &query, qvec.as_deref(), image_qvec.as_deref(), limit)
         .map_err(err_str)
@@ -1335,7 +1383,9 @@ async fn search_web(
             Err(_) => None,
         }
     };
-    let conn = state.db.lock().await;
+    let Some(conn) = take_state_search_conn(&state).await else {
+        return Ok(Vec::new()); // superseded; the frontend drops stale answers
+    };
     let store = state.store.lock().unwrap();
     let fb = magpie_core::frecency::factors(&conn, "bookmark", unix_now()).unwrap_or_default();
     let fh = magpie_core::frecency::factors(&conn, "history", unix_now()).unwrap_or_default();
@@ -2268,6 +2318,124 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
 }
 
 #[cfg(test)]
+mod search_cancel_tests {
+    use super::take_search_conn;
+    use magpie_core::db;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    const ENDLESS: &str =
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c";
+
+    /// The scenario from the report: an expensive stale query (the lone "v"
+    /// of a retyped "vscode") is holding the connection when the next search
+    /// arrives. The new search must cancel it and take over promptly instead
+    /// of queueing behind it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_new_search_cancels_the_running_one_and_takes_over() {
+        let db = Arc::new(AsyncMutex::new(db::open_in_memory().expect("db")));
+        let interrupt = Arc::new(db.try_lock().unwrap().get_interrupt_handle());
+        let gen = Arc::new(AtomicU64::new(0));
+
+        let (db2, int2, gen2) = (db.clone(), interrupt.clone(), gen.clone());
+        let stale = tokio::spawn(async move {
+            let conn = take_search_conn(&db2, &int2, &gen2)
+                .await
+                .expect("first ticket runs");
+            let r: Result<i64, _> = conn.query_row(ENDLESS, [], |row| row.get(0));
+            r.is_err() // the endless query can only end by being interrupted
+        });
+        // let the stale query actually start spinning on the connection
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let started = std::time::Instant::now();
+        let conn = take_search_conn(&db, &interrupt, &gen)
+            .await
+            .expect("the latest ticket wins");
+        let waited = started.elapsed();
+        let v: i64 = conn.query_row("SELECT 5", [], |row| row.get(0)).expect("query");
+        drop(conn);
+
+        assert_eq!(v, 5, "the new search must run normally after the takeover");
+        assert!(
+            waited < std::time::Duration::from_secs(2),
+            "the new search waited {waited:?}; it must not queue behind the stale scan"
+        );
+        assert!(stale.await.unwrap(), "the stale query must have been interrupted");
+    }
+
+    /// Three keystrokes race for the lock: whoever is no longer the newest by
+    /// the time it reaches the head of the queue must bail without running.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_superseded_ticket_does_no_work() {
+        let db = Arc::new(AsyncMutex::new(db::open_in_memory().expect("db")));
+        let interrupt = Arc::new(db.try_lock().unwrap().get_interrupt_handle());
+        let gen = Arc::new(AtomicU64::new(0));
+
+        // hold the connection so both tickets have to queue
+        let guard = db.lock().await;
+        let (db2, int2, gen2) = (db.clone(), interrupt.clone(), gen.clone());
+        let older = tokio::spawn(async move {
+            take_search_conn(&db2, &int2, &gen2).await.is_none()
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let (db3, int3, gen3) = (db.clone(), interrupt.clone(), gen.clone());
+        let newer = tokio::spawn(async move {
+            take_search_conn(&db3, &int3, &gen3).await.is_some()
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(guard); // tokio's mutex is fair: the older ticket wakes first
+
+        assert!(older.await.unwrap(), "the overtaken ticket must bail");
+        assert!(newer.await.unwrap(), "the newest ticket must get the connection");
+    }
+
+    /// The mechanism take_search_conn leans on: an interrupt raised from
+    /// another thread stops a running statement with an error, and the
+    /// connection stays usable for the next query.
+    #[test]
+    fn interrupt_stops_a_running_query_and_the_connection_survives() {
+        let conn = db::open_in_memory().expect("in-memory db");
+        let handle = conn.get_interrupt_handle();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            handle.interrupt();
+        });
+        // unbounded recursive CTE: runs until something stops it
+        let started = std::time::Instant::now();
+        let r: Result<i64, _> = conn.query_row(
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c",
+            [],
+            |row| row.get(0),
+        );
+        t.join().unwrap();
+        assert!(r.is_err(), "the interrupt must surface as an error");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the query must stop near the interrupt, not run on"
+        );
+        let ok: i64 = conn
+            .query_row("SELECT 41 + 1", [], |row| row.get(0))
+            .expect("the connection must survive an interrupt");
+        assert_eq!(ok, 42);
+    }
+
+    /// Raising the flag while nothing runs must not poison later queries:
+    /// take_search_conn interrupts before it knows whether a search is
+    /// actually in flight.
+    #[test]
+    fn interrupt_with_nothing_running_is_harmless() {
+        let conn = db::open_in_memory().expect("in-memory db");
+        conn.get_interrupt_handle().interrupt();
+        let ok: i64 = conn
+            .query_row("SELECT 7", [], |row| row.get(0))
+            .expect("a statement started after the flag must run normally");
+        assert_eq!(ok, 7);
+    }
+}
+
+#[cfg(test)]
 mod placement_tests {
     use super::{placed_after_resize, PREVIEW_TOTAL_WIDTH};
 
@@ -2490,10 +2658,19 @@ pub fn run() {
             }
             let store = VectorStore::load(&conn).unwrap_or_else(|_| VectorStore::empty());
 
+            // opened after `conn` so migrations have already run once; this
+            // twin only ever reads (interactive searches), so a cancelled
+            // search can never take a write down with it
+            let search_conn = db::open(&db_path)?;
+            let search_interrupt = search_conn.get_interrupt_handle();
+
             app.manage(AppState {
                 db_path,
                 model_dir,
                 db: AsyncMutex::new(conn),
+                search_db: AsyncMutex::new(search_conn),
+                search_interrupt,
+                search_gen: AtomicU64::new(0),
                 store: Arc::new(StdMutex::new(store)),
                 embedder: Arc::new(StdMutex::new(None)),
                 model_status: Arc::new(StdMutex::new("loading".into())),
