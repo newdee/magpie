@@ -1,3 +1,41 @@
+# 验收记录 2026-09-02（划词搜索热键给默认值，待出包 v0.1.32）
+
+用户："快捷键最好都有默认值"。v0.1.31 的划词搜索热键是"设置了才生效"，不
+开箱即用。
+
+## 取舍：默认键怎么选
+
+要求：三平台系统级不占用、不抢常用应用快捷键、和 Alt+Space 是一家的。
+
+- Windows/Linux：`Ctrl+Alt+Space`。系统不占；JetBrains 在 IDE 内绑了类名补全，
+  可在设置里改键。排除项：`Alt+Shift+*`（Windows 默认的输入语言切换是
+  Left Alt+Shift，中文用户几乎都双输入法）、`Ctrl+Shift+Space`（VS Code 参数
+  提示 + JetBrains 智能补全，两大编辑器同时中招）、`Ctrl+Alt+字母`（非美式
+  布局上等于 AltGr+字母，会吃掉 €/@ 这类字符）
+- macOS：`Alt+Shift+Space`（Option+Shift+Space）。`Ctrl+Option+Space` 是
+  macOS 默认的"选择下一个输入源"，不能用
+
+存储改三态：meta 里没有 → 默认；空串 → 用户主动移除；其他 → 自定义。老用户
+升级后没设过的自动获得默认，设置里出现「恢复为 <默认>」链接（仅当当前值 ≠
+默认时）。
+
+## 连续三轮干净
+
+- 单测：`resolve_selection_hotkey` 三态 + 默认键与唤出键不相同，109 测试通过、
+  clippy 0；tsc + vite 通过；静态扫描 0 FAIL（i18n 138+28）；README/站点双语
+  对称核对 0 FAIL
+- 无头回归：特性总回归 18/18、最近打开回归 5/5（demo mock 补了
+  `hotkey_selection` / `_default` 字段）
+- 真机（生产 exe）5/5：meta 无记录启动 → 浮窗初始隐藏 → 按 Ctrl+Alt+Space
+  弹出、日志无 `unavailable`；meta 存空串启动 → 按 Ctrl+Alt+Space 不弹、
+  Alt+Space 照常弹。测试结束把 meta 清回"无记录"
+
+## 未验证项
+
+- macOS 上 `Alt+Shift+Space` 的实际注册（本机仅 Windows）。已避开系统默认冲突，
+  注册失败会降级为只保留唤出键并写日志
+
+---
 # 验收记录 2026-09-02（最近打开关掉后列表残留，待出包 v0.1.32）
 
 用户报障（v0.1.31）：关闭「显示最近打开」后回到输入框，列表还在，切换 tab

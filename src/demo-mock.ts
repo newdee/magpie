@@ -33,6 +33,10 @@ const folders = [
 
 const status = {
   version: pkg.version,
+  // the selection-search chord ships with a default; the settings row shows
+  // it and offers a reset only when the user changed it
+  hotkey_selection: "Ctrl+Alt+Space",
+  hotkey_selection_default: "Ctrl+Alt+Space",
   repo_count: 1778,
   file_count: 1695,
   folder_count: 2,

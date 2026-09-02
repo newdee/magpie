@@ -150,8 +150,9 @@ interface Status {
   local_indexing: boolean;
   max_file_mb: number;
   hotkey: string;
-  /// empty when no selection-search chord is set
+  /// the effective selection-search chord; empty when the user removed it
   hotkey_selection: string;
+  hotkey_selection_default: string;
   note_path: string;
   hf_endpoint: string;
   version: string;
@@ -2467,7 +2468,7 @@ export default function App() {
                       {t("Currently")} <kbd>{status.hotkey_selection}</kbd>.{" "}
                     </>
                   ) : (
-                    <>{t("Not set.")} </>
+                    <>{t("Removed.")} </>
                   )}
                   {t(
                     "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.",
@@ -2498,6 +2499,16 @@ export default function App() {
               </div>
               {selMsg && (
                 <p className={selMsg === "saved" ? "set-empty" : "error-line"}>{t(selMsg)}</p>
+              )}
+              {status && status.hotkey_selection !== status.hotkey_selection_default && (
+                <div className="set-links">
+                  <button
+                    className="link-btn"
+                    onClick={() => void applySelectionHotkey(status.hotkey_selection_default)}
+                  >
+                    {tf("Reset to {k}", { k: status.hotkey_selection_default })}
+                  </button>
+                </div>
               )}
             </div>
 

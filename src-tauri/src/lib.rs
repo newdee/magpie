@@ -315,7 +315,8 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .unwrap_or(false),
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
-        "hotkey_selection": db::meta_get(&conn, "hotkey_selection").ok().flatten().unwrap_or_default(),
+        "hotkey_selection": resolve_selection_hotkey(db::meta_get(&conn, "hotkey_selection").ok().flatten().as_deref()).unwrap_or_default(),
+        "hotkey_selection_default": DEFAULT_SELECTION_HOTKEY,
         "note_path": note_path_from(&conn, &state.db_path).to_string_lossy().into_owned(),
         "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
@@ -673,6 +674,25 @@ async fn set_max_file_mb(
     Ok(())
 }
 
+/// The selection-search chord out of the box. A sibling of Alt+Space that no
+/// OS claims: Ctrl+Alt+Space is free on Windows and Linux (JetBrains binds it
+/// inside the IDE; rebindable here), while on macOS Ctrl+Option+Space is the
+/// system's input-source switch, so Option+Shift+Space instead.
+#[cfg(target_os = "macos")]
+const DEFAULT_SELECTION_HOTKEY: &str = "Alt+Shift+Space";
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_SELECTION_HOTKEY: &str = "Ctrl+Alt+Space";
+
+/// Stored preference → chord to register. Nothing stored means the default;
+/// an empty string is the user having removed it; anything else is theirs.
+fn resolve_selection_hotkey(stored: Option<&str>) -> Option<String> {
+    match stored {
+        None => Some(DEFAULT_SELECTION_HOTKEY.to_string()),
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => Some(s.trim().to_string()),
+    }
+}
+
 /// (Re)register every global chord: the summon toggle, and optionally the
 /// selection search. One function because the plugin's `unregister_all` is
 /// the only reliable way to drop a stale chord, so both have to be re-added
@@ -781,7 +801,7 @@ async fn set_hotkey(
             db::meta_get(&conn, "hotkey")
                 .map_err(err_str)?
                 .unwrap_or_else(|| DEFAULT_HOTKEY.to_string()),
-            db::meta_get(&conn, "hotkey_selection").map_err(err_str)?,
+            resolve_selection_hotkey(db::meta_get(&conn, "hotkey_selection").map_err(err_str)?.as_deref()),
         )
     };
     if let Err(e) = register_hotkeys(&app, &hotkey, selection.as_deref()) {
@@ -809,7 +829,7 @@ async fn set_selection_hotkey(
             db::meta_get(&conn, "hotkey")
                 .map_err(err_str)?
                 .unwrap_or_else(|| DEFAULT_HOTKEY.to_string()),
-            db::meta_get(&conn, "hotkey_selection").map_err(err_str)?,
+            resolve_selection_hotkey(db::meta_get(&conn, "hotkey_selection").map_err(err_str)?.as_deref()),
         )
     };
     if hotkey == summon {
@@ -2532,6 +2552,24 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
 }
 
 #[cfg(test)]
+mod hotkey_tests {
+    use super::{resolve_selection_hotkey, DEFAULT_SELECTION_HOTKEY};
+
+    #[test]
+    fn selection_chord_is_on_by_default_off_when_removed_custom_when_set() {
+        assert_eq!(resolve_selection_hotkey(None).as_deref(), Some(DEFAULT_SELECTION_HOTKEY));
+        assert_eq!(resolve_selection_hotkey(Some("")), None, "an explicit removal stays removed");
+        assert_eq!(resolve_selection_hotkey(Some("   ")), None);
+        assert_eq!(resolve_selection_hotkey(Some(" Ctrl+Alt+F9 ")).as_deref(), Some("Ctrl+Alt+F9"));
+    }
+
+    #[test]
+    fn the_default_never_collides_with_the_summon_chord() {
+        assert_ne!(DEFAULT_SELECTION_HOTKEY, super::DEFAULT_HOTKEY);
+    }
+}
+
+#[cfg(test)]
 mod search_cancel_tests {
     use super::take_search_conn;
     use magpie_core::db;
@@ -2948,7 +2986,7 @@ pub fn run() {
                 let get = |k: &str| conn.as_ref().and_then(|c| db::meta_get(c, k).ok().flatten());
                 (
                     get("hotkey").unwrap_or_else(|| DEFAULT_HOTKEY.to_string()),
-                    get("hotkey_selection"),
+                    resolve_selection_hotkey(get("hotkey_selection").as_deref()),
                 )
             };
             if let Err(e) = register_hotkeys(app.handle(), &hotkey, selection.as_deref()) {

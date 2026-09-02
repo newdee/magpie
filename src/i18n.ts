@@ -14,7 +14,8 @@ const ZH: Record<string, string> = {
   "With nothing typed, each tab lists what you opened from it most recently.":
     "什么都没输入时，每个 tab 列出你最近从它打开过的条目。",
   "Search selection shortcut": "划词搜索快捷键",
-  "Not set.": "未设置。",
+  "Removed.": "已移除。",
+  "Reset to {k}": "恢复为 {k}",
   "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.":
     "在任何应用里选中文字后按它：magpie 复制选区，并带着这段文字弹出来。",
   Remove: "移除",
@@ -36,8 +37,8 @@ const ZH: Record<string, string> = {
     "缩小文件搜索范围：ext:pdf、>10mb、7d、in:projects",
   "note buy milk — one timestamped line into your notes file":
     "note 买牛奶——一行带时间戳的记录进笔记文件",
-  "A second hotkey searches the text you have selected — set it in Settings":
-    "第二个快捷键可以直接搜你选中的文字——设置里配置",
+  "Ctrl+Alt+Space looks up the text you have selected in any app — Option+Shift+Space on a Mac":
+    "在任何应用里选中文字按 Ctrl+Alt+Space 直接搜——Mac 上是 Option+Shift+Space",
   // tabs
   "Local Files": "本地文件",
   "GitHub Stars": "GitHub Stars",

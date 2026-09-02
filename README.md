@@ -121,9 +121,9 @@ vaguely remember (or drop in an image), hit Enter.
 - **Quick notes**: `note buy milk` appends one timestamped line to a markdown
   file of your choosing (Settings → Notes file). `Enter` writes it and the
   palette goes away.
-- **Look up what you have selected**: a second global shortcut copies the
-  selection in whatever app you are in and summons magpie with it as the
-  query. Off until you set it in Settings.
+- **Look up what you have selected**: `Ctrl+Alt+Space` (`Option+Shift+Space`
+  on macOS) copies the selection in whatever app you are in and summons
+  magpie with it as the query. Rebindable or removable in Settings.
 - **Recent opens on the empty box**: switch it on and each tab lists what you
   last opened from it, so getting back to a file from a minute ago is two
   keystrokes.
@@ -256,6 +256,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Enter` | context action: open a repo/bookmark/history page in the browser, reveal a file in Explorer/Finder, launch an app, or copy a clip |
 | `Ctrl+Enter` | hand the query to the browser: URL-looking input opens directly, anything else web-searches |
 | `Ctrl+C` | copy what identifies the row: a path, a URL, a clip's text (`Ctrl+Shift+C`: the file itself) |
+| `Ctrl+Alt+Space` | in any app: look up the selected text (`Option+Shift+Space` on macOS; rebindable) |
 | `Tab` | next source (Local / Stars / Web / Clipboard, order set in settings) |
 | `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
 | `Shift+Enter` | paste the selected clip(s) into the previous app (Clipboard tab) |

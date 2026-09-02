@@ -123,7 +123,7 @@ export const TIPS: string[] = [
   "Date math lives in the box: today + 30d, until 2026-10-01, 2026-10-01 - today",
   "Narrow file searches: ext:pdf, >10mb, 7d, in:projects",
   "note buy milk — one timestamped line into your notes file",
-  "A second hotkey searches the text you have selected — set it in Settings",
+  "Ctrl+Alt+Space looks up the text you have selected in any app — Option+Shift+Space on a Mac",
 ];
 
 export function tipsEnabled(): boolean {
