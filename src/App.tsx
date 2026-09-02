@@ -2280,6 +2280,10 @@ export default function App() {
                     onClick={() => {
                       setRecentsOn(o.on);
                       setRecentsEnabled(o.on);
+                      // the list behind the settings page was built under the
+                      // old setting; rebuild it now, or it lingers until the
+                      // next keystroke or tab switch
+                      void runSearch(queryRef.current, sourceRef.current);
                     }}
                   >
                     {t(o.label)}

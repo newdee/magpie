@@ -296,6 +296,11 @@ mockIPC((cmd, args) => {
         ? fileHits.map((f) => ({ kind: "file", ...f }))
         : [];
     }
+    case "recent_hits":
+      // the empty-box "recent opens" list: a few file rows for the local tab
+      return (args as { source?: string })?.source === "local"
+        ? fileHits.slice(0, 3).map((f) => ({ kind: "file", ...f }))
+        : [];
     case "search_by_image":
       return imageHits;
     case "get_preview": {
