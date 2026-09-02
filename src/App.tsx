@@ -17,6 +17,10 @@ import {
   tipsEnabled,
   type BangMatch,
   type EmojiHit,
+  matchNote,
+  type NoteMatch,
+  recentsEnabled,
+  setRecentsEnabled,
 } from "./extras";
 import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
 import "./App.css";
@@ -146,6 +150,9 @@ interface Status {
   local_indexing: boolean;
   max_file_mb: number;
   hotkey: string;
+  /// empty when no selection-search chord is set
+  hotkey_selection: string;
+  note_path: string;
   hf_endpoint: string;
   version: string;
 }
@@ -174,6 +181,7 @@ const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
 const LOCAL_KEYS = [
   "magpie.bangs",
   "magpie.tips",
+  "magpie.recents",
   "magpie.taborder",
   "magpie.tabhidden",
   "magpie.defaulttab",
@@ -482,6 +490,14 @@ export default function App() {
     swatch?: string | null;
   } | null>(null);
   const [bangHit, setBangHit] = useState<BangMatch | null>(null);
+  // `note …`: Enter appends the text to the notes file instead of searching
+  const [noteHit, setNoteHit] = useState<NoteMatch | null>(null);
+  const [recentsOn, setRecentsOn] = useState(recentsEnabled);
+  // settings drafts for the selection-search chord and the notes file
+  const [selDraft, setSelDraft] = useState("");
+  const [selMsg, setSelMsg] = useState<string | null>(null);
+  const [notePathDraft, setNotePathDraft] = useState("");
+  const [noteMsg, setNoteMsg] = useState<string | null>(null);
   const [emojiHits, setEmojiHits] = useState<EmojiHit[] | null>(null);
   const [topRowActive, setTopRowActive] = useState(true);
   const [bangsDraft, setBangsDraft] = useState<string | null>(null);
@@ -576,6 +592,21 @@ export default function App() {
     // so an empty query lists the most recent clips.
     const srcId = (sourcesRef.current[srcIdx] ?? sourcesRef.current[0]).id;
     if (q.trim() === "" && srcId !== "clips") {
+      // opt-in: the empty box lists what you opened most recently from this
+      // tab, so "back to that file from a minute ago" is two keystrokes
+      if (recentsEnabled() && (srcId === "local" || srcId === "github-stars" || srcId === "web")) {
+        try {
+          const recents = await invoke<Hit[]>("recent_hits", { source: srcId });
+          if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
+            setResults(Array.isArray(recents) ? recents : []);
+            setSelected(0);
+            setSelAnchor(null);
+          }
+        } catch {
+          /* keep the bare box */
+        }
+        return;
+      }
       setResults([]);
       setSelected(0);
       return;
@@ -660,9 +691,11 @@ export default function App() {
       setEmojiHits(searchEmoji(q.slice(1)));
       setCalcHit(null);
       setBangHit(null);
+      setNoteHit(null);
       return;
     }
     setEmojiHits(null);
+    setNoteHit(matchNote(q));
     setBangHit(matchBang(q, loadBangs()));
     if (q.length >= 2) {
       invoke<{ value: string; alt: string | null } | null>("calc_query", { query: q })
@@ -824,6 +857,14 @@ export default function App() {
       }),
       // tray menu entry point
       listen("open-settings", () => setShowSettings(true)),
+      // the selection-search chord: the backend copied the selected text and
+      // is about to summon the palette; make that text the query
+      listen<string>("search-selection", (e) => {
+        setShowSettings(false);
+        setImageQuery(null);
+        setSourceIdx(0);
+        setQuery(e.payload);
+      }),
       // no hide-on-blur: the palette stays until the user dismisses it
       // explicitly (Esc, Alt+Space, tray) — dragging files in needs the
       // window to survive losing focus
@@ -939,6 +980,19 @@ export default function App() {
       setLastError(String(e));
     }
   }, []);
+
+  // `note …` → one line into the notes file, then the palette goes away
+  const saveNote = useCallback(async () => {
+    const n = noteHit;
+    if (!n) return;
+    try {
+      await invoke("append_note", { text: n.text });
+      setQuery("");
+      await getCurrentWindow().hide();
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, [noteHit]);
 
   // Ctrl/Cmd+Enter hands the raw query to the default browser: a URL-looking
   // input opens directly, anything else becomes a web search
@@ -1141,6 +1195,8 @@ export default function App() {
             void invoke("copy_clip", { text: emojiHits[0].emoji }).then(() =>
               getCurrentWindow().hide(),
             );
+          } else if (topRowActive && noteHit && !e.ctrlKey && !e.metaKey) {
+            void saveNote();
           } else if (topRowActive && bangHit && !e.ctrlKey && !e.metaKey) {
             void invoke("open_repo", { url: bangHit.url }).then(() => getCurrentWindow().hide());
           } else if (topRowActive && calcHit && !e.ctrlKey && !e.metaKey) {
@@ -1185,21 +1241,42 @@ export default function App() {
         }
         case "c":
         case "C": {
-          // file rows: Ctrl+C copies the path, Ctrl+Shift+C the file itself.
-          // Text selected in the input keeps native copy behavior.
+          // Ctrl+C copies what identifies the row: a file's path (Ctrl+Shift+C
+          // the file itself), a repo's or page's URL, a clip's text, an app's
+          // launch target. Text selected in the input keeps native copy.
           if (!(e.ctrlKey || e.metaKey) || showSettings) break;
           const r = results[selected];
-          const isFileRow = r && (r.kind === "file" || r.kind === "video");
           const inp = inputRef.current;
           const hasSelection = inp && inp.selectionStart !== inp.selectionEnd;
-          if (isFileRow && !hasSelection) {
+          if (!r || hasSelection) break;
+          if ((r.kind === "file" || r.kind === "video") && e.shiftKey) {
             e.preventDefault();
-            const path = (r as { path: string }).path;
-            if (e.shiftKey) {
-              void invoke("copy_file_clip", { path }).catch((err) => setLastError(String(err)));
-            } else {
-              void invoke("copy_clip", { text: path });
-            }
+            void invoke("copy_file_clip", { path: r.path }).catch((err) => setLastError(String(err)));
+            break;
+          }
+          if (r.kind === "clip" && r.clip_kind === "image") {
+            // an image clip's identity is the image itself
+            e.preventDefault();
+            void invoke("copy_image_clip", { clipId: r.id }).catch((err) => setLastError(String(err)));
+            break;
+          }
+          const text =
+            r.kind === "file" || r.kind === "video"
+              ? r.path
+              : r.kind === "repo"
+                ? r.html_url
+                : r.kind === "bookmark" || r.kind === "history"
+                  ? r.url
+                  : r.kind === "clip"
+                    ? r.clip_kind === "text"
+                      ? r.content
+                      : null
+                    : r.kind === "app"
+                      ? r.target
+                      : null;
+          if (text != null) {
+            e.preventDefault();
+            void invoke("copy_clip", { text });
           }
           break;
         }
@@ -1240,7 +1317,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, emojiHits, topRowActive, runSearch],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, runSearch],
   );
 
   const refresh = useCallback(async () => {
@@ -1300,36 +1377,18 @@ export default function App() {
   }, []);
 
   const captureHotkey = useCallback((e: React.KeyboardEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
-    // bare Backspace/Delete/Escape clears the recording
-    if (
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.metaKey &&
-      ["Backspace", "Delete", "Escape"].includes(e.key)
-    ) {
+    const r = chordFromEvent(e);
+    if (r.ignore) return;
+    if (r.clear) {
       setHotkeyDraft("");
       setHotkeyMsg(null);
       return;
     }
-    const parts: string[] = [];
-    if (e.ctrlKey) parts.push("Ctrl");
-    if (e.altKey) parts.push("Alt");
-    if (e.shiftKey) parts.push("Shift");
-    if (e.metaKey) parts.push("Super");
-    let key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-    if (e.key === " ") key = "Space";
-    // Shift-only or bare chords (Shift+A, Tab…) would hijack normal typing
-    // system-wide; require Ctrl/Alt/Super for anything that is not F1-F24
-    const strongModifier = e.ctrlKey || e.altKey || e.metaKey;
-    if (!strongModifier && !/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) {
-      setHotkeyMsg("use Ctrl/Alt/Win plus a key, or an F-key");
+    if (r.error) {
+      setHotkeyMsg(r.error);
       return;
     }
-    parts.push(key);
-    setHotkeyDraft(parts.join("+"));
+    setHotkeyDraft(r.chord ?? "");
     setHotkeyMsg(null);
   }, []);
 
@@ -1344,6 +1403,48 @@ export default function App() {
       setHotkeyMsg(String(e));
     }
   }, [hotkeyDraft, refreshStatus]);
+
+  // the same recorder, for the selection-search chord
+  const captureSelectionHotkey = useCallback((e: React.KeyboardEvent) => {
+    const r = chordFromEvent(e);
+    if (r.ignore) return;
+    if (r.clear) {
+      setSelDraft("");
+      setSelMsg(null);
+      return;
+    }
+    if (r.error) {
+      setSelMsg(r.error);
+      return;
+    }
+    setSelDraft(r.chord ?? "");
+    setSelMsg(null);
+  }, []);
+
+  const applySelectionHotkey = useCallback(
+    async (chord: string) => {
+      try {
+        await invoke("set_selection_hotkey", { hotkey: chord });
+        setSelMsg("saved");
+        setSelDraft("");
+        refreshStatus();
+      } catch (e) {
+        setSelMsg(String(e));
+      }
+    },
+    [refreshStatus],
+  );
+
+  const applyNotePath = useCallback(async () => {
+    try {
+      await invoke("set_note_path", { path: notePathDraft });
+      setNoteMsg("saved");
+      setNotePathDraft("");
+      refreshStatus();
+    } catch (e) {
+      setNoteMsg(String(e));
+    }
+  }, [notePathDraft, refreshStatus]);
 
   const applyFileCap = useCallback(
     async (mb: number) => {
@@ -2163,6 +2264,32 @@ export default function App() {
 
             <div className="set-row">
               <div className="set-label">
+                <span className="set-name">{t("Recent opens on the empty box")}</span>
+                <span className="set-desc">
+                  {t("With nothing typed, each tab lists what you opened from it most recently.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${recentsOn === o.on ? "active" : ""}`}
+                    onClick={() => {
+                      setRecentsOn(o.on);
+                      setRecentsEnabled(o.on);
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
                 <span className="set-name">{t("Launch tips")}</span>
                 <span className="set-desc">
                   {t("A one-line tip below the empty search box, fresh on every summon.")}
@@ -2324,6 +2451,81 @@ export default function App() {
                     {t("Reset to Alt+Space")}
                   </button>
                 </div>
+              )}
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-label">
+                <span className="set-name">{t("Search selection shortcut")}</span>
+                <span className="set-desc">
+                  {status?.hotkey_selection ? (
+                    <>
+                      {t("Currently")} <kbd>{status.hotkey_selection}</kbd>.{" "}
+                    </>
+                  ) : (
+                    <>{t("Not set.")} </>
+                  )}
+                  {t(
+                    "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.",
+                  )}
+                </span>
+              </div>
+              <div className="token-row">
+                <input
+                  className="token-input"
+                  value={selDraft}
+                  onChange={() => {}}
+                  onKeyDown={captureSelectionHotkey}
+                  placeholder={t("press keys…")}
+                  spellCheck={false}
+                />
+                <button
+                  className="primary-btn"
+                  onClick={() => void applySelectionHotkey(selDraft)}
+                  disabled={!selDraft}
+                >
+                  {t("Apply")}
+                </button>
+                {status?.hotkey_selection && (
+                  <button className="ghost-btn" onClick={() => void applySelectionHotkey("")}>
+                    {t("Remove")}
+                  </button>
+                )}
+              </div>
+              {selMsg && (
+                <p className={selMsg === "saved" ? "set-empty" : "error-line"}>{t(selMsg)}</p>
+              )}
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-label">
+                <span className="set-name">{t("Notes file")}</span>
+                <span className="set-desc">
+                  {t("note buy milk appends one timestamped line to this file.")}{" "}
+                  {t("Currently")} <code>{status?.note_path ?? "notes.md"}</code>
+                </span>
+              </div>
+              <div className="token-row">
+                <input
+                  className="token-input"
+                  value={notePathDraft}
+                  onChange={(e) => setNotePathDraft(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  placeholder={t("full path, or empty for the default")}
+                  spellCheck={false}
+                />
+                <button className="primary-btn" onClick={() => void applyNotePath()}>
+                  {t("Save")}
+                </button>
+                <button
+                  className="ghost-btn"
+                  onClick={() => invoke("open_note_file").catch((e) => setNoteMsg(String(e)))}
+                >
+                  {t("Open")}
+                </button>
+              </div>
+              {noteMsg && (
+                <p className={noteMsg === "saved" ? "set-empty" : "error-line"}>{t(noteMsg)}</p>
               )}
             </div>
 
@@ -2660,7 +2862,7 @@ export default function App() {
           ))}
         </div>
       ) : (
-        (results.length > 0 || calcHit != null || bangHit != null) && (
+        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null) && (
           <div className="body-row">
           <div className="results" ref={listRef}>
             {bangHit && (
@@ -2681,7 +2883,19 @@ export default function App() {
                 <span className="badge">{t("web")}</span>
               </div>
             )}
-            {!bangHit && calcHit && (
+            {noteHit && (
+              <div
+                className={`row extra-row ${topRowActive ? "selected" : ""}`}
+                onClick={() => void saveNote()}
+              >
+                <div className="row-main">
+                  <span className="row-title">📝 {noteHit.text}</span>
+                  <span className="row-sub">{t("Enter appends this line to your notes file")}</span>
+                </div>
+                <span className="badge">{t("note")}</span>
+              </div>
+            )}
+            {!bangHit && !noteHit && calcHit && (
               <div
                 className={`row extra-row ${topRowActive ? "selected" : ""}`}
                 onClick={() =>
@@ -2695,7 +2909,7 @@ export default function App() {
                     {calcHit.swatch && (
                       <i className="color-swatch" style={{ background: calcHit.swatch }} />
                     )}
-                    {calcHit.swatch ? calcHit.value : `= ${calcHit.value}`}
+                    {calcHit.swatch ? calcHit.value : `= ${firstLine(calcHit.value)}`}
                   </span>
                   <span className="row-sub">
                     {calcHit.alt ? `${calcHit.alt} · ` : ""}
@@ -2901,7 +3115,7 @@ export default function App() {
         )
       )}
 
-      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && (
+      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && !noteHit && (
         <div className="empty">
           {source === "github-stars"
             ? t("No matches in your stars")
@@ -2974,6 +3188,46 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+/// Turn a keydown inside a shortcut recorder into a chord string.
+/// Modifier-only presses are ignored; a bare Backspace/Delete/Escape clears.
+/// Shift-only or bare chords (Shift+A, Tab…) would hijack normal typing
+/// system-wide, so anything that is not an F-key needs Ctrl/Alt/Super.
+function chordFromEvent(e: React.KeyboardEvent): {
+  chord?: string;
+  clear?: boolean;
+  ignore?: boolean;
+  error?: string;
+} {
+  e.preventDefault();
+  e.stopPropagation();
+  if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return { ignore: true };
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && ["Backspace", "Delete", "Escape"].includes(e.key)) {
+    return { clear: true };
+  }
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.metaKey) parts.push("Super");
+  let key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  if (e.key === " ") key = "Space";
+  const strongModifier = e.ctrlKey || e.altKey || e.metaKey;
+  if (!strongModifier && !/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) {
+    return { error: "use Ctrl/Alt/Win plus a key, or an F-key" };
+  }
+  parts.push(key);
+  return { chord: parts.join("+") };
+}
+
+/// One-line rendering of a possibly multi-line value (pretty JSON, sorted
+/// lines): the first line, clipped, plus a line count. Enter still copies
+/// the whole thing.
+function firstLine(value: string): string {
+  const lines = value.split("\n");
+  const head = lines[0].length > 160 ? `${lines[0].slice(0, 160)}…` : lines[0];
+  return lines.length > 1 ? `${head}  … (${lines.length} lines)` : head;
 }
 
 /// Highlight every occurrence of the query's words in a text run.

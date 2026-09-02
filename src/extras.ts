@@ -57,6 +57,40 @@ export function matchBang(query: string, bangs: Map<string, string>): BangMatch 
   return { prefix, url, host, rest };
 }
 
+// ---------- quick notes ----------
+
+export interface NoteMatch {
+  text: string;
+}
+
+/** `note buy milk` -> a note hit; `note` alone or `notebook` stay searches. */
+export function matchNote(query: string): NoteMatch | null {
+  const m = /^note\s+(\S[\s\S]*)$/i.exec(query.trim());
+  if (!m) return null;
+  const text = m[1].trim();
+  return text ? { text } : null;
+}
+
+// ---------- recent opens on the empty box ----------
+
+export const RECENTS_KEY = "magpie.recents";
+
+export function recentsEnabled(): boolean {
+  try {
+    return localStorage.getItem(RECENTS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setRecentsEnabled(on: boolean): void {
+  try {
+    localStorage.setItem(RECENTS_KEY, on ? "1" : "0");
+  } catch {
+    /* the choice just won't persist */
+  }
+}
+
 // ---------- launch tips ----------
 
 export const TIPS_KEY = "magpie.tips";
@@ -83,6 +117,13 @@ export const TIPS: string[] = [
   "Give apps aliases in settings: proxy = clash",
   "Shift+Tab cycles the local scope: all / text / images / videos",
   "Export your whole setup from Settings → System — the GitHub token stays out",
+  "Ctrl+C copies whatever identifies a row — a path, a URL, a clip's text",
+  "Recent opens on the empty box — switch it on in Settings → Appearance & behavior",
+  "json alone pretty-prints your clipboard — upper, lower, slug, lines, count too",
+  "Date math lives in the box: today + 30d, until 2026-10-01, 2026-10-01 - today",
+  "Narrow file searches: ext:pdf, >10mb, 7d, in:projects",
+  "note buy milk — one timestamped line into your notes file",
+  "A second hotkey searches the text you have selected — set it in Settings",
 ];
 
 export function tipsEnabled(): boolean {

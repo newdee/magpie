@@ -489,6 +489,27 @@ pub(crate) fn append_substring_matches(
     Ok(())
 }
 
+/// One bookmark by URL (the frecency identity for web hits). Several browser
+/// profiles may hold the same URL; the first is as good as any.
+pub fn bookmark_by_url(conn: &Connection, url: &str) -> Result<Option<BookmarkHit>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, url, title, folder, browser, added_at FROM bookmarks WHERE url = ?1 LIMIT 1",
+    )?;
+    Ok(stmt
+        .query_row([url], |r| {
+            Ok(BookmarkHit {
+                id: r.get(0)?,
+                url: r.get(1)?,
+                title: r.get(2)?,
+                folder: r.get(3)?,
+                browser: r.get(4)?,
+                added_at: r.get(5)?,
+                score: 0.0,
+            })
+        })
+        .optional()?)
+}
+
 pub fn bookmarks_by_ids(
     conn: &Connection,
     ids: &[i64],

@@ -452,6 +452,13 @@ pub fn sample_hash(width: usize, height: usize, bytes: &[u8]) -> String {
     format!("img:{:016x}", h.finish())
 }
 
+/// Current clipboard text, if the clipboard holds text.
+pub fn clipboard_text() -> Result<String> {
+    arboard::Clipboard::new()
+        .and_then(|mut b| b.get_text())
+        .map_err(|e| anyhow::anyhow!("clipboard: {e}"))
+}
+
 /// Put text back on the clipboard (Enter on a clip hit).
 pub fn set_clipboard_text(text: &str) -> Result<()> {
     arboard::Clipboard::new()

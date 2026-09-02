@@ -7,6 +7,37 @@ export type LangPref = "auto" | "en" | "zh";
 export type Lang = "en" | "zh";
 
 const ZH: Record<string, string> = {
+  // quick features: notes, recent opens, selection search, text verbs
+  "Enter appends this line to your notes file": "Enter 把这一行追加到你的笔记文件",
+  note: "笔记",
+  "Recent opens on the empty box": "空搜索框显示最近打开",
+  "With nothing typed, each tab lists what you opened from it most recently.":
+    "什么都没输入时，每个 tab 列出你最近从它打开过的条目。",
+  "Search selection shortcut": "划词搜索快捷键",
+  "Not set.": "未设置。",
+  "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.":
+    "在任何应用里选中文字后按它：magpie 复制选区，并带着这段文字弹出来。",
+  Remove: "移除",
+  "Notes file": "笔记文件",
+  "note buy milk appends one timestamped line to this file.":
+    "输入 note 买牛奶，会把一行带时间戳的记录追加到这个文件。",
+  "full path, or empty for the default": "完整路径，留空用默认",
+  Save: "保存",
+  Open: "打开",
+  "Ctrl+C copies whatever identifies a row — a path, a URL, a clip's text":
+    "Ctrl+C 复制这一行的标识——路径、网址或剪贴条文本",
+  "Recent opens on the empty box — switch it on in Settings → Appearance & behavior":
+    "空搜索框可以列出最近打开——设置 → 外观与行为 里开启",
+  "json alone pretty-prints your clipboard — upper, lower, slug, lines, count too":
+    "单独输 json 就能格式化剪贴板里的 JSON——还有 upper、lower、slug、lines、count",
+  "Date math lives in the box: today + 30d, until 2026-10-01, 2026-10-01 - today":
+    "输入框会算日期：today + 30d、until 2026-10-01、2026-10-01 - today",
+  "Narrow file searches: ext:pdf, >10mb, 7d, in:projects":
+    "缩小文件搜索范围：ext:pdf、>10mb、7d、in:projects",
+  "note buy milk — one timestamped line into your notes file":
+    "note 买牛奶——一行带时间戳的记录进笔记文件",
+  "A second hotkey searches the text you have selected — set it in Settings":
+    "第二个快捷键可以直接搜你选中的文字——设置里配置",
   // tabs
   "Local Files": "本地文件",
   "GitHub Stars": "GitHub Stars",

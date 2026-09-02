@@ -310,6 +310,26 @@ pub fn history_fts_search(conn: &Connection, query: &str, limit: usize) -> Resul
     Ok(rows)
 }
 
+/// One history entry by URL (the frecency identity for web hits).
+pub fn history_by_url(conn: &Connection, url: &str) -> Result<Option<HistoryHit>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, url, title, browser, visit_count, last_visit FROM history WHERE url = ?1 LIMIT 1",
+    )?;
+    Ok(stmt
+        .query_row([url], |r| {
+            Ok(HistoryHit {
+                id: r.get(0)?,
+                url: r.get(1)?,
+                title: r.get(2)?,
+                browser: r.get(3)?,
+                visit_count: r.get(4)?,
+                last_visit: r.get(5)?,
+                score: 0.0,
+            })
+        })
+        .optional()?)
+}
+
 pub fn history_by_ids(
     conn: &Connection,
     ids: &[i64],

@@ -85,7 +85,128 @@ pub fn transform(query: &str) -> Option<TransformResult> {
             value: percent_decode(rest)?,
             swatch: None,
         }),
+        "json" | "upper" | "lower" | "trim" | "slug" | "lines" | "count" => text_verb(cmd, rest),
         _ => color(q),
+    }
+}
+
+/// Text verbs work on the argument when there is one, otherwise on whatever
+/// the clipboard holds: `json` alone pretty-prints what you just copied, and
+/// Enter puts the result back.
+fn text_verb(cmd: &str, rest: &str) -> Option<TransformResult> {
+    let (src, from_clip) = if rest.is_empty() {
+        (crate::clips::clipboard_text().ok()?, true)
+    } else {
+        (rest.to_string(), false)
+    };
+    if src.trim().is_empty() {
+        return None;
+    }
+    let (label, value): (String, String) = match cmd {
+        "json" => {
+            let v: serde_json::Value = serde_json::from_str(src.trim()).ok()?;
+            ("JSON, pretty-printed".into(), serde_json::to_string_pretty(&v).ok()?)
+        }
+        "upper" => ("UPPER CASE".into(), src.to_uppercase()),
+        "lower" => ("lower case".into(), src.to_lowercase()),
+        "trim" => (
+            "trimmed".into(),
+            src.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string(),
+        ),
+        "slug" => ("slug".into(), slugify(&src)),
+        "lines" => {
+            let mut v: Vec<&str> = src.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            let total = v.len();
+            v.sort_unstable();
+            v.dedup();
+            (format!("{} unique of {total} lines, sorted", v.len()), v.join("\n"))
+        }
+        "count" => {
+            let chars = src.chars().count();
+            let no_space = src.chars().filter(|c| !c.is_whitespace()).count();
+            let words = src.split_whitespace().count();
+            let lines = src.lines().count();
+            (
+                format!("count ({no_space} without spaces)"),
+                format!("{chars} chars  ·  {words} words  ·  {lines} lines"),
+            )
+        }
+        _ => return None,
+    };
+    Some(TransformResult {
+        label: if from_clip { format!("clipboard → {label}") } else { label },
+        value,
+        swatch: None,
+    })
+}
+
+/// `Hello, World! 2026` → `hello-world-2026`. Alphanumerics of any script
+/// survive; everything else becomes one dash.
+fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut dash = true; // suppress a leading dash
+    for c in s.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            out.push(c);
+            dash = false;
+        } else if !dash {
+            out.push('-');
+            dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+#[cfg(test)]
+mod verb_tests {
+    use super::transform;
+
+    fn value(q: &str) -> String {
+        transform(q).unwrap_or_else(|| panic!("{q:?} must transform")).value
+    }
+
+    #[test]
+    fn json_pretty_prints_and_rejects_non_json() {
+        assert_eq!(value("json {\"a\":1,\"b\":[1,2]}"), "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}");
+        assert!(transform("json not json at all").is_none());
+    }
+
+    #[test]
+    fn case_and_trim() {
+        assert_eq!(value("upper abc Déf"), "ABC DÉF");
+        assert_eq!(value("lower ABC"), "abc");
+        assert_eq!(value("trim   x  \n y  "), "x\n y");
+    }
+
+    #[test]
+    fn slug_keeps_letters_of_any_script() {
+        assert_eq!(value("slug Hello, World! 2026"), "hello-world-2026");
+        assert_eq!(value("slug  --a__b--  "), "a-b");
+        assert_eq!(value("slug 你好 世界"), "你好-世界");
+    }
+
+    #[test]
+    fn lines_dedupes_and_sorts_with_counts_in_the_label() {
+        let r = transform("lines b\na\nb\n\n a ").unwrap();
+        assert_eq!(r.value, "a\nb");
+        assert_eq!(r.label, "2 unique of 4 lines, sorted");
+    }
+
+    #[test]
+    fn count_reports_chars_words_lines() {
+        let r = transform("count hello world\nagain").unwrap();
+        assert_eq!(r.value, "17 chars  ·  3 words  ·  2 lines");
+        assert_eq!(r.label, "count (15 without spaces)");
+    }
+
+    #[test]
+    fn a_verb_with_an_argument_never_touches_the_clipboard() {
+        // explicit arguments are labelled plainly; only the clipboard path
+        // carries the "clipboard →" prefix
+        assert_eq!(transform("upper x").unwrap().label, "UPPER CASE");
     }
 }
 

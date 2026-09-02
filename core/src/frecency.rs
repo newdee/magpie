@@ -44,6 +44,24 @@ pub fn factors(conn: &Connection, kind: &str, now: i64) -> Result<HashMap<String
     Ok(out)
 }
 
+/// The most recently opened identities among `kinds`, newest first. Feeds
+/// the empty-query "recent opens" list; the caller resolves each identity
+/// back into a full hit and drops the ones that no longer exist.
+pub fn recent(conn: &Connection, kinds: &[&str], limit: usize) -> Result<Vec<(String, String)>> {
+    if kinds.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = kinds.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT kind, key FROM hit_stats WHERE kind IN ({marks}) ORDER BY last_used DESC LIMIT {limit}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(kinds.iter()), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
 /// Apply a capped bonus and re-sort. `cap` is chosen per source relative to
 /// its score scale (apps ≈ 0.08 against 0.1 tier gaps; RRF lists ≈ 0.01).
 pub fn boost<T>(
@@ -66,6 +84,23 @@ pub fn boost<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_lists_newest_first_within_the_asked_kinds() {
+        let conn = crate::db::open_in_memory().unwrap();
+        record_use(&conn, "file", "C:/a.md", 100).unwrap();
+        record_use(&conn, "app", "/apps/code", 200).unwrap();
+        record_use(&conn, "repo", "42", 300).unwrap();
+        record_use(&conn, "file", "C:/b.md", 400).unwrap();
+        // re-opening a.md moves it to the front
+        record_use(&conn, "file", "C:/a.md", 500).unwrap();
+        let r = recent(&conn, &["file", "app"], 10).unwrap();
+        let keys: Vec<&str> = r.iter().map(|(_, k)| k.as_str()).collect();
+        assert_eq!(keys, vec!["C:/a.md", "C:/b.md", "/apps/code"], "newest first, repo excluded");
+        assert_eq!(recent(&conn, &["file"], 1).unwrap().len(), 1, "limit applies");
+        assert!(recent(&conn, &[], 10).unwrap().is_empty(), "no kinds, no rows");
+        assert!(recent(&conn, &["video"], 10).unwrap().is_empty(), "unknown kind, no rows");
+    }
 
     #[test]
     fn record_and_factor_shape() {

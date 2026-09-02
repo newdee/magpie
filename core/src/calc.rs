@@ -20,6 +20,9 @@ pub fn eval(query: &str) -> Option<CalcResult> {
     if q.len() < 2 || q.len() > 200 {
         return None;
     }
+    if let Some(r) = eval_date(q) {
+        return Some(r);
+    }
     if let Some(r) = eval_conversion(q) {
         return Some(r);
     }
@@ -232,12 +235,163 @@ fn round6(v: f64) -> f64 {
     (v * 1e6).round() / 1e6
 }
 
+// ---------- date math ----------
+
+/// Dates in, dates or day counts out:
+/// `today + 30d`, `tomorrow - 2w`, `2026-10-01 + 3 months`,
+/// `2026-10-01 - today`, `until 2026-10-01`, `2026-10-01` (weekday and
+/// distance). A lone `today` stays a search word; only ISO dates stand alone.
+fn eval_date(q: &str) -> Option<CalcResult> {
+    use chrono::NaiveDate;
+    let lower = q.to_lowercase();
+    let toks: Vec<&str> = lower.split_whitespace().collect();
+    let today = chrono::Local::now().date_naive();
+    let date = |s: &str| -> Option<NaiveDate> {
+        match s {
+            "today" => Some(today),
+            "tomorrow" => today.succ_opt(),
+            "yesterday" => today.pred_opt(),
+            _ => NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .or_else(|_| NaiveDate::parse_from_str(s, "%Y/%m/%d"))
+                .ok(),
+        }
+    };
+    let iso = |s: &str| s.len() >= 8 && (s.contains('-') || s.contains('/')) && date(s).is_some();
+    // `30d`, `2w`, `3m`, `1y`, or a bare number of days
+    let dur = |num: &str, unit: &str| -> Option<(i64, char)> {
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let n: i64 = num.parse().ok()?;
+        let u = match unit {
+            "" | "d" | "day" | "days" => 'd',
+            "w" | "wk" | "week" | "weeks" => 'w',
+            "m" | "mo" | "month" | "months" => 'm',
+            "y" | "yr" | "year" | "years" => 'y',
+            _ => return None,
+        };
+        Some((n, u))
+    };
+    let dur1 = |s: &str| -> Option<(i64, char)> {
+        let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
+        dur(&s[..split], &s[split..])
+    };
+    let shift = |d: NaiveDate, (n, u): (i64, char), sign: i64| -> Option<NaiveDate> {
+        let n = n * sign;
+        let months = |m: i64| {
+            if m >= 0 {
+                d.checked_add_months(chrono::Months::new(m as u32))
+            } else {
+                d.checked_sub_months(chrono::Months::new((-m) as u32))
+            }
+        };
+        match u {
+            'd' => d.checked_add_signed(chrono::Duration::days(n)),
+            'w' => d.checked_add_signed(chrono::Duration::days(n * 7)),
+            'm' => months(n),
+            'y' => months(n * 12),
+            _ => None,
+        }
+    };
+    let show = |d: NaiveDate| format!("{}  ·  {}", d.format("%Y-%m-%d"), d.format("%A"));
+    let span = |n: i64| -> CalcResult {
+        let a = n.abs();
+        let alt = if a >= 7 {
+            let (w, d) = (a / 7, a % 7);
+            Some(if d == 0 { format!("{w} weeks") } else { format!("{w} weeks {d} days") })
+        } else {
+            None
+        };
+        CalcResult { value: format!("{n} days"), alt }
+    };
+    let distance = |d: NaiveDate| -> String {
+        let n = (d - today).num_days();
+        match n {
+            0 => "today".into(),
+            1 => "tomorrow".into(),
+            -1 => "yesterday".into(),
+            n if n > 0 => format!("in {n} days"),
+            n => format!("{} days ago", -n),
+        }
+    };
+    match toks.as_slice() {
+        [d] if iso(d) => {
+            let d = date(d)?;
+            Some(CalcResult { value: show(d), alt: Some(distance(d)) })
+        }
+        ["until" | "till", d] | ["days", "until" | "till", d] => {
+            Some(span((date(d)? - today).num_days()))
+        }
+        ["since", d] | ["days", "since", d] => Some(span((today - date(d)?).num_days())),
+        [a, op @ ("+" | "-"), b] => {
+            let a = date(a)?;
+            let sign = if *op == "+" { 1 } else { -1 };
+            if *op == "-" {
+                if let Some(b) = date(b) {
+                    return Some(span((a - b).num_days()));
+                }
+            }
+            let d = shift(a, dur1(b)?, sign)?;
+            Some(CalcResult { value: show(d), alt: Some(distance(d)) })
+        }
+        [a, op @ ("+" | "-"), n, unit] => {
+            let a = date(a)?;
+            let sign = if *op == "+" { 1 } else { -1 };
+            let d = shift(a, dur(n, unit)?, sign)?;
+            Some(CalcResult { value: show(d), alt: Some(distance(d)) })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn v(q: &str) -> String {
         eval(q).unwrap_or_else(|| panic!("{q:?} must evaluate")).value
+    }
+
+    #[test]
+    fn date_minus_date_is_a_day_count() {
+        assert_eq!(v("2026-10-01 - 2026-09-01"), "30 days");
+        assert_eq!(eval("2026-10-01 - 2026-09-01").unwrap().alt.as_deref(), Some("4 weeks 2 days"));
+        assert_eq!(v("2026-09-01 - 2026-10-01"), "-30 days");
+        assert_eq!(v("2026-09-08 - 2026-09-01"), "7 days");
+    }
+
+    #[test]
+    fn date_plus_duration_lands_on_a_date_with_its_weekday() {
+        assert_eq!(v("2026-10-01 + 2w"), "2026-10-15  ·  Thursday");
+        assert_eq!(v("2026-10-01 + 3 months"), "2027-01-01  ·  Friday");
+        assert_eq!(v("2026-10-01 - 1y"), "2025-10-01  ·  Wednesday");
+        assert_eq!(v("2026-10-01 + 10"), "2026-10-11  ·  Sunday");
+        // month arithmetic clamps to the last day instead of overflowing
+        assert_eq!(v("2026-01-31 + 1m"), "2026-02-28  ·  Saturday");
+    }
+
+    #[test]
+    fn a_lone_iso_date_shows_its_weekday() {
+        assert!(v("2026-10-01").starts_with("2026-10-01  ·  Thursday"));
+        assert!(v("2026/10/01").starts_with("2026-10-01"));
+    }
+
+    #[test]
+    fn relative_forms_parse_without_pinning_today() {
+        assert!(eval("until 2026-10-01").is_some());
+        assert!(eval("days since 2020-01-01").is_some());
+        assert!(eval("today + 30d").is_some());
+        assert!(eval("tomorrow - 1w").is_some());
+    }
+
+    #[test]
+    fn date_words_alone_stay_search_text() {
+        assert!(eval("today").is_none());
+        assert!(eval("tomorrow").is_none());
+        assert!(eval("today + x").is_none());
+        // an impossible date is not a date; the arithmetic path still owns
+        // the dashes, as it always has (2026 - 13 - 40)
+        assert_eq!(v("2026-13-40"), "1973");
     }
 
     #[test]

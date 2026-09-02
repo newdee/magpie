@@ -988,6 +988,59 @@ pub fn files_by_ids(conn: &Connection, ids: &[i64], scores: &HashMap<i64, f32>) 
     Ok(out)
 }
 
+/// One file by its path (the frecency identity for files), if still indexed.
+pub fn file_by_path(conn: &Connection, path: &str) -> Result<Option<FileHit>> {
+    let mut stmt = conn.prepare(&format!("SELECT {HIT_COLS} FROM files WHERE path = ?1"))?;
+    Ok(stmt.query_row([path], row_to_hit).optional()?)
+}
+
+/// Files matching a filter-only query (`ext:pdf 7d`, no text), newest first.
+/// The constraints go into SQL so a big index is not pulled through the
+/// thumbnail column just to be sieved.
+pub fn files_matching(
+    conn: &Connection,
+    f: &crate::filters::Filters,
+    now: i64,
+    limit: usize,
+) -> Result<Vec<FileHit>> {
+    use rusqlite::types::Value;
+    let mut clauses: Vec<String> = Vec::new();
+    let mut args: Vec<Value> = Vec::new();
+    if !f.exts.is_empty() {
+        let marks = f.exts.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        clauses.push(format!("lower(ext) IN ({marks})"));
+        args.extend(f.exts.iter().map(|e| Value::Text(e.clone())));
+    }
+    if let Some(min) = f.min_size {
+        clauses.push("size >= ?".into());
+        args.push(Value::Integer(min));
+    }
+    if let Some(max) = f.max_size {
+        clauses.push("size <= ?".into());
+        args.push(Value::Integer(max));
+    }
+    if let Some(days) = f.within_days {
+        clauses.push("mtime >= ?".into());
+        args.push(Value::Integer(now - days * 86_400));
+    }
+    for p in &f.in_paths {
+        clauses.push("instr(lower(path), ?) > 0".into());
+        args.push(Value::Text(p.clone()));
+    }
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {HIT_COLS} FROM files{where_sql} ORDER BY mtime DESC, id DESC LIMIT {limit}"
+    ))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(args.iter()), row_to_hit)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 pub fn recent_files(conn: &Connection, limit: usize) -> Result<Vec<FileHit>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {HIT_COLS} FROM files ORDER BY mtime DESC, id DESC LIMIT ?1"

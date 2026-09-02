@@ -315,6 +315,8 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .unwrap_or(false),
         "max_file_mb": max_file_mb,
         "hotkey": hotkey,
+        "hotkey_selection": db::meta_get(&conn, "hotkey_selection").ok().flatten().unwrap_or_default(),
+        "note_path": note_path_from(&conn, &state.db_path).to_string_lossy().into_owned(),
         "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
         "last_sync": last_sync,
@@ -383,12 +385,16 @@ async fn search_local(
 ) -> Result<Vec<serde_json::Value>, String> {
     let scope = scope.unwrap_or(search::LocalScope::All);
     let limit = limit.unwrap_or(30).min(100);
-    let (qvec, image_qvec) = if query.trim().is_empty() {
+    // embed the words, not the filter tokens: "ext:pdf invoice" should land
+    // near "invoice" in vector space, and search_files strips the same
+    // tokens again for the keyword side
+    let (_, text) = magpie_core::filters::parse(&query);
+    let (qvec, image_qvec) = if text.trim().is_empty() {
         (None, None)
     } else {
         let emb = state.embedder.clone();
         let sig = state.siglip.clone();
-        let q = query.clone();
+        let q = text.clone();
         // try_lock: while a bulk embed pass holds a model, degrade that vector
         // list instead of stalling every keystroke behind the lock
         tokio::task::spawn_blocking(move || -> Result<_> {
@@ -667,16 +673,65 @@ async fn set_max_file_mb(
     Ok(())
 }
 
-fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
+/// (Re)register every global chord: the summon toggle, and optionally the
+/// selection search. One function because the plugin's `unregister_all` is
+/// the only reliable way to drop a stale chord, so both have to be re-added
+/// together whenever either changes.
+fn register_hotkeys(app: &AppHandle, summon: &str, selection: Option<&str>) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(err_str)?;
-    gs.on_shortcut(hotkey, |app, _sc, event| {
+    gs.on_shortcut(summon, |app, _sc, event| {
         if event.state() == ShortcutState::Pressed {
             toggle_window(app);
         }
     })
-    .map_err(err_str)
+    .map_err(err_str)?;
+    if let Some(sel) = selection.map(str::trim).filter(|s| !s.is_empty()) {
+        gs.on_shortcut(sel, |app, _sc, event| {
+            if event.state() == ShortcutState::Pressed {
+                search_selection(app.clone());
+            }
+        })
+        .map_err(err_str)?;
+    }
+    Ok(())
+}
+
+/// Look up whatever is selected in the frontmost app: synthesize the copy
+/// chord, read the clipboard back, summon the palette with that as the
+/// query. If the clipboard did not change, nothing was selected — summon
+/// with an empty box rather than searching a stale clip.
+fn search_selection(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let before = clips::clipboard_text().ok();
+        let copied = tokio::task::spawn_blocking(|| -> Result<()> {
+            use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+            let mut e = Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("input: {e}"))?;
+            #[cfg(target_os = "macos")]
+            let modifier = Key::Meta;
+            #[cfg(not(target_os = "macos"))]
+            let modifier = Key::Control;
+            e.key(modifier, Direction::Press).map_err(|e| anyhow::anyhow!("{e}"))?;
+            e.key(Key::Unicode('c'), Direction::Click).map_err(|e| anyhow::anyhow!("{e}"))?;
+            e.key(modifier, Direction::Release).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(())
+        })
+        .await;
+        if !matches!(copied, Ok(Ok(()))) {
+            log::warn!("selection search: could not synthesize the copy chord");
+        }
+        // give the frontmost app a moment to service the copy
+        tokio::time::sleep(std::time::Duration::from_millis(160)).await;
+        let after = clips::clipboard_text().ok();
+        let query = match (after, before) {
+            (Some(a), Some(b)) if a == b => String::new(),
+            (Some(a), _) => a.trim().chars().take(500).collect(),
+            _ => String::new(),
+        };
+        let _ = app.emit("search-selection", query);
+        show_window(&app);
+    });
 }
 
 /// Switch the model download endpoint (e.g. hf-mirror.com for regions where
@@ -720,20 +775,179 @@ async fn set_hotkey(
     if hotkey.is_empty() {
         return Err("empty shortcut".into());
     }
-    let previous = {
+    let (previous, selection) = {
         let conn = state.db.lock().await;
-        db::meta_get(&conn, "hotkey")
-            .map_err(err_str)?
-            .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
+        (
+            db::meta_get(&conn, "hotkey")
+                .map_err(err_str)?
+                .unwrap_or_else(|| DEFAULT_HOTKEY.to_string()),
+            db::meta_get(&conn, "hotkey_selection").map_err(err_str)?,
+        )
     };
-    if let Err(e) = register_hotkey(&app, &hotkey) {
+    if let Err(e) = register_hotkeys(&app, &hotkey, selection.as_deref()) {
         // keep the old chord working instead of leaving nothing registered
-        let _ = register_hotkey(&app, &previous);
+        let _ = register_hotkeys(&app, &previous, selection.as_deref());
         return Err(format!("cannot register {hotkey:?}: {e}"));
     }
     let conn = state.db.lock().await;
     db::meta_set(&conn, "hotkey", &hotkey).map_err(err_str)?;
     Ok(())
+}
+
+/// Set (or clear, with an empty string) the chord that searches the current
+/// selection. Registered alongside the summon chord.
+#[tauri::command]
+async fn set_selection_hotkey(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hotkey: String,
+) -> Result<(), String> {
+    let hotkey = hotkey.trim().to_string();
+    let (summon, previous) = {
+        let conn = state.db.lock().await;
+        (
+            db::meta_get(&conn, "hotkey")
+                .map_err(err_str)?
+                .unwrap_or_else(|| DEFAULT_HOTKEY.to_string()),
+            db::meta_get(&conn, "hotkey_selection").map_err(err_str)?,
+        )
+    };
+    if hotkey == summon {
+        return Err("that chord already summons the palette".into());
+    }
+    let wanted = (!hotkey.is_empty()).then_some(hotkey.as_str());
+    if let Err(e) = register_hotkeys(&app, &summon, wanted) {
+        let _ = register_hotkeys(&app, &summon, previous.as_deref());
+        return Err(format!("cannot register {hotkey:?}: {e}"));
+    }
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, "hotkey_selection", &hotkey).map_err(err_str)?;
+    Ok(())
+}
+
+/// The notes file: the user's choice, or notes.md next to the database.
+fn note_path_from(conn: &magpie_core::rusqlite::Connection, db_path: &std::path::Path) -> PathBuf {
+    db::meta_get(conn, "note_path")
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            magpie_core::notes::default_path(db_path.parent().unwrap_or(std::path::Path::new(".")))
+        })
+}
+
+/// `note buy milk` → one timestamped line appended to the notes file.
+/// Returns the file it wrote to, for the confirmation row.
+#[tauri::command]
+async fn append_note(state: State<'_, AppState>, text: String) -> Result<String, String> {
+    let path = {
+        let conn = state.db.lock().await;
+        note_path_from(&conn, &state.db_path)
+    };
+    magpie_core::notes::append(&path, &text).map_err(err_str)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Choose the notes file; an empty path goes back to the default. Returns the
+/// path now in effect.
+#[tauri::command]
+async fn set_note_path(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, "note_path", path.trim()).map_err(err_str)?;
+    Ok(note_path_from(&conn, &state.db_path).to_string_lossy().into_owned())
+}
+
+/// Open the notes file in whatever handles markdown; created empty if it does
+/// not exist yet, so the click always lands somewhere.
+#[tauri::command]
+async fn open_note_file(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let path = {
+        let conn = state.db.lock().await;
+        note_path_from(&conn, &state.db_path)
+    };
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(err_str)?;
+        }
+        std::fs::write(&path, "").map_err(err_str)?;
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(err_str)
+}
+
+/// What the user opened most recently from one source tab, newest first.
+/// Backs the empty-query list when that setting is on. Identities come from
+/// hit_stats and are resolved back into full rows; anything since deleted or
+/// uninstalled simply drops out.
+#[tauri::command]
+async fn recent_hits(
+    state: State<'_, AppState>,
+    source: String,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let limit = limit.unwrap_or(12).min(50);
+    let kinds: &[&str] = match source.as_str() {
+        "local" => &["file", "video", "app"],
+        "github-stars" => &["repo"],
+        "web" => &["bookmark", "history"],
+        _ => return Ok(Vec::new()),
+    };
+    let Some(conn) = take_state_search_conn(&state).await else {
+        return Ok(Vec::new());
+    };
+    let keys = magpie_core::frecency::recent(&conn, kinds, limit * 2).map_err(err_str)?;
+    let tag = |mut v: serde_json::Value, kind: &str| {
+        v["kind"] = serde_json::Value::from(kind);
+        if v.get("score").is_none() {
+            v["score"] = serde_json::Value::from(0.0);
+        }
+        v
+    };
+    let mut out = Vec::with_capacity(limit);
+    for (kind, key) in keys {
+        let row = match kind.as_str() {
+            // a video opened from a shot comes back as its file row: the shot
+            // itself is not a stable identity, the path is
+            "file" | "video" => files::file_by_path(&conn, &key)
+                .map_err(err_str)?
+                .and_then(|f| serde_json::to_value(&f).ok())
+                .map(|v| tag(v, "file")),
+            "app" => state
+                .apps
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.target == key)
+                .and_then(|a| serde_json::to_value(a).ok())
+                .map(|v| tag(v, "app")),
+            "repo" => key
+                .parse::<i64>()
+                .ok()
+                .and_then(|id| db::repos_by_ids(&conn, &[id]).ok())
+                .and_then(|mut r| r.pop())
+                .and_then(|r| serde_json::to_value(&r).ok())
+                .map(|v| tag(v, "repo")),
+            "bookmark" => bookmarks::bookmark_by_url(&conn, &key)
+                .map_err(err_str)?
+                .and_then(|b| serde_json::to_value(&b).ok())
+                .map(|v| tag(v, "bookmark")),
+            "history" => history::history_by_url(&conn, &key)
+                .map_err(err_str)?
+                .and_then(|h| serde_json::to_value(&h).ok())
+                .map(|v| tag(v, "history")),
+            _ => None,
+        };
+        if let Some(v) = row {
+            out.push(v);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -2727,16 +2941,23 @@ pub fn run() {
             // register the stored (or default) summon hotkey. Registration can
             // fail when another launcher owns the chord — degrade to tray-only
             // instead of crashing the app.
-            let hotkey = {
+            let (hotkey, selection) = {
                 let state = app.state::<AppState>();
                 let db_path = state.db_path.clone();
-                db::open(&db_path)
-                    .ok()
-                    .and_then(|c| db::meta_get(&c, "hotkey").ok().flatten())
-                    .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
+                let conn = db::open(&db_path).ok();
+                let get = |k: &str| conn.as_ref().and_then(|c| db::meta_get(c, k).ok().flatten());
+                (
+                    get("hotkey").unwrap_or_else(|| DEFAULT_HOTKEY.to_string()),
+                    get("hotkey_selection"),
+                )
             };
-            if let Err(e) = register_hotkey(app.handle(), &hotkey) {
+            if let Err(e) = register_hotkeys(app.handle(), &hotkey, selection.as_deref()) {
                 log::warn!("global shortcut {hotkey} unavailable: {e}");
+                // the selection chord may be the one that failed; keep the
+                // summon chord alive on its own rather than losing both
+                if selection.is_some() {
+                    let _ = register_hotkeys(app.handle(), &hotkey, None);
+                }
             }
 
             spawn_model_init(app.handle().clone());
@@ -2830,7 +3051,12 @@ pub fn run() {
             open_log_dir,
             open_file,
             restart_for_update,
-            resize_palette
+            resize_palette,
+            recent_hits,
+            append_note,
+            set_note_path,
+            open_note_file,
+            set_selection_hotkey
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

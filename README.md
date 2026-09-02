@@ -107,14 +107,35 @@ vaguely remember (or drop in an image), hit Enter.
   copies it. Its siblings: `uuid`, `now` / `ts 1700000000`, `pwd 24` (CSPRNG
   passwords), `b64` / `unb64` / `url` / `unurl`, and `#ff6600` shows a color
   chip with rgb/hsl conversions.
+- **Dates too**: `today + 30d`, `2026-10-01 - today`, `until 2026-10-01`,
+  `tomorrow + 3 months`. A lone `2026-10-01` tells you the weekday and how
+  far off it is.
+- **Text verbs work on your clipboard**: `json` alone pretty-prints whatever
+  you just copied; `upper`, `lower`, `trim`, `slug`, `lines` (dedupe and
+  sort) and `count` (chars, words, lines) likewise. Give them an argument
+  instead (`slug Hello World`) and they work on that. `Enter` puts the result
+  back on the clipboard.
+- **Narrow a file search inline**: `ext:pdf` or `.md`, `>10mb` / `<500kb`,
+  `7d` (modified this week; `2w`, `3m`, `1y`), `in:projects`. Filters mix
+  with words: `invoice ext:pdf 30d`.
+- **Quick notes**: `note buy milk` appends one timestamped line to a markdown
+  file of your choosing (Settings → Notes file). `Enter` writes it and the
+  palette goes away.
+- **Look up what you have selected**: a second global shortcut copies the
+  selection in whatever app you are in and summons magpie with it as the
+  query. Off until you set it in Settings.
+- **Recent opens on the empty box**: switch it on and each tab lists what you
+  last opened from it, so getting back to a file from a minute ago is two
+  keystrokes.
 - **Bang-style web shortcuts**: `gh magpie` searches GitHub, `g …` Google,
   `bd …` Baidu. Prefixes are editable rules in settings (`prefix = URL
   with {q}`).
 - **Emoji lookup**: type `:` then a keyword (`:fire`, `:火`) and click or
   `Enter` to copy.
-- **Files come with next steps**: `Ctrl+C` copies a hit's path,
-  `Ctrl+Shift+C` puts the file itself on the clipboard, ready to paste into
-  chat or mail as an attachment.
+- **Every row has a copy**: `Ctrl+C` copies what identifies the row, a
+  file's path, a repo's or page's URL, a clip's text. `Ctrl+Shift+C` puts a
+  file itself on the clipboard, ready to paste into chat or mail as an
+  attachment.
 - **Stays current on its own**: signed, verified in-place auto-updates from
   this version on, with no reinstalling. Checked at launch and every 24 h
   while resident; a pending release shows a red dot on the tray icon and next
@@ -234,6 +255,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `↑` `↓` / `PgUp` `PgDn` | move / page through results |
 | `Enter` | context action: open a repo/bookmark/history page in the browser, reveal a file in Explorer/Finder, launch an app, or copy a clip |
 | `Ctrl+Enter` | hand the query to the browser: URL-looking input opens directly, anything else web-searches |
+| `Ctrl+C` | copy what identifies the row: a path, a URL, a clip's text (`Ctrl+Shift+C`: the file itself) |
 | `Tab` | next source (Local / Stars / Web / Clipboard, order set in settings) |
 | `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
 | `Shift+Enter` | paste the selected clip(s) into the previous app (Clipboard tab) |
@@ -253,6 +275,7 @@ and the tab that opens on launch are both configurable.
 GitHub token (with connection badge) · indexed folders (add / remove /
 rebuild) · appearance (auto / light / dark) · UI language (auto / English /
 中文) · pinyin app matching · app aliases · summon shortcut (recordable) ·
+search-selection shortcut · notes file · recent opens on the empty box ·
 model download source (huggingface.co or hf-mirror.com for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
 search toggle · decode limits (threads / hardware decode) · tab order and

@@ -1,3 +1,84 @@
+# 验收记录 2026-09-02（七个日常小功能，待出包 v0.1.31）
+
+用户从候选清单里定了七条（汇率换算明确不做）：Ctrl+C 对所有行生效、空查询显示
+最近打开（设置里启用）、剪贴板文本动词、日期计算、搜索过滤语法、划词搜索热键、
+快速记录；小贴士、README、落地站一并更新。
+
+## 实现要点
+
+- **Ctrl+C 全行**：文件/视频→路径、repo→html_url、书签/历史→url、文本剪贴条→
+  内容、图片剪贴条→图片本体（copy_image_clip）、应用→launch target。
+  Ctrl+Shift+C 仍只对文件（文件本体）
+- **最近打开**：frontend 开关（localStorage `magpie.recents`，默认关，纳入导出）；
+  后端 `recent_hits(source)` 从 hit_stats 取该 tab 涉及的 kind，按 key 反查回
+  完整行（新增 `file_by_path` / `bookmark_by_url` / `history_by_url`，repo 走
+  `repos_by_ids`，app 从内存表找），已删除/卸载的自然掉出
+- **文本动词**：`json / upper / lower / trim / slug / lines / count`，无参数时
+  作用于剪贴板（标签带 "clipboard →"），有参数作用于参数；Enter 复制回去。
+  多行结果前端只显示首行 + 行数，复制仍是全文
+- **日期计算**：`today + 30d`、`2026-10-01 - today`、`until <date>`、
+  `since <date>`、`<date> ± N months` 等；结果带星期与距今天数。单独 `today`
+  仍是搜索词，只有 ISO 日期能单独成立；`2026-13-40` 这类无效日期继续走原来
+  的减法（既有行为，不改）
+- **过滤语法**：`ext:pdf` / `.md` / `>10mb` / `<500kb` / `7d 2w 3m 1y` /
+  `in:projects`，从文本里剥离后再进 FTS 与向量；纯过滤（无文本）走 SQL
+  WHERE 直查（`files_matching`），避免把 2000 行缩略图拉出来筛；带文本时
+  候选数 ×8 再筛
+- **划词搜索**：第二个全局热键（meta `hotkey_selection`），注册与唤出热键合并
+  在 `register_hotkeys` 里（插件只有 unregister_all）；按下→合成 Ctrl/Cmd+C→
+  160ms 后读剪贴板→若内容没变视为无选区（空查询唤出）→emit
+  `search-selection`→show_window
+- **快速记录**：`note <text>` → 顶行命中，Enter 追加
+  `- YYYY-MM-DD HH:MM  text` 到 meta `note_path`（默认库旁 notes.md，即
+  Roaming 目录），设置里可改路径、可直接打开
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 既有测试 | `parse_days` 用 `split_at(len-1)` 切字符串，中文 token 切在 UTF-8 码点中间 panic（OCR 中文用例抓到） | 按最后一个 char 切；加 CJK/重音 token 用例 |
+| 2 | 我的测试 | 断言 `2026-13-40` 应为 None，实际既有减法路径返回 1973 | 改断言为既有行为并注明 |
+| 3 | R2 | 图片剪贴条 Ctrl+C 什么都不做（identity 只想到了文本） | 图片剪贴条 → copy_image_clip |
+| 4 | clippy | `iter().any(==)` 应为 `contains` | 改 |
+
+## 连续三轮干净（第 3 项修复后重新计数）
+
+- A 机制通路（puppeteer 无头 demo，IPC 调用拦截可观测）18/18：note 行出现、
+  `note` 单词不触发、Enter 调 `append_note{text}`；Ctrl+C 六种行各复制正确
+  标识（文件路径、repo URL、web URL、图片剪贴调 copy_image_clip、文本剪贴内容）；
+  三个新设置行渲染；最近打开开关持久化到 `magpie.recents=1`；空查询确实调
+  `recent_hits{source:"local"}`、mock 返回 null 不崩；过滤语法不破坏搜索；
+  0 页面错误（favicon 404 为 dev server 仪器噪音）
+- B 静态一致 + 文档对称：命令面 54 定义 = 54 注册全被引用；i18n 138+27 键全有
+  中文；21 个 meta 设置项写读平衡；17 个 set_/toggle_ 命令 UI 可达；站点 rest
+  条目 en 15 = zh 15；README 条目 43=43、快捷键行 13=13、破折号 0/0；七个新
+  功能在 README 双语与站点双语各有提及（14 项核对全过）
+- C 真机（生产 exe，VK 注入，Shift 切英文输入）8/8：`json` 行显示
+  `= { … (7 lines)`，Enter 后 Get-Clipboard 拿到格式化 JSON；`2026-10-01 + 2w`
+  → `2026-10-15 · Thursday · in 43 days`；`note acceptance run ok` → notes.md
+  出现 `- 2026-09-02 08:58  acceptance run ok` 且浮窗自行收起；`ext:png` 只列
+  png；种入 `Ctrl+Alt+F9` 后按下浮窗可见；日志尾无注册警告。套件 107 测试连跑
+  3 次一致；clippy 0；tsc+vite 通过
+
+新增单测 32 个：filters 8、calc 日期 5、transform 动词 6、notes 3、frecency
+recent 1，加上既有。
+
+## 仪器坑（记账）
+
+- Tauri 的 `app_data_dir` 在 Windows 是 **Roaming**（`%APPDATA%`），`app_log_dir`
+  才是 Local。第一次真机跑把 meta 种进了不存在的库、notes.md 也查错目录，两条
+  假 FAIL。真机脚本已改，此后别再混
+
+## 未验证项
+
+- 划词搜索的"复制选区"半程：真机只验了热键注册与唤出（无选区→空查询）。合成
+  Ctrl+C 与 `paste_clip` 同一套 enigo 代码（已在生产用），剪贴板读取有单测；
+  完整链路需在另一应用里选中文字，待用户实测
+- 最近打开在真机上的行渲染：demo 里 mock 返回 null 只验了不崩；后端反查逻辑有
+  `frecency::recent` 单测，JSON 形状与各 Hit 类型逐字段核对过，未在真机点开验
+- macOS/Linux 上 `Key::Meta` 的复制合成与 Ctrl+C 系统级行为
+
+---
 # 验收记录 2026-09-01（搜索取消：过期查询不再占住连接，待出包 v0.1.30）
 
 用户报障：反复输入、删除 "vscode" 时会先触发很耗时的单字符 "v" 查询；旧版

@@ -231,10 +231,25 @@ pub fn search_files(
     limit: usize,
 ) -> Result<Vec<crate::files::FileHit>> {
     use crate::files;
-    if query.trim().is_empty() {
-        return files::recent_files(conn, limit);
+    // `ext:pdf`, `>10mb`, `7d`, `in:docs` come out of the text first; the
+    // caller has already embedded the cleaned text (see search_local)
+    let (filters, text) = crate::filters::parse(query);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if text.trim().is_empty() {
+        return if filters.is_empty() {
+            files::recent_files(conn, limit)
+        } else {
+            files::files_matching(conn, &filters, now, limit)
+        };
     }
-    let fts_hits = files::files_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let query = text.as_str();
+    // filters sieve the candidates after ranking, so widen the net when any
+    // are set or a narrow filter could empty a full page of good matches
+    let per_list = if filters.is_empty() { CANDIDATES_PER_LIST } else { CANDIDATES_PER_LIST * 8 };
+    let fts_hits = files::files_fts_search(conn, query, per_list)?;
     let snippets: std::collections::HashMap<i64, String> = fts_hits
         .iter()
         .filter(|(_, s)| s.contains('\u{1}'))
@@ -247,15 +262,11 @@ pub fn search_files(
         // Images scope (images had no text), but OCR text now lives in the
         // same chunk space — images without text simply aren't in it, so
         // there is nothing to exclude anymore.
-        vecs.push(top_similar_grouped(
-            &store.file_chunks,
-            qvec,
-            CANDIDATES_PER_LIST,
-        ));
+        vecs.push(top_similar_grouped(&store.file_chunks, qvec, per_list));
     }
     if scope != LocalScope::Text {
         if let Some(image_qvec) = image_qvec {
-            vecs.push(top_similar(&store.images, image_qvec, CANDIDATES_PER_LIST));
+            vecs.push(top_similar(&store.images, image_qvec, per_list));
         }
     }
     let fused = rank_hybrid(fts, vecs);
@@ -263,6 +274,9 @@ pub fn search_files(
     // fetch the full candidate set, filter by scope, then truncate
     let ids: Vec<i64> = fused.iter().map(|(id, _)| *id).collect();
     let mut hits = files::files_by_ids(conn, &ids, &scores)?;
+    if !filters.is_empty() {
+        hits.retain(|h| filters.matches(h.ext.as_deref(), h.size, h.mtime, &h.path, now));
+    }
     match scope {
         LocalScope::All => {}
         LocalScope::Text => hits.retain(|h| !files::is_image_ext(h.ext.as_deref())),
