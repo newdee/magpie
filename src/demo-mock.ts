@@ -272,7 +272,17 @@ mockIPC((cmd, args) => {
     case "list_folders":
       return folders;
     case "add_folder":
-    case "remove_folder":
+    case "remove_folder": {
+      // remove for real, like the backend, so the settings page can be driven
+      // down to an empty list (status.folder_count stays stale on purpose:
+      // that is the timing the real app has right after a removal)
+      const gone = (args as { folderId?: number })?.folderId;
+      const i = folders.findIndex((f) => f.id === gone);
+      if (i >= 0) folders.splice(i, 1);
+      // a fresh array, as the backend returns one: the same reference would
+      // make React skip the re-render and the list would look unchanged
+      return [...folders];
+    }
       return folders;
     case "search_stars":
       return q ? repoHits : [];

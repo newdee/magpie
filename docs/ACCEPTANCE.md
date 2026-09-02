@@ -1,3 +1,39 @@
+# 验收记录 2026-09-02（删完索引目录后的假错误，待出包 v0.1.33）
+
+用户报障："索引目录删完了总会报错"，后追加"主要是界面上显示错误消息，软件
+可能没报错"。第二句是关键——core 层集成测试早已排除后端，问题在前端推断。
+
+根因：`App.tsx` 设置页在 `folders.length === 0 && status.folder_count > 0` 时
+显示红字 `"{n} folder(s) indexed but the list failed to load — please report
+this…"`，用两个各自更新的状态去推断"列表加载失败"。删掉最后一个文件夹时
+`folders` 立刻为空，而 `status.folder_count` 是旧值（`removeFolder` 不刷新
+status），于是每次都命中。
+
+修复：失败与否由 `refreshFolders` 的 catch 直接置 `foldersFailed` 标志，不再
+从计数推断；`removeFolder` 之后顺手 `refreshStatus()` 让状态行计数同步。旧
+i18n 键（带 `{n}`）删除，换为不带计数的文案。
+
+## 复现与对照（puppeteer 无头 demo，按用户路径逐个删文件夹）
+
+| 版本 | 删完后 |
+|------|--------|
+| 未修复（stash 掉 App.tsx） | 红字 `2 folder(s) indexed but the list failed to load…` |
+| 修复后 | 中性 `还没有文件夹。`，无 error-line，无页面错误 |
+
+两个仪器坑，记账：
+- `.folder-remove` 类同时挂在重建（↻）和移除（✕）按钮上，第一版脚本点到的
+  是重建（IPC 日志抓到 `rebuild_folder`）。改为按 title 选
+- demo mock 的 `remove_folder` 原地 `splice` 后返回同一数组引用，React 对同
+  引用 `setState` 不重渲染，未修复版看起来"删不掉"。真实后端每次返回新
+  Vec；mock 改为返回拷贝后对照才成立。回归脚本必须先在坏版本上跑出报障
+  的原文，才算复现——这条上次记过，这次又用上了
+
+## 连续三轮干净
+
+- 回归 6/6（上表）；特性总回归 19/19、最近打开 5/5；静态扫描 0 FAIL
+  （i18n 140+28）；README/站点对称 0 FAIL；tsc + vite 通过。Rust 零改动
+
+---
 # 验收记录 2026-09-02（git worktree 只索引一次 + 错误落日志，待出包 v0.1.33）
 
 用户问：一个项目很多 worktree 会不会重复索引很多？核实结论——会，而且是

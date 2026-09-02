@@ -130,8 +130,8 @@ const ZH: Record<string, string> = {
     "递归扫描；跳过隐藏文件及 gitignore 路径。",
   "Add folder": "添加文件夹",
   "No folders yet.": "还没有文件夹。",
-  "{n} folder(s) indexed but the list failed to load — please report this with the error below.":
-    "已索引 {n} 个文件夹但列表加载失败 — 请附下方错误反馈。",
+  "The folder list failed to load — please report this with the error below.":
+    "文件夹列表加载失败 — 请附下方错误反馈。",
   "Rebuild this folder's index from scratch": "从零重建该文件夹的索引",
   "Remove from index": "从索引中移除",
   "Max file size": "文件大小上限",

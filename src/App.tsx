@@ -415,6 +415,8 @@ export default function App() {
   const updPhaseRef = useRef(updPhase);
   updPhaseRef.current = updPhase;
   const [folders, setFolders] = useState<FolderInfo[]>([]);
+  // set only when list_folders itself fails; an empty list is not a failure
+  const [foldersFailed, setFoldersFailed] = useState(false);
   const [showSettings, setShowSettings] = useState(!!import.meta.env.VITE_DEMO);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenBusy, setTokenBusy] = useState(false);
@@ -538,8 +540,10 @@ export default function App() {
   const refreshFolders = useCallback(async () => {
     try {
       setFolders(await invoke<FolderInfo[]>("list_folders"));
+      setFoldersFailed(false);
     } catch (e) {
       // surfaced in settings; a silent failure here looks like "no folders"
+      setFoldersFailed(true);
       setLastError(`folder list failed: ${String(e)}`);
     }
   }, []);
@@ -1464,10 +1468,12 @@ export default function App() {
   const removeFolder = useCallback(async (id: number) => {
     try {
       setFolders(await invoke<FolderInfo[]>("remove_folder", { folderId: id }));
+      // keep the counts in the status line in step with the list
+      await refreshStatus();
     } catch (e) {
       setLastError(String(e));
     }
-  }, []);
+  }, [refreshStatus]);
 
   const rebuildFolder = useCallback(
     async (id: number) => {
@@ -1886,12 +1892,13 @@ export default function App() {
                 </button>
               </div>
               {folders.length === 0 &&
-                (status != null && status.folder_count > 0 ? (
+                // "failed to load" only when the load actually failed. It used
+                // to be inferred from status.folder_count, which lags behind
+                // the list after the last folder is removed and showed this
+                // as an error every time.
+                (foldersFailed ? (
                   <p className="error-line">
-                    {tf(
-                      "{n} folder(s) indexed but the list failed to load — please report this with the error below.",
-                      { n: status.folder_count },
-                    )}
+                    {t("The folder list failed to load — please report this with the error below.")}
                   </p>
                 ) : (
                   <p className="set-empty">{t("No folders yet.")}</p>
