@@ -110,17 +110,21 @@ mod tests {
         let root = scratch("crlf");
         let wt = root.join("wt");
         std::fs::create_dir_all(&wt).unwrap();
-        let cases: [(&str, Option<&str>); 5] = [
-            ("gitdir: C:/x/.git/worktrees/a\r\n", Some("C:/x/.git/worktrees/a")),
-            ("gitdir:   C:/x/.git/worktrees/a   ", Some("C:/x/.git/worktrees/a")),
-            ("gitdir:", None),
-            ("not a pointer at all", None),
-            ("", None),
+        // an absolute target has to be absolute on every platform the suite
+        // runs on: a "C:/…" literal is relative on Linux, so build it from the
+        // scratch dir instead
+        let abs = root.join("x").join(".git").join("worktrees").join("a");
+        let cases: Vec<(String, Option<PathBuf>)> = vec![
+            (format!("gitdir: {}\r\n", abs.display()), Some(abs.clone())),
+            (format!("gitdir:   {}   ", abs.display()), Some(abs.clone())),
+            ("gitdir: ../x/.git/worktrees/a\r\n".into(), Some(wt.join("../x/.git/worktrees/a"))),
+            ("gitdir:".into(), None),
+            ("not a pointer at all".into(), None),
+            (String::new(), None),
         ];
         for (content, want) in cases {
-            std::fs::write(wt.join(".git"), content).unwrap();
-            let got = gitdir_pointer(&wt).map(|p| p.to_string_lossy().replace('\\', "/"));
-            assert_eq!(got.as_deref(), want, "content {content:?}");
+            std::fs::write(wt.join(".git"), &content).unwrap();
+            assert_eq!(gitdir_pointer(&wt), want, "content {content:?}");
             // whatever the pointer says, a dangling target never panics
             let _ = is_shadowed(&wt, std::slice::from_ref(&root));
         }
