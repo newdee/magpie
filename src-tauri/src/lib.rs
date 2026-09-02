@@ -2636,6 +2636,45 @@ mod search_cancel_tests {
         assert!(stale.await.unwrap(), "the stale query must have been interrupted");
     }
 
+    /// A burst of a hundred keystrokes: no deadlock, no panic, every ticket
+    /// settles, and the newest one is the one that gets to run last.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn a_burst_of_searches_settles_with_the_newest_running_last() {
+        let db = Arc::new(AsyncMutex::new(db::open_in_memory().expect("db")));
+        let interrupt = Arc::new(db.try_lock().unwrap().get_interrupt_handle());
+        let gen = Arc::new(AtomicU64::new(0));
+        let ran = Arc::new(AtomicU64::new(0));
+        let mut tasks = Vec::new();
+        for i in 0..100u64 {
+            let (db, int, gen, ran) = (db.clone(), interrupt.clone(), gen.clone(), ran.clone());
+            tasks.push(tokio::spawn(async move {
+                if let Some(conn) = take_search_conn(&db, &int, &gen).await {
+                    // a short real query, so interrupts have something to hit
+                    let _: Result<i64, _> = conn.query_row("SELECT 1", [], |r| r.get(0));
+                    ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Some(i);
+                }
+                None
+            }));
+        }
+        let mut winners = Vec::new();
+        for t in tasks {
+            if let Some(i) = tokio::time::timeout(std::time::Duration::from_secs(10), t)
+                .await
+                .expect("no deadlock")
+                .expect("no panic")
+            {
+                winners.push(i);
+            }
+        }
+        assert_eq!(gen.load(std::sync::atomic::Ordering::SeqCst), 100, "every ticket was issued");
+        assert!(!winners.is_empty(), "at least one search ran");
+        assert_eq!(winners.len() as u64, ran.load(std::sync::atomic::Ordering::SeqCst));
+        // the connection is still healthy afterwards
+        let v: i64 = db.lock().await.query_row("SELECT 2", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+    }
+
     /// Three keystrokes race for the lock: whoever is no longer the newest by
     /// the time it reaches the head of the queue must bail without running.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

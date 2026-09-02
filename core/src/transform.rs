@@ -203,6 +203,17 @@ mod verb_tests {
     }
 
     #[test]
+    fn a_hash_followed_by_non_hex_text_is_a_search_not_a_panic() {
+        // 6 bytes of CJK after '#': the old byte-index slice cut a character
+        assert!(transform("#报销").is_none());
+        assert!(transform("#报").is_none());
+        assert!(transform("#ffz600").is_none());
+        assert!(transform("#ff660").is_none(), "5 hex digits is not a color");
+        assert!(transform("#ff6600").is_some());
+        assert!(transform("#FFF").is_some());
+    }
+
+    #[test]
     fn a_verb_with_an_argument_never_touches_the_clipboard() {
         // explicit arguments are labelled plainly; only the clipboard path
         // carries the "clipboard →" prefix
@@ -281,6 +292,11 @@ fn percent_decode(s: &str) -> Option<String> {
 /// `#rrggbb` / `#rgb` -> rgb()+hsl(); `rgb(r, g, b)` -> hex+hsl.
 fn color(q: &str) -> Option<TransformResult> {
     let (r, g, b) = if let Some(hex) = q.strip_prefix('#') {
+        // byte slicing below is only safe once every byte is an ASCII hex
+        // digit; "#报销" is 6 bytes and used to be cut inside a character
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
         match hex.len() {
             3 => {
                 let v: Vec<u8> = hex

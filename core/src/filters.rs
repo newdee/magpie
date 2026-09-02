@@ -37,7 +37,10 @@ impl Filters {
             }
         }
         if let Some(days) = self.within_days {
-            if mtime < now - days * 86_400 {
+            // saturating: "99999999999999999d" typed into the box must not
+            // overflow the cutoff (a panic in debug, a wrapped bound in release)
+            let cutoff = now.saturating_sub(days.saturating_mul(86_400));
+            if mtime < cutoff {
                 return false;
             }
         }
@@ -192,5 +195,24 @@ mod tests {
     #[test]
     fn empty_filters_match_everything() {
         assert!(Filters::default().matches(None, 0, 0, "", 0));
+    }
+
+    #[test]
+    fn absurd_day_counts_and_clock_values_do_not_overflow() {
+        let (f, _) = parse("99999999999999999d");
+        assert_eq!(f.within_days, Some(99_999_999_999_999_999));
+        // with a real clock the span saturates and the cutoff lands at or
+        // below zero: every real mtime is "within" it
+        assert!(f.matches(None, 0, 0, "", 1_800_000_000));
+        assert!(f.matches(None, 0, 1, "", i64::MAX), "cutoff saturates to 0, mtime 1 is inside");
+        // the extremes stay consistent instead of wrapping: a clock at MIN
+        // has a cutoff of MIN (everything matches), a clock at MAX with a
+        // saturated span has a cutoff of exactly 0 (only negative mtimes fall out)
+        assert!(f.matches(None, 0, i64::MAX, "", i64::MIN));
+        assert!(!f.matches(None, 0, i64::MIN, "", i64::MAX));
+        // a count too big for i64 is not a filter at all, just text
+        let (g, text) = parse("999999999999999999999d");
+        assert!(g.is_empty());
+        assert_eq!(text, "999999999999999999999d");
     }
 }
