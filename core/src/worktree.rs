@@ -106,6 +106,28 @@ mod tests {
     }
 
     #[test]
+    fn pointer_file_tolerates_crlf_spaces_and_odd_contents() {
+        let root = scratch("crlf");
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let cases: [(&str, Option<&str>); 5] = [
+            ("gitdir: C:/x/.git/worktrees/a\r\n", Some("C:/x/.git/worktrees/a")),
+            ("gitdir:   C:/x/.git/worktrees/a   ", Some("C:/x/.git/worktrees/a")),
+            ("gitdir:", None),
+            ("not a pointer at all", None),
+            ("", None),
+        ];
+        for (content, want) in cases {
+            std::fs::write(wt.join(".git"), content).unwrap();
+            let got = gitdir_pointer(&wt).map(|p| p.to_string_lossy().replace('\\', "/"));
+            assert_eq!(got.as_deref(), want, "content {content:?}");
+            // whatever the pointer says, a dangling target never panics
+            let _ = is_shadowed(&wt, std::slice::from_ref(&root));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn shadowed_only_when_the_main_checkout_is_indexed() {
         let root = scratch("shadow");
         let abs = root.join("proj").join(".git").join("worktrees").join("feat");

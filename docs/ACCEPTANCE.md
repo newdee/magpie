@@ -34,6 +34,22 @@ core，待用户提供原文。
   平衡；README/站点双语对称核对 0 FAIL
 - 无头：特性总回归 19/19（新增 worktree 设置行断言）、最近打开 5/5
 
+## 用户要求的 review + 自测（提交后再跑三轮，零发现）
+
+- R1 冷读 diff + 静态：逐行重读 worktree.rs / files.rs / lib.rs / App.tsx 改动，
+  无逻辑缺陷（Windows `\\?\` 前缀两侧同样 canonicalize；显式添加的 worktree
+  depth 0 不剪；开关期间若索引正在跑则等下一轮，与视频开关同一模式）。补
+  用例：指针文件 CRLF、尾随空格、`gitdir:` 空、非指针内容、悬空目标（不 panic）。
+  `filter_entry` 每目录多一次 stat 的代价实测：5000 目录重扫 开 373ms / 关
+  389ms，差值在噪声内（`core/tests/worktree_cost.rs`，ignored，手动跑）。静态
+  扫描 0 FAIL，文档对称检查加入 worktree 条目仍 0 FAIL
+- R2 真机（生产 exe，应用自己的启动扫描）4/4：临时目录含主 checkout + linked
+  worktree 直接登记进库 → 默认只索引主 checkout 的文件、日志无错误；meta 置 0
+  重启 → 两份都在；清回默认重启 → worktree 行被清理。清理步骤一度残留 1 行：
+  python 的 sqlite3 连接默认 `foreign_keys=OFF`，删 folders 不级联——仪器问题，
+  已显式删除并核实 0 残留、0 孤儿 chunk
+- R3 可复现：116 测试连跑 3 次逐次一致；clippy 0；tsc + vite 通过
+
 ## 设计取舍
 
 - 只剪"另一份已被索引"的 worktree：bare 仓库的 worktree、放在索引范围之外的
