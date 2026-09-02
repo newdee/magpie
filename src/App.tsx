@@ -131,6 +131,8 @@ interface Status {
   video_count: number;
   video_shot_count: number;
   video_indexing_enabled: boolean;
+  /// prune linked git worktrees whose main checkout is indexed (default on)
+  skip_worktrees: boolean;
   video_indexing: boolean;
   video_note: string;
   ffmpeg_status: string;
@@ -1939,6 +1941,38 @@ export default function App() {
                     onClick={() => applyFileCap(c.mb)}
                   >
                     {t(c.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Skip git worktrees")}</span>
+                <span className="set-desc">
+                  {t(
+                    "A linked worktree is a second copy of a checkout that is usually indexed already. Skipped when its main checkout is inside an indexed folder; a worktree that is the only copy is still indexed.",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${(status?.skip_worktrees ?? true) === o.on ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_skip_worktrees", { enabled: o.on });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {t(o.label)}
                   </button>
                 ))}
               </div>

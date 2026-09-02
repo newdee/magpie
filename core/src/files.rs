@@ -214,8 +214,18 @@ pub fn index_folders(
 
     let folders = list_folders(conn)?;
     let mut seen: Vec<String> = Vec::new();
+    // linked git worktrees whose main checkout is indexed are copies; prune
+    // them unless the user switched that off (see worktree.rs)
+    let skip_worktrees = crate::db::meta_get(conn, "skip_worktrees")
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let roots: Vec<std::path::PathBuf> =
+        folders.iter().map(|f| std::path::PathBuf::from(&f.path)).collect();
 
     for folder in &folders {
+        let roots = roots.clone();
         let walker = WalkBuilder::new(&folder.path)
             .follow_links(false)
             .hidden(true) // skip dotfiles
@@ -223,6 +233,14 @@ pub fn index_folders(
             .require_git(false) // honor .gitignore even outside git repos
             .git_global(false)
             .git_exclude(true)
+            // depth 0 is the registered folder itself: adding a worktree
+            // explicitly always wins over the pruning rule
+            .filter_entry(move |e| {
+                !(skip_worktrees
+                    && e.depth() > 0
+                    && e.file_type().is_some_and(|t| t.is_dir())
+                    && crate::worktree::is_shadowed(e.path(), &roots))
+            })
             .build();
         for entry in walker.flatten() {
             let Some(ft) = entry.file_type() else { continue };

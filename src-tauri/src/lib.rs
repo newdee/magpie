@@ -317,6 +317,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "hotkey": hotkey,
         "hotkey_selection": resolve_selection_hotkey(db::meta_get(&conn, "hotkey_selection").ok().flatten().as_deref()).unwrap_or_default(),
         "hotkey_selection_default": DEFAULT_SELECTION_HOTKEY,
+        "skip_worktrees": db::meta_get(&conn, "skip_worktrees").ok().flatten().map(|v| v != "0").unwrap_or(true),
         "note_path": note_path_from(&conn, &state.db_path).to_string_lossy().into_owned(),
         "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
@@ -1180,6 +1181,7 @@ fn spawn_video_index(app: AppHandle) {
             }
             Err(e) => {
                 *note.lock().unwrap() = e.to_string();
+                log::warn!("video indexing failed: {e:#}");
                 let _ = app.emit("local-error", format!("video indexing: {e}"));
             }
         }
@@ -1263,6 +1265,18 @@ fn set_video_indexing(app: AppHandle, state: State<'_, AppState>, enabled: bool)
         spawn_ffmpeg_check(app.clone());
         spawn_video_index(app);
     }
+    Ok(())
+}
+
+/// Prune linked git worktrees whose main checkout is indexed (default on).
+/// Either way the next scan applies it: switching on drops the worktrees'
+/// rows as unseen files, switching off walks them again.
+#[tauri::command]
+fn set_skip_worktrees(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "skip_worktrees", if enabled { "1" } else { "0" }).map_err(err_str)?;
+    drop(conn);
+    spawn_local_index(app);
     Ok(())
 }
 
@@ -1683,9 +1697,11 @@ fn spawn_bookmark_sync(app: AppHandle) {
                 let _ = app.emit("bookmarks-done", v);
             }
             Ok(Err(e)) => {
+                log::warn!("bookmark sync failed: {e:#}");
                 let _ = app.emit("bookmarks-error", e.to_string());
             }
             Err(e) => {
+                log::warn!("bookmark sync task panicked: {e}");
                 let _ = app.emit("bookmarks-error", e.to_string());
             }
         }
@@ -1772,9 +1788,11 @@ fn spawn_local_index(app: AppHandle) {
                 let _ = app.emit("local-done", v);
             }
             Ok(Err(e)) => {
+                log::warn!("local index failed: {e:#}");
                 let _ = app.emit("local-error", e.to_string());
             }
             Err(e) => {
+                log::warn!("local index task panicked: {e}");
                 let _ = app.emit("local-error", e.to_string());
             }
         }
@@ -1801,6 +1819,7 @@ fn spawn_sync(app: AppHandle) {
                 let _ = app.emit("sync-done", v);
             }
             Err(e) => {
+                log::warn!("star sync failed: {e:#}");
                 let _ = app.emit("sync-error", e.to_string());
             }
         }
@@ -3094,7 +3113,8 @@ pub fn run() {
             append_note,
             set_note_path,
             open_note_file,
-            set_selection_hotkey
+            set_selection_hotkey,
+            set_skip_worktrees
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

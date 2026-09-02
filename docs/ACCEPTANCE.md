@@ -1,3 +1,53 @@
+# 验收记录 2026-09-02（git worktree 只索引一次 + 错误落日志，待出包 v0.1.33）
+
+用户问：一个项目很多 worktree 会不会重复索引很多？核实结论——会，而且是
+每份各算：嵌入哈希是 `doc_hash(name + path + content)`，路径参与哈希，同一文件
+在 N 个 worktree 里存 N 份向量。用户拍板：做。
+
+## 实现
+
+- `core/src/worktree.rs`：`gitdir_pointer`（`.git` 是文件且以 `gitdir:` 开头
+  → linked worktree，相对路径按所在目录解析）、`main_checkout`（从
+  `<common>/worktrees/<name>` 反推，`<common>` 必须叫 `.git`；bare 仓库返回
+  None）、`is_shadowed`（主 checkout 落在任一已注册文件夹内才算"另一份已被
+  索引"，路径先 canonicalize 再比较）
+- `files::index_folders`：`WalkBuilder.filter_entry` 剪枝，只对 depth>0 的目录
+  生效——用户显式添加的 worktree 文件夹本身（depth 0）永远索引。开关 meta
+  `skip_worktrees`，默认开；关→重新走一遍；开→worktree 里的行作为"未见文件"
+  被既有清理逻辑删除
+- 设置行 + `set_skip_worktrees` 命令（写 meta 后立即触发一次本地索引）；
+  status 暴露 `skip_worktrees`；README 双语、站点双语各一条
+
+顺带：用户报"索引目录删完后总报错"。所有向界面弹错误的路径（本地索引、视频
+索引、书签同步、star 同步）此前都不写日志，只 emit 给前端——现在同时
+`log::warn!`，下次报错日志尾部直接能看。核心层用集成测试模拟"加目录→索引→
+删目录→再索引→重载向量→再加目录"全链路，全部 Ok，所以那个报错不在
+core，待用户提供原文。
+
+## 连续三轮干净
+
+- 单测/集成：worktree 5 个（纯路径推导、指针文件与相对路径、shadow 判定四种
+  情形、bare 仓库不剪、**index_folders 真实剪枝**：默认只留主 checkout 的 1 个
+  文件，关掉后 2 个，再开回 1 个）+ 空索引集成 1 个；共 115 测试连跑 3 次一致；
+  clippy 0（中途 5 条测试里 `&[x.clone()]` 提示已改）；tsc + vite 通过
+- 静态：命令面 55 定义 = 55 注册全引用；i18n 139+28；22 个 meta 设置项写读
+  平衡；README/站点双语对称核对 0 FAIL
+- 无头：特性总回归 19/19（新增 worktree 设置行断言）、最近打开 5/5
+
+## 设计取舍
+
+- 只剪"另一份已被索引"的 worktree：bare 仓库的 worktree、放在索引范围之外的
+  worktree 是唯一副本，照常索引；用户显式添加的 worktree 目录不受规则影响
+- 不做结果层按内容折叠：只藏症状，索引和嵌入照付，且 worktree 多为不同分支，
+  内容部分相同，折叠规则说不清
+
+## 未验证项
+
+- 真机上通过 UI 开关触发的重扫（walker 路径已被 `index_folders` 集成测试覆盖，
+  命令层只是写 meta + spawn，风险低）
+- "删完索引目录报错"的实际错误来源：core 排除，等用户日志
+
+---
 # 验收记录 2026-09-02（划词搜索热键给默认值，待出包 v0.1.32）
 
 用户："快捷键最好都有默认值"。v0.1.31 的划词搜索热键是"设置了才生效"，不

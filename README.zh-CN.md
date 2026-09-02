@@ -133,6 +133,8 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 - Word / Excel / PowerPoint（docx、xlsx、pptx）
 - 其余一切，包括视频、压缩包、二进制，按文件名索引
 - 范围切换（点选或 `Shift+Tab`）：全部 / 仅文本 / 仅图片 / 仅视频
+- git 的 linked worktree 在其所属 checkout 已被索引时自动跳过，一个项目开六个
+  worktree 不会被索引六遍。作为唯一副本的 worktree 照常索引；设置里可关。
 
 图片经 **SigLIP 2** 嵌入，按画面内容检索：
 

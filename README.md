@@ -166,6 +166,10 @@ name, and understood formats are searched in full text:
 - Word / Excel / PowerPoint (docx, xlsx, pptx)
 - Everything else (video, archives, binaries) indexes by filename
 - Scope pills (or `Shift+Tab`) narrow results: all / text / images / videos
+- Linked git worktrees are skipped when the checkout they belong to is
+  already indexed, so a project with six worktrees is not indexed six times.
+  A worktree that is the only copy is indexed as usual; there is an
+  off-switch in settings.
 
 Images are embedded with **SigLIP 2** and searchable by content:
 

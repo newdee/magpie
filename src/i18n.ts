@@ -15,6 +15,9 @@ const ZH: Record<string, string> = {
     "什么都没输入时，每个 tab 列出你最近从它打开过的条目。",
   "Search selection shortcut": "划词搜索快捷键",
   "Removed.": "已移除。",
+  "Skip git worktrees": "跳过 git worktree",
+  "A linked worktree is a second copy of a checkout that is usually indexed already. Skipped when its main checkout is inside an indexed folder; a worktree that is the only copy is still indexed.":
+    "linked worktree 是某个 checkout 的第二份拷贝，而那份通常已经在索引里。当它的主 checkout 位于已索引文件夹内时跳过；作为唯一副本的 worktree 照常索引。",
   "Reset to {k}": "恢复为 {k}",
   "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.":
     "在任何应用里选中文字后按它：magpie 复制选区，并带着这段文字弹出来。",
