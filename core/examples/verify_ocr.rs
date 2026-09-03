@@ -11,7 +11,9 @@ fn main() -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("magpie-ocr-test"));
     let mut ocr =
-        magpie_core::ocr::Ocr::new_with_model(&cache, &model, &mut |s| eprintln!("[{s}]"))?;
+        magpie_core::ocr::Ocr::new_with_model(&cache, &model, magpie_core::threads::cores(), &mut |s| {
+            eprintln!("[{s}]")
+        })?;
     let img = image::open(&img_path)?;
     let text = ocr.extract_text(&img)?;
     println!("---\n{text}\n---");

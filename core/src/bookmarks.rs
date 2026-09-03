@@ -391,6 +391,9 @@ pub fn embed_pending_bookmarks(
     let mut done = 0usize;
     progress(0, total);
     for chunk in pending.chunks(EMBED_BATCH) {
+        if crate::threads::stopping(crate::threads::Model::Text) {
+            break; // a reload wants the model; its catch-up pass resumes here
+        }
         let docs: Vec<String> = chunk.iter().map(|(_, d, _)| d.clone()).collect();
         let vecs = embedder.embed_passages(&docs)?;
         for ((id, _, hash), vec) in chunk.iter().zip(vecs) {
@@ -410,7 +413,7 @@ pub fn embed_pending_bookmarks(
         "DELETE FROM bookmark_vecs WHERE bookmark_id NOT IN (SELECT id FROM bookmarks)",
         [],
     )?;
-    Ok(total)
+    Ok(done)
 }
 
 pub fn all_bookmark_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {

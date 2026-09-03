@@ -138,6 +138,8 @@ interface Status {
   ffmpeg_status: string;
   video_decode_threads: number;
   video_hwaccel: boolean;
+  index_threads: number;
+  cpu_cores: number;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -1982,6 +1984,39 @@ export default function App() {
                     {t(o.label)}
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Indexing threads")}</span>
+                <span className="set-desc">
+                  {t(
+                    "CPU threads each model (text, image, OCR) may use while indexing. Fewer keeps the machine responsive; all cores finishes a first index sooner. Applies right away.",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[1, 2, 4, 8]
+                  .filter((n) => n <= (status?.cpu_cores ?? 8))
+                  .map((n) => ({ label: String(n), threads: n }))
+                  .concat([{ label: "all", threads: 0 }])
+                  .map((o) => (
+                    <button
+                      key={o.label}
+                      className={`source ${(status?.index_threads ?? 4) === o.threads ? "active" : ""}`}
+                      onClick={async () => {
+                        try {
+                          await invoke("set_index_threads", { threads: o.threads });
+                          await refreshStatus();
+                        } catch (e) {
+                          setLastError(String(e));
+                        }
+                      }}
+                    >
+                      {o.threads === 0 ? `${t("all cores")} (${status?.cpu_cores ?? "?"})` : o.label}
+                    </button>
+                  ))}
               </div>
             </div>
 

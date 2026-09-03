@@ -22,7 +22,8 @@ fn main() -> anyhow::Result<()> {
 
     let t = std::time::Instant::now();
     let mut last = String::new();
-    let mut direct = Embedder::new_direct(&tmp, &mut |m| {
+    let threads = magpie_core::threads::cores();
+    let mut direct = Embedder::new_direct(&tmp, threads, &mut |m| {
         if m != last && (m.ends_with("0%") || !m.contains('%')) {
             println!("  e5: {m}");
             last = m;
@@ -32,7 +33,7 @@ fn main() -> anyhow::Result<()> {
 
     let t = std::time::Instant::now();
     let mut last = String::new();
-    let mut siglip_direct = Siglip::new_direct(&tmp, &mut |m| {
+    let mut siglip_direct = Siglip::new_direct(&tmp, threads, &mut |m| {
         if m != last && (m.ends_with("0%") || !m.contains('%')) {
             println!("  siglip: {m}");
             last = m;

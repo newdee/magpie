@@ -66,6 +66,7 @@ struct AppState {
     /// "" (off/unchecked) / download progress / "ready" / "failed: <why>".
     ocr_status: Arc<StdMutex<String>>,
     ocr_initing: Arc<AtomicBool>,
+    ocr_reinit: Arc<AtomicBool>,
     ocr_indexing: Arc<AtomicBool>,
     /// Desired state of the clipboard watcher; the thread exits when false.
     clip_watch: Arc<AtomicBool>,
@@ -184,6 +185,8 @@ const EXPORTABLE_META: &[&str] = &[
     "ocr_enabled",
     "ocr_model",
     "ocr_pdf",
+    "skip_worktrees",
+    "index_threads",
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -219,12 +222,14 @@ async fn import_settings(
     if doc.get("magpie_settings").and_then(|v| v.as_i64()) != Some(1) {
         return Err("not a magpie settings file".into());
     }
+    let mut imported: Vec<&str> = Vec::new();
     {
         let conn = state.db.lock().await;
         if let Some(meta) = doc.get("meta").and_then(|m| m.as_object()) {
             for key in EXPORTABLE_META {
                 if let Some(v) = meta.get(*key).and_then(|v| v.as_str()) {
                     db::meta_set(&conn, key, v).map_err(err_str)?;
+                    imported.push(key);
                 }
             }
         }
@@ -241,6 +246,14 @@ async fn import_settings(
                 spawn_ocr_init(app.clone());
             }
         }
+    }
+    // an imported thread cap applies to the loaded models now, as the
+    // settings row does; an imported worktree rule needs a rescan
+    if imported.contains(&"index_threads") {
+        apply_index_threads(&app, state.inner());
+    }
+    if imported.contains(&"skip_worktrees") {
+        spawn_local_index(app.clone());
     }
     Ok(doc.get("frontend").cloned().unwrap_or(json!({})))
 }
@@ -318,6 +331,8 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "hotkey_selection": resolve_selection_hotkey(db::meta_get(&conn, "hotkey_selection").ok().flatten().as_deref()).unwrap_or_default(),
         "hotkey_selection_default": DEFAULT_SELECTION_HOTKEY,
         "skip_worktrees": db::meta_get(&conn, "skip_worktrees").ok().flatten().map(|v| v != "0").unwrap_or(true),
+        "index_threads": magpie_core::threads::displayed(magpie_core::threads::setting(&conn), magpie_core::threads::cores()),
+        "cpu_cores": magpie_core::threads::cores(),
         "note_path": note_path_from(&conn, &state.db_path).to_string_lossy().into_owned(),
         "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
@@ -1280,6 +1295,98 @@ fn set_skip_worktrees(app: AppHandle, state: State<'_, AppState>, enabled: bool)
     Ok(())
 }
 
+/// The thread cap the model sessions load with (see `magpie_core::threads`).
+/// A database that will not open falls back to the default cap rather than
+/// to every core: the polite choice is the safe one.
+fn index_threads(db_path: &std::path::Path) -> usize {
+    db::open(db_path)
+        .map(|c| magpie_core::threads::from_meta(&c))
+        .unwrap_or(magpie_core::threads::DEFAULT)
+}
+
+/// Re-create a loaded model so a load-time setting (the thread cap) applies
+/// now rather than after a restart. A load in flight gets one rerun queued
+/// through its reinit flag; a model that is off or failed is left alone and
+/// picks the setting up whenever it next loads.
+///
+/// `stop` runs first on both paths, before anything is spawned or queued,
+/// so that a load is always in flight once the passes have been told to
+/// stop: every load ends in a resume, and a stop can never be left behind
+/// with nobody to lift it. Returns whether a reload was started or queued.
+fn reload_loaded(
+    initing: &AtomicBool,
+    reinit: &AtomicBool,
+    status: &StdMutex<String>,
+    stop: impl FnOnce(),
+    spawn: impl FnOnce(),
+) -> bool {
+    if initing.load(Ordering::SeqCst) {
+        stop();
+        reinit.store(true, Ordering::SeqCst);
+        // the load may have ended between the check and the flag, in which
+        // case nobody is left to consume it: consume it here
+        if !initing.load(Ordering::SeqCst) && reinit.swap(false, Ordering::SeqCst) {
+            spawn();
+        }
+        return true;
+    }
+    if *status.lock().unwrap() == "ready" {
+        stop();
+        spawn();
+        return true;
+    }
+    false
+}
+
+/// Cap the CPU threads each model session (text, image, OCR) may use while
+/// indexing; 0 = every core. Persisted, then the loaded models are reloaded
+/// so the cap applies to the next embed pass, not to the next launch.
+#[tauri::command]
+async fn set_index_threads(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    threads: u32,
+) -> Result<(), String> {
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, magpie_core::threads::META_KEY, &threads.to_string())
+            .map_err(err_str)?;
+    }
+    apply_index_threads(&app, state.inner());
+    Ok(())
+}
+
+/// Reload whichever models are loaded so the stored thread cap applies now.
+/// The text and image passes hold their model for a whole run, so a reload
+/// on its way also tells those passes to end at their next item: the new
+/// session swaps in within seconds instead of after the run, and the
+/// reload's catch-up pass carries on from where the run stopped. OCR takes
+/// its engine per item, so a swap there needs no such help.
+fn apply_index_threads(app: &AppHandle, state: &AppState) {
+    use magpie_core::threads::{self as th, Model};
+    reload_loaded(
+        &state.model_initing,
+        &state.model_reinit,
+        &state.model_status,
+        || th::stop(Model::Text),
+        || spawn_model_init(app.clone()),
+    );
+    reload_loaded(
+        &state.siglip_initing,
+        &state.siglip_reinit,
+        &state.siglip_status,
+        || th::stop(Model::Image),
+        || spawn_siglip_init(app.clone()),
+    );
+    reload_loaded(
+        &state.ocr_initing,
+        &state.ocr_reinit,
+        &state.ocr_status,
+        || {},
+        || spawn_ocr_init(app.clone()),
+    );
+}
+
 // ---------- clipboard history ----------
 
 fn unix_now() -> i64 {
@@ -1877,6 +1984,7 @@ fn spawn_model_init(app: AppHandle) {
     let store = state.store.clone();
     let initing = state.model_initing.clone();
     let reinit = state.model_reinit.clone();
+    let threads = index_threads(&db_path);
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let _ = app.emit("model-status", "loading");
@@ -1886,7 +1994,7 @@ fn spawn_model_init(app: AppHandle) {
             let app = app.clone();
             move || {
                 let mut last = String::new();
-                Embedder::new_with_fallback(&model_dir, &mut |msg| {
+                Embedder::new_with_fallback(&model_dir, threads, &mut |msg| {
                     // percent strings repeat per read; only surface changes
                     if msg != last {
                         last = msg.clone();
@@ -1901,8 +2009,18 @@ fn spawn_model_init(app: AppHandle) {
             Ok(Ok(e)) => {
                 *embedder.lock().unwrap() = Some(e);
                 *status.lock().unwrap() = "ready".into();
-                log::info!("semantic model ready");
+                log::info!("semantic model ready ({threads} threads)");
                 let _ = app.emit("model-status", "ready");
+                initing.store(false, Ordering::SeqCst);
+                // a load-time setting (thread cap, mirror) changed while this
+                // load ran: load once more before catching up, so the
+                // catch-up runs on the final session. The passes stay
+                // stopped until that load has swapped its session in.
+                if reinit.swap(false, Ordering::SeqCst) {
+                    spawn_model_init(app.clone());
+                    return;
+                }
+                magpie_core::threads::resume(magpie_core::threads::Model::Text);
                 // catch up on vectors for repos/files ingested while the model was absent
                 let app2 = app.clone();
                 let catchup_path = db_path.clone();
@@ -1941,8 +2059,6 @@ fn spawn_model_init(app: AppHandle) {
                         let _ = app.emit("embed-caught-up", n);
                     }
                 }
-                initing.store(false, Ordering::SeqCst);
-                reinit.store(false, Ordering::SeqCst); // succeeded: nothing queued matters
             }
             Ok(Err(e)) => {
                 log::error!("semantic model init failed: {e}");
@@ -1950,8 +2066,10 @@ fn spawn_model_init(app: AppHandle) {
                 *status.lock().unwrap() = msg.clone();
                 let _ = app.emit("model-status", msg);
                 initing.store(false, Ordering::SeqCst);
+                // whatever model is loaded stays in use; let its passes run
+                magpie_core::threads::resume(magpie_core::threads::Model::Text);
                 if reinit.swap(false, Ordering::SeqCst) {
-                    // the mirror changed while this attempt ran; try once more
+                    // a setting changed while this attempt ran; try once more
                     spawn_model_init(app.clone());
                 }
             }
@@ -1961,6 +2079,7 @@ fn spawn_model_init(app: AppHandle) {
                 *status.lock().unwrap() = msg.clone();
                 let _ = app.emit("model-status", msg);
                 initing.store(false, Ordering::SeqCst);
+                magpie_core::threads::resume(magpie_core::threads::Model::Text);
             }
         }
     });
@@ -1977,11 +2096,13 @@ fn spawn_ocr_init(app: AppHandle) {
     let status = state.ocr_status.clone();
     let model_dir = state.model_dir.clone();
     let initing = state.ocr_initing.clone();
+    let reinit = state.ocr_reinit.clone();
     let model_id = db::open(&state.db_path)
         .ok()
         .and_then(|c| db::meta_get(&c, "ocr_model").ok().flatten())
         .filter(|m| magpie_core::ocr::is_known_model(m))
         .unwrap_or_else(|| magpie_core::ocr::OCR_MODEL_ID.into());
+    let threads = index_threads(&state.db_path);
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let init = tokio::task::spawn_blocking({
@@ -1990,7 +2111,7 @@ fn spawn_ocr_init(app: AppHandle) {
             let app = app.clone();
             move || {
                 let mut last = String::new();
-                magpie_core::ocr::Ocr::new_with_model(&model_dir, &model_id, &mut |msg| {
+                magpie_core::ocr::Ocr::new_with_model(&model_dir, &model_id, threads, &mut |msg| {
                     if msg != last {
                         last = msg.clone();
                         *status.lock().unwrap() = msg.clone();
@@ -2031,6 +2152,10 @@ fn spawn_ocr_init(app: AppHandle) {
             }
         }
         initing.store(false, Ordering::SeqCst);
+        // a load-time setting changed while this load ran: once more
+        if reinit.swap(false, Ordering::SeqCst) {
+            spawn_ocr_init(app.clone());
+        }
     });
 }
 
@@ -2200,6 +2325,7 @@ fn spawn_siglip_init(app: AppHandle) {
     let store = state.store.clone();
     let initing = state.siglip_initing.clone();
     let reinit = state.siglip_reinit.clone();
+    let threads = index_threads(&db_path);
     tauri::async_runtime::spawn(async move {
         *status.lock().unwrap() = "loading".into();
         let init = tokio::task::spawn_blocking({
@@ -2208,7 +2334,7 @@ fn spawn_siglip_init(app: AppHandle) {
             let app = app.clone();
             move || {
                 let mut last = String::new();
-                Siglip::new_with_progress(&model_dir, &mut |msg| {
+                Siglip::new_with_progress(&model_dir, threads, &mut |msg| {
                     if msg != last {
                         last = msg.clone();
                         *status.lock().unwrap() = msg.clone();
@@ -2223,6 +2349,14 @@ fn spawn_siglip_init(app: AppHandle) {
                 *siglip.lock().unwrap() = Some(s);
                 *status.lock().unwrap() = "ready".into();
                 let _ = app.emit("model-status", "image-ready");
+                initing.store(false, Ordering::SeqCst);
+                // a load-time setting changed while this load ran: load once
+                // more before catching up (see spawn_model_init)
+                if reinit.swap(false, Ordering::SeqCst) {
+                    spawn_siglip_init(app.clone());
+                    return;
+                }
+                magpie_core::threads::resume(magpie_core::threads::Model::Image);
                 let app2 = app.clone();
                 let catchup_path = db_path.clone();
                 let done = tokio::task::spawn_blocking(move || -> Result<usize> {
@@ -2262,14 +2396,14 @@ fn spawn_siglip_init(app: AppHandle) {
                     });
                 }
                 spawn_video_index(app.clone());
-                initing.store(false, Ordering::SeqCst);
-                reinit.store(false, Ordering::SeqCst);
             }
             Ok(Err(e)) => {
                 let msg = format!("failed: {e}");
                 *status.lock().unwrap() = msg;
                 let _ = app.emit("model-status", "image-failed");
                 initing.store(false, Ordering::SeqCst);
+                // whatever model is loaded stays in use; let its passes run
+                magpie_core::threads::resume(magpie_core::threads::Model::Image);
                 if reinit.swap(false, Ordering::SeqCst) {
                     spawn_siglip_init(app.clone());
                 }
@@ -2279,6 +2413,7 @@ fn spawn_siglip_init(app: AppHandle) {
                 *status.lock().unwrap() = msg;
                 let _ = app.emit("model-status", "image-failed");
                 initing.store(false, Ordering::SeqCst);
+                magpie_core::threads::resume(magpie_core::threads::Model::Image);
             }
         }
     });
@@ -2746,6 +2881,63 @@ mod search_cancel_tests {
 }
 
 #[cfg(test)]
+mod reload_tests {
+    use super::{reload_loaded, StdMutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The order of stop/spawn calls, the reinit flag afterwards, and "a
+    /// reload is on its way" as reported to the caller.
+    fn run(initing: bool, reinit: bool, status: &str) -> (Vec<&'static str>, bool, bool) {
+        let initing = AtomicBool::new(initing);
+        let reinit = AtomicBool::new(reinit);
+        let status = StdMutex::new(status.to_string());
+        let calls = StdMutex::new(Vec::new());
+        let reported = reload_loaded(
+            &initing,
+            &reinit,
+            &status,
+            || calls.lock().unwrap().push("stop"),
+            || calls.lock().unwrap().push("spawn"),
+        );
+        let calls = calls.into_inner().unwrap();
+        (calls, reinit.load(Ordering::SeqCst), reported)
+    }
+
+    #[test]
+    fn a_ready_model_is_stopped_then_reloaded_once() {
+        // stop before spawn: the load that follows is what lifts the stop
+        assert_eq!(run(false, false, "ready"), (vec!["stop", "spawn"], false, true));
+    }
+
+    #[test]
+    fn a_model_that_is_off_or_failed_is_left_alone() {
+        // nothing spawned and, above all, nothing stopped: with no load in
+        // flight there would be nobody to lift the stop
+        assert_eq!(run(false, false, ""), (vec![], false, false));
+        assert_eq!(run(false, false, "failed: no network"), (vec![], false, false));
+    }
+
+    #[test]
+    fn a_load_in_flight_gets_one_rerun_queued_instead() {
+        assert_eq!(run(true, false, "loading"), (vec!["stop"], true, true));
+        // queueing twice is still one rerun
+        assert_eq!(run(true, true, "downloading model.onnx 40%"), (vec!["stop"], true, true));
+    }
+
+    #[test]
+    fn every_stop_has_a_load_in_flight_to_lift_it() {
+        // the invariant behind the ordering: on any path that stops, either
+        // a load was already running (queued) or one is spawned right after
+        for (initing, status) in [(false, "ready"), (true, "loading"), (true, "ready")] {
+            let (calls, _, _) = run(initing, false, status);
+            if calls.contains(&"stop") {
+                assert!(initing || calls.contains(&"spawn"), "{initing} {status}: {calls:?}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod placement_tests {
     use super::{placed_after_resize, PREVIEW_TOTAL_WIDTH};
 
@@ -3000,6 +3192,7 @@ pub fn run() {
                 ocr: Arc::new(StdMutex::new(None)),
                 ocr_status: Arc::new(StdMutex::new(String::new())),
                 ocr_initing: Arc::new(AtomicBool::new(false)),
+                ocr_reinit: Arc::new(AtomicBool::new(false)),
                 ocr_indexing: Arc::new(AtomicBool::new(false)),
                 clip_watch: Arc::new(AtomicBool::new(clipboard_enabled)),
                 clip_thread_alive: Arc::new(AtomicBool::new(false)),
@@ -3153,7 +3346,8 @@ pub fn run() {
             set_note_path,
             open_note_file,
             set_selection_hotkey,
-            set_skip_worktrees
+            set_skip_worktrees,
+            set_index_threads
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

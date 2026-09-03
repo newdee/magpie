@@ -1,3 +1,77 @@
+# 验收记录 2026-09-03（索引线程数上限，未出包）
+
+用户提问："索引的时候是不是可以控制一下 cpu 的使用率或者线程数，有时候可能
+不需要满负荷跑"。
+
+## 现状（数据）
+
+- 文本嵌入走 fastembed，`intra_threads` 缺省 = `available_parallelism`（本机
+  32）；SigLIP 与 OCR 直接建 ort `Session`，缺省同样吃满物理核；只有 ffmpeg
+  解码早有 2 线程上限。真机全核嵌入实测 21.8 核。
+- 各 pass 各自持有一份 ort 线程池，本地索引、OCR、视频、模型 catch-up 可并发，
+  上限按"每个模型"生效，未做全局信号量（记入取舍）。
+
+## 实现
+
+- `core/threads.rs`：meta `index_threads`（缺省 4，`0` = 全部核心，`N` = N，
+  一律夹到 `1..=cores`）；`displayed` 给设置页（夹到本机、保留 0）；文本 /
+  图片 / OCR 三处构造函数接 `threads`（fastembed `with_intra_threads`，ort
+  `SessionBuilder::with_intra_threads`）；日志 `semantic model ready (N threads)`。
+- 改完即生效：`set_index_threads` 持久化后 `reload_loaded` 重载已加载模型
+  （加载中 → 通过 reinit 排队一次；关闭/失败 → 不动，下次加载自然带上）。
+  文本与图片 pass 整段持锁，重载会等整段跑完——恰是用户想调低的时刻。加按
+  模型的 stop 标志（`threads::stop/resume/stopping`），6 个循环逐项（大文件
+  逐批）检查退出，新会话数秒内换入，重载后的 catch-up 从断点续跑；OCR 逐项
+  加锁，换引擎无需标志。
+- 导入设置含该键同样重载；`skip_worktrees`、`index_threads` 补进导出键。
+- UI：设置行 1 / 2 / 4 / 8 / 全部核心(N)，按 `cpu_cores` 过滤；i18n；demo
+  mock；README 双语。
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 逻辑/活性 | stop 在 spawn 之后置位；理论上初始化可在两者之间完成并 resume，标志永远悬着，之后再也不嵌入 | `reload_loaded` 两条路径都先 stop 再 spawn/排队，保证"停了就一定有一次加载在飞"；加不变量用例 |
+| 2 | clippy | 测试模块未用导入 `AtomicUsize` | 删 |
+| 3 | 边界 | 大小上限可到无上限，单文件可达数千块，按文件检查退出会拖很久 | 逐批检查；中途停则不写库、该文件保持待嵌 |
+| 4 | 一致性 | 导入设置写了 `index_threads` 却不重载；`skip_worktrees` 一直没在导出键里 | 导入后 `apply_index_threads` / 重扫；补导出键 |
+
+## 连续四轮干净（第 4 项之后重新计数）
+
+- A 静态一致：a1 10/10、a3-ipc（invoke 参数 ↔ 命令签名、Status 字段 ↔
+  get_status、i18n 死键）3/3、docs-parity 20/20、round1 24/24
+- B 代码正确：clippy 全 target 0；137 测试（新增 11：threads 7、reload 4）
+- C 机制通路：无头 T1 11/11（行渲染、按核数过滤、默认 4 高亮、点 1/全部/4
+  经 mock 往返）；真机 T2（生产 exe，300 文件语料）9/9：
+
+  | 档位 | 日志线程数 | 平均核数 | 块/秒 |
+  |------|-----------|---------|-------|
+  | 1 | 1 | 0.99 | 4.5 |
+  | 默认（无设置） | 4 | 3.84 | 14.7 |
+  | 全部 | 32 | 21.84 | 26 |
+
+  清理后残留 files/folders/meta/孤儿块 = 0 0 0 0
+- E 可复现：套件 ×3 均 137 通过 0 失败
+
+## 仪器坑（记账）
+
+- T2 结尾把 `target/release` 的 exe 拉起来还给用户，随后两次构建都死在
+  "拒绝访问 (os error 5)"——链接器覆盖不了运行中的 exe。构建前先 stop。
+- 首版 T2 采样上限 60 s，1 线程档没跑完整个语料被记成 FAIL；改为记吞吐
+  （块/秒），不要求跑完。
+- 无头脚本按英文标签找按钮，demo 跟随浏览器语言渲染成中文；改为语言无关
+  正则。dev server 的 favicon 404 不是应用错误，过滤。
+
+## 未验证项
+
+- 真机没有验证"运行中的 pass 被 stop 打断、重载后 catch-up 续跑"：需要经
+  UI/IPC 触发 `set_index_threads`，桌面接管此前被用户叫停。由 reload_tests
+  4 个用例 + 通读 diff 覆盖逻辑；停止/恢复配对由"停了必有加载在飞"的不变量
+  保证。
+- 视频 pass 逐视频 `try_lock`，未接 stop 标志：换入等待上限为一个视频。
+- macOS / Linux 未跑真机。
+
+---
 # 验收记录 2026-09-02（全量 review + 自测，五轮零发现，待出包 v0.1.34）
 
 用户要求：review 和自测直到连续五轮零发现。这次不复用旧脚本凑数，每轮加了

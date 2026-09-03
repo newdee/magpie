@@ -553,9 +553,22 @@ pub fn embed_pending_files(
     let mut done = 0usize;
     progress(0, total);
     for (id, hash, docs) in &pending {
+        // a reload wants the model: end here, its catch-up pass resumes at
+        // this file. Checked per batch, not per file, because one file can
+        // be thousands of chunks (the size cap goes up to unlimited).
+        let stop = || crate::threads::stopping(crate::threads::Model::Text);
+        if stop() {
+            break;
+        }
         let mut vecs = Vec::with_capacity(docs.len());
         for batch in docs.chunks(EMBED_BATCH) {
+            if stop() {
+                break;
+            }
             vecs.extend(embedder.embed_passages(batch)?);
+        }
+        if vecs.len() < docs.len() {
+            break; // stopped mid-file: nothing written, the file stays pending
         }
         // one transaction per file: a crash mid-write must never leave a file
         // with the new hash but only some of its chunks (it would never heal)
@@ -580,7 +593,7 @@ pub fn embed_pending_files(
         "DELETE FROM file_chunks WHERE file_id NOT IN (SELECT id FROM files)",
         [],
     )?;
-    Ok(total)
+    Ok(done)
 }
 
 /// All chunk vectors as (file_id, vec); file_id repeats across its chunks.
@@ -732,6 +745,9 @@ pub fn embed_pending_images(
     let mut done = 0usize;
     progress(0, total);
     for (id, path, hash) in &pending {
+        if crate::threads::stopping(crate::threads::Model::Image) {
+            break; // a reload wants the model; its catch-up pass resumes here
+        }
         // decode once; the same decode feeds both the thumbnail and the model
         match image::open(Path::new(path)) {
             Ok(img) => {
@@ -757,7 +773,7 @@ pub fn embed_pending_images(
         "DELETE FROM image_embeddings WHERE file_id NOT IN (SELECT id FROM files)",
         [],
     )?;
-    Ok(total)
+    Ok(done)
 }
 
 // ---------- retrieval ----------

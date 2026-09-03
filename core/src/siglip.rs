@@ -45,17 +45,20 @@ struct ModelPaths {
 }
 
 impl Siglip {
-    /// Downloads (or reuses) the model files, then loads both sessions.
-    /// Blocking; call off the UI thread.
+    /// Downloads (or reuses) the model files, then loads both sessions on
+    /// every core. Tooling entry point; the app passes its thread cap through
+    /// [`Self::new_with_progress`]. Blocking; call off the UI thread.
     pub fn new(cache_dir: &Path) -> Result<Self> {
-        Self::new_with_progress(cache_dir, &mut |_| {})
+        Self::new_with_progress(cache_dir, crate::threads::cores(), &mut |_| {})
     }
 
     /// hf-hub first (reuses existing caches); on failure the files are pulled
     /// as plain static downloads, which survive mirrors and middleboxes that
-    /// strip the ETag headers hf-hub's protocol requires.
+    /// strip the ETag headers hf-hub's protocol requires. `threads` caps both
+    /// ONNX sessions (see [`crate::threads`]).
     pub fn new_with_progress(
         cache_dir: &Path,
+        threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
         let paths = match Self::hf_hub_paths(cache_dir) {
@@ -64,14 +67,18 @@ impl Siglip {
                 .with_context(|| format!("direct download (hf-hub failed first: {primary})"))?,
         };
         progress("loading".to_string());
-        Self::from_paths(paths)
+        Self::from_paths(paths, threads)
     }
 
     /// The fallback path on its own: plain static downloads, no hf-hub.
-    pub fn new_direct(cache_dir: &Path, progress: &mut dyn FnMut(String)) -> Result<Self> {
+    pub fn new_direct(
+        cache_dir: &Path,
+        threads: usize,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<Self> {
         let paths = Self::direct_paths(cache_dir, progress)?;
         progress("loading".to_string());
-        Self::from_paths(paths)
+        Self::from_paths(paths, threads)
     }
 
     fn hf_hub_paths(cache_dir: &Path) -> Result<ModelPaths> {
@@ -129,7 +136,7 @@ impl Siglip {
         })
     }
 
-    fn from_paths(paths: ModelPaths) -> Result<Self> {
+    fn from_paths(paths: ModelPaths, threads: usize) -> Result<Self> {
         let tokenizer = Tokenizer::from_file(&paths.tokenizer)
             .map_err(|e| anyhow!("load tokenizer: {e}"))?;
         let pad_token = paths
@@ -158,8 +165,14 @@ impl Siglip {
             _ => FilterType::CatmullRom, // bicubic
         };
 
-        let text = Session::builder()?.commit_from_file(&paths.text)?;
-        let vision = Session::builder()?.commit_from_file(&paths.vision)?;
+        let session = |file: &Path| -> Result<Session> {
+            Ok(Session::builder()?
+                .with_intra_threads(threads)
+                .map_err(|e| anyhow!("intra threads: {e}"))?
+                .commit_from_file(file)?)
+        };
+        let text = session(&paths.text)?;
+        let vision = session(&paths.vision)?;
         Ok(Self {
             text,
             vision,

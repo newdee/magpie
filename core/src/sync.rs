@@ -186,6 +186,9 @@ pub fn embed_pending(
     progress(Progress::Embedding { done: 0, total });
     let mut done = 0usize;
     for (id, hash, docs) in &pending {
+        if crate::threads::stopping(crate::threads::Model::Text) {
+            break; // a reload wants the model; its catch-up pass resumes here
+        }
         let mut vecs = Vec::with_capacity(docs.len());
         for batch in docs.chunks(EMBED_BATCH) {
             vecs.extend(embedder.embed_passages(batch)?);
@@ -201,7 +204,7 @@ pub fn embed_pending(
         "DELETE FROM repo_chunks WHERE repo_id NOT IN (SELECT id FROM repos)",
         [],
     )?;
-    Ok(total)
+    Ok(done)
 }
 
 fn now_unix() -> String {

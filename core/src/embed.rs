@@ -28,34 +28,47 @@ pub struct Embedder {
 }
 
 impl Embedder {
-    /// Loads (and on first run downloads) the model. Blocking; call off the UI thread.
+    /// Loads (and on first run downloads) the model via hf-hub, using every
+    /// core. Tooling entry point; the app passes its thread cap through
+    /// [`Self::new_with_fallback`]. Blocking; call off the UI thread.
     pub fn new(cache_dir: &Path) -> Result<Self> {
+        Self::new_hub(cache_dir, crate::threads::cores())
+    }
+
+    fn new_hub(cache_dir: &Path, threads: usize) -> Result<Self> {
         let model = TextEmbedding::try_new(
             TextInitOptions::new(EmbeddingModel::MultilingualE5Small)
                 .with_cache_dir(cache_dir.to_path_buf())
-                .with_show_download_progress(false),
+                .with_show_download_progress(false)
+                .with_intra_threads(threads),
         )?;
         Ok(Self { model })
     }
 
-    /// Like [`Self::new`], but when the hf-hub download protocol fails (its
-    /// ETag/metadata round-trips break behind mirrors and interfering
-    /// middleboxes) the model files are fetched as plain static downloads and
-    /// fed to fastembed from bytes. `progress` receives display strings.
+    /// hf-hub first; when its download protocol fails (the ETag/metadata
+    /// round-trips break behind mirrors and interfering middleboxes) the
+    /// model files are fetched as plain static downloads and fed to
+    /// fastembed from bytes. `threads` caps the ONNX session (see
+    /// [`crate::threads`]); `progress` receives display strings.
     pub fn new_with_fallback(
         cache_dir: &Path,
+        threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
-        let primary = match Self::new(cache_dir) {
+        let primary = match Self::new_hub(cache_dir, threads) {
             Ok(s) => return Ok(s),
             Err(e) => e,
         };
-        Self::new_direct(cache_dir, progress)
+        Self::new_direct(cache_dir, threads, progress)
             .with_context(|| format!("direct download (hf-hub failed first: {primary})"))
     }
 
     /// The fallback path on its own: plain static downloads, no hf-hub.
-    pub fn new_direct(cache_dir: &Path, progress: &mut dyn FnMut(String)) -> Result<Self> {
+    pub fn new_direct(
+        cache_dir: &Path,
+        threads: usize,
+        progress: &mut dyn FnMut(String),
+    ) -> Result<Self> {
         let manual = cache_dir.join("manual-e5");
         let endpoint = download::hf_endpoint();
         for (remote, local) in E5_FILES {
@@ -91,7 +104,9 @@ impl Embedder {
         .with_pooling(Pooling::Mean);
         let model = TextEmbedding::try_new_from_user_defined(
             user_model,
-            InitOptionsUserDefined::new().with_max_length(512),
+            InitOptionsUserDefined::new()
+                .with_max_length(512)
+                .with_intra_threads(threads),
         )?;
         Ok(Self { model })
     }

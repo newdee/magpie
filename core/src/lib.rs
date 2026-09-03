@@ -19,5 +19,6 @@ pub mod notes;
 pub mod siglip;
 pub mod videos;
 pub mod sync;
+pub mod threads;
 pub mod transform;
 pub mod worktree;

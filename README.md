@@ -170,6 +170,9 @@ name, and understood formats are searched in full text:
   already indexed, so a project with six worktrees is not indexed six times.
   A worktree that is the only copy is indexed as usual; there is an
   off-switch in settings.
+- Indexing is capped at 4 CPU threads per model (text, image and OCR
+  alike), so an embed pass never owns the machine. Settings offer 1, 2, 4,
+  8 or every core; a change applies right away.
 
 Images are embedded with **SigLIP 2** and searchable by content:
 
@@ -283,7 +286,8 @@ rebuild) · appearance (auto / light / dark) · UI language (auto / English /
 search-selection shortcut · notes file · recent opens on the empty box ·
 model download source (huggingface.co or hf-mirror.com for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
-search toggle · decode limits (threads / hardware decode) · tab order and
+search toggle · decode limits (threads / hardware decode) · indexing
+threads (1 to every core) · tab order and
 default tab · clipboard history controls · model download status · one-click
 in-place updates (signed, verified) · settings export/import ·
 open-log-folder (local activity log for bug reports; queries never logged) ·

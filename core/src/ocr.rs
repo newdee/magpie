@@ -108,18 +108,21 @@ pub struct Ocr {
 }
 
 impl Ocr {
-    /// [`Self::new_with_model`] with the default model.
+    /// [`Self::new_with_model`] with the default model, on every core.
+    /// Tooling entry point; the app passes its thread cap.
     pub fn new(cache_dir: &Path, progress: &mut dyn FnMut(String)) -> Result<Self> {
-        Self::new_with_model(cache_dir, OCR_MODEL_ID, progress)
+        Self::new_with_model(cache_dir, OCR_MODEL_ID, crate::threads::cores(), progress)
     }
 
     /// Download (or reuse) the selected model's files and load both
-    /// sessions. Blocking; call off the UI thread. Sources per file: the
-    /// primary location (user-selected HF endpoint for v4, the oar-ocr
-    /// release for v6), then magpie's own `models-1` release assets.
+    /// sessions, each capped at `threads` (see [`crate::threads`]).
+    /// Blocking; call off the UI thread. Sources per file: the primary
+    /// location (user-selected HF endpoint for v4, the oar-ocr release for
+    /// v6), then magpie's own `models-1` release assets.
     pub fn new_with_model(
         cache_dir: &Path,
         model_id: &str,
+        threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
         let spec = model_spec(model_id)?;
@@ -145,8 +148,14 @@ impl Ocr {
             fetch(dict, progress)?;
         }
         progress("loading".into());
-        let det = Session::builder()?.commit_from_file(manual.join(spec.det.local))?;
-        let rec = Session::builder()?.commit_from_file(manual.join(spec.rec.local))?;
+        let session = |local: &str| -> Result<Session> {
+            Ok(Session::builder()?
+                .with_intra_threads(threads)
+                .map_err(|e| anyhow::anyhow!("intra threads: {e}"))?
+                .commit_from_file(manual.join(local))?)
+        };
+        let det = session(spec.det.local)?;
+        let rec = session(spec.rec.local)?;
         let charset = match &spec.dict {
             Some(dict) => file_charset(&manual.join(dict.local))?,
             None => rec_charset(&rec)?,

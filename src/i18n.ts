@@ -147,6 +147,10 @@ const ZH: Record<string, string> = {
   "Scanned PDFs": "扫描版 PDF",
   "Also read pages of PDFs that have no text layer. Large scans take a while, so this is your call.":
     "同时识别没有文字层的 PDF 页面。大部头扫描件较耗时，开不开由你。",
+  "Indexing threads": "索引线程数",
+  "CPU threads each model (text, image, OCR) may use while indexing. Fewer keeps the machine responsive; all cores finishes a first index sooner. Applies right away.":
+    "索引时每个模型（文本、图片、OCR）最多占用的 CPU 线程数。少一点前台更流畅，全部核心则首次索引更快。改完立即生效。",
+  "all cores": "全部核心",
   "Decode limits": "解码限制",
   "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.":
     "限制视频索引时 ffmpeg 的占用，后台跑不打扰前台。硬件解码失败自动回退软解。",

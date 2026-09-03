@@ -55,6 +55,8 @@ const status = {
   ffmpeg_status: "system",
   video_decode_threads: 2,
   video_hwaccel: false,
+  index_threads: 4,
+  cpu_cores: 8,
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",
@@ -390,6 +392,10 @@ mockIPC((cmd, args) => {
       } catch {
         return null;
       }
+    }
+    case "set_index_threads": {
+      status.index_threads = (args as { threads: number }).threads;
+      return null;
     }
     case "set_ocr_pdf": {
       status.ocr_pdf = (args as { enabled: boolean }).enabled;
