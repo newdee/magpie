@@ -1,3 +1,28 @@
+# 验收记录 2026-09-04（README 其他客户端 + 网站 MCP 章节，文档/站点，无需出包）
+
+用户问 README 与网站是否加了新特性：都加了，但 MCP 在网站只占次级列表一行，
+README 只给了 Claude Code 的写法。补两处。
+
+## 改动
+
+- README 中英：MCP 一节加"其他客户端"5 条（Cursor / VS Code / Codex CLI /
+  Gemini CLI / 仅 stdio 的走 mcp-remote），并注明只有 Claude Code 端到端实测。
+- 网站：新增第 05 章"Your AI assistant, same index / 你的 AI 助手，同一份索引"，
+  一张卡；视觉不是截图而是终端记录（`claude mcp add` + `claude mcp list` 的真实
+  输出），`site.js` 的渲染器加 `code` 分支（`visualOf`），锚点改为 `id ?? img`，
+  CSS 加 `.shot .term`。原"还有这些"里的 MCP 条目删除以免重复，线程数条目保留。
+  后两章顺延为 06/07。
+
+## 验证
+
+- docs-parity 24/24（必检项新增 MCP、线程数两条，中英 README 项目符号数仍相
+  等）、round1 24/24、a1 10/10。
+- 站点无头 t5 12/12：章节 01..07 顺序、第 05 章标题、`#f-mcp` 行有 MCP 标签与
+  终端块（2 个提示符 + Connected 结果行、无 img）、导轨含新章节与其行、rest
+  列表去重、中英切换文案互换而命令不翻译、终端块 600×145。
+- 截图目检一次：卡片成立；文案由 6 行精简到 4 行。
+
+---
 # 验收记录 2026-09-03（MCP 服务给 AI 助手用，未出包）
 
 用户拍板"做"：把索引通过 MCP 开给 Claude Code / Cursor 等客户端。设计见上一

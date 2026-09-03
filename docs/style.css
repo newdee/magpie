@@ -568,6 +568,24 @@ main {
   width: 100%;
   height: auto;
 }
+/* a terminal transcript in the screenshot's slot (site.js visualOf) */
+.shot .term {
+  margin: 0;
+  padding: 26px 28px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.shot .term .p {
+  color: var(--accent);
+  font-weight: 600;
+}
+.shot .term .ok {
+  color: #7fd9a3;
+}
 
 /* scroll-in */
 .reveal {

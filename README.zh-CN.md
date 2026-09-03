@@ -244,7 +244,16 @@ Code 命令"，粘贴到终端：
 claude mcp add --transport http magpie http://127.0.0.1:端口/mcp --header "Authorization: Bearer 令牌"
 ```
 
-其他客户端用同一 URL 和同一个 `Authorization` 请求头。
+其他客户端用同一 URL 和同一个 `Authorization` 请求头，只是填的位置不同：
+
+- Cursor（`.cursor/mcp.json`）：`{ "mcpServers": { "magpie": { "url": "http://127.0.0.1:端口/mcp", "headers": { "Authorization": "Bearer 令牌" } } } }`
+- VS Code（`.vscode/mcp.json`）：`{ "servers": { "magpie": { "type": "http", "url": "http://127.0.0.1:端口/mcp", "headers": { "Authorization": "Bearer 令牌" } } } }`
+- Codex CLI（`~/.codex/config.toml`）：`[mcp_servers.magpie]` 下写 `url = "http://127.0.0.1:端口/mcp"` 与 `http_headers = { Authorization = "Bearer 令牌" }`
+- Gemini CLI（`~/.gemini/settings.json`）：`mcpServers.magpie` 用 `httpUrl` 加 `headers`
+- 只会 stdio 的客户端（Claude Desktop 的本地配置属于这类）：用 `npx mcp-remote http://127.0.0.1:端口/mcp --header "Authorization: Bearer 令牌"` 桥接
+
+只有 Claude Code 是端到端实测过的；其他客户端以上只标出 URL 和请求头放哪，
+细节看各自文档。
 
 三个只读工具：
 

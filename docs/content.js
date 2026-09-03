@@ -24,6 +24,8 @@ window.CONTENT = {
     "g3.sub": "Some answers don't need search results. <kbd>Enter</kbd> copies whatever comes up.",
     "g4.title": "Everyday feel",
     "g4.sub": "The small stuff that decides whether a launcher survives its first week.",
+    "g6.title": "Your AI assistant, same index",
+    "g6.sub": "Everything above, offered to Claude Code, Cursor and any other MCP client. Off until you switch it on.",
     "rest.title": "More it can do",
     "rest.sub": "Smaller pieces you'll run into once magpie is part of your day.",
     "g5.title": "Privacy you can verify yourself",
@@ -55,6 +57,8 @@ window.CONTENT = {
     "g3.sub": "有些答案根本不用搜。<kbd>Enter</kbd> 直接复制。",
     "g4.title": "日常手感",
     "g4.sub": "决定一个启动器能不能活过第一周的那些小事。",
+    "g6.title": "你的 AI 助手，同一份索引",
+    "g6.sub": "上面这一切，通过 MCP 交给 Claude Code、Cursor 或任何 MCP 客户端。你不打开，它就不会开。",
     "rest.title": "还有这些",
     "rest.sub": "用顺手之后会碰到的那些小功能。",
     "g5.title": "隐私这件事，你可以自己查",
@@ -280,7 +284,30 @@ window.FEATURES = {
       },
     },
   ],
-  // Chapter 05: everything that doesn't need a screenshot to explain.
+  // Chapter 05: the index, handed to AI assistants. The visual is a terminal
+  // transcript (`code`, see site.js visualOf) rather than a screenshot: the
+  // feature is a command, and the real output of it.
+  g6: [
+    {
+      id: "mcp",
+      tag: "MCP",
+      code: [
+        "$ claude mcp add --transport http magpie http://127.0.0.1:53928/mcp \\",
+        "    --header \"Authorization: Bearer ••••••••••••••••\"",
+        "$ claude mcp list",
+        "magpie: http://127.0.0.1:53928/mcp (HTTP) - ✔ Connected",
+      ],
+      en: {
+        t: "Your AI can search it too",
+        d: "Switch the MCP server on in settings and paste one command. Claude Code, Cursor and any other MCP client get three read-only tools: search across every source with the palette's own ranking, the indexed text of a file, and what you opened lately. Loopback only, behind a token, off by default.",
+      },
+      zh: {
+        t: "你的 AI 也能搜",
+        d: "设置里打开 MCP 服务，粘贴一条命令。Claude Code、Cursor 或任何 MCP 客户端就有了三个只读工具：按面板同款排序搜全部数据源、读某个文件的已索引文本、看你最近打开过什么。只监听本机、需令牌、默认关闭。",
+      },
+    },
+  ],
+  // Chapter 06: everything that doesn't need a screenshot to explain.
   rest: {
     en: [
       ["Hybrid retrieval", "SQLite FTS5 keyword search and local embeddings, merged with reciprocal rank fusion. Long files are chunked, so a sentence on page 100 still surfaces."],
@@ -292,7 +319,6 @@ window.FEATURES = {
       ["Look up what you selected", "<kbd>Ctrl+Alt+Space</kbd> (<kbd>Option+Shift+Space</kbd> on a Mac) copies the selection in whatever app you are in and summons magpie with it as the query."],
       ["Recent opens on the empty box", "Switch it on and each tab lists what you last opened from it. Back to a file from a minute ago in two keystrokes."],
       ["Git worktrees, once", "A linked worktree is skipped when the checkout it belongs to is already indexed, so six worktrees do not mean six copies of every file and every embedding."],
-      ["Your AI can search it too", "An MCP server, off by default, hands the same index to Claude Code, Cursor and friends: search, read a file's indexed text, list recent opens. Loopback only, behind a token, read-only."],
       ["Indexing on a leash", "Embedding is capped at four CPU threads per model; pick 1, 2, 8 or every core. A change applies to the pass that is running, not to the next launch."],
       ["Updates that find you", "magpie checks at launch and once a day. A pending release shows a red dot on the tray icon; installing is still your call."],
       ["English and 简体中文", "The whole interface, tray menu included. Follows your OS by default, switchable in settings."],
@@ -312,7 +338,6 @@ window.FEATURES = {
       ["划词搜索", "在任何应用里选中文字，按 <kbd>Ctrl+Alt+Space</kbd>（Mac 上是 <kbd>Option+Shift+Space</kbd>），magpie 复制选区并带着它弹出来。"],
       ["空搜索框显示最近打开", "开启后每个 tab 列出你最近从它打开过的条目。回到一分钟前那个文件只要两下按键。"],
       ["git worktree 只索引一次", "linked worktree 在其所属 checkout 已被索引时跳过，开六个 worktree 不会变成六份文件、六份向量。"],
-      ["你的 AI 也能搜", "一个默认关闭的 MCP 服务，把同一份索引交给 Claude Code、Cursor 等客户端：搜索、读某个文件的已索引文本、列最近打开。只监听本机、需令牌、只读。"],
       ["索引不占满机器", "嵌入每个模型最多 4 个 CPU 线程，可选 1、2、8 或全部核心。改完对正在跑的那一轮就生效，不用等下次启动。"],
       ["更新会自己找上门", "启动时查一次，之后每天查一次。有新版托盘图标亮红点，装不装还是你说了算。"],
       ["English 和简体中文", "整个界面连托盘菜单都有。默认跟随系统，设置里能切。"],

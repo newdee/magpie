@@ -304,7 +304,17 @@ into a terminal:
 claude mcp add --transport http magpie http://127.0.0.1:PORT/mcp --header "Authorization: Bearer TOKEN"
 ```
 
-Other clients take the same URL with the same `Authorization` header.
+Other clients take the same URL with the same `Authorization` header; only
+where the two go differs:
+
+- Cursor (`.cursor/mcp.json`): `{ "mcpServers": { "magpie": { "url": "http://127.0.0.1:PORT/mcp", "headers": { "Authorization": "Bearer TOKEN" } } } }`
+- VS Code (`.vscode/mcp.json`): `{ "servers": { "magpie": { "type": "http", "url": "http://127.0.0.1:PORT/mcp", "headers": { "Authorization": "Bearer TOKEN" } } } }`
+- Codex CLI (`~/.codex/config.toml`): `[mcp_servers.magpie]` with `url = "http://127.0.0.1:PORT/mcp"` and `http_headers = { Authorization = "Bearer TOKEN" }`
+- Gemini CLI (`~/.gemini/settings.json`): `mcpServers.magpie` with `httpUrl` and `headers`
+- Clients that only speak stdio (Claude Desktop's local config is one): bridge with `npx mcp-remote http://127.0.0.1:PORT/mcp --header "Authorization: Bearer TOKEN"`
+
+Claude Code is the one client tried end to end; for the others, the shapes
+above show where the URL and header go, and their own docs have the rest.
 
 Three read-only tools:
 

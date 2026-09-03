@@ -20,8 +20,23 @@ function initialLang() {
   return (navigator.language || "en").toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
-/** Stable anchor for a feature row, derived from its screenshot name. */
-const anchorOf = (f) => "f-" + f.img.replace(/\.png$/, "");
+/** Stable anchor for a feature row: its screenshot name, or an explicit id
+ *  for a row whose visual is a terminal transcript instead of a screenshot. */
+const anchorOf = (f) => "f-" + (f.id ?? f.img.replace(/\.png$/, ""));
+
+/** A row's visual: the screenshot, or a terminal transcript for a feature
+ *  that is a command rather than a screen. Lines starting with "$ " are
+ *  prompts; a line carrying a check mark is a result. */
+function visualOf(f, title) {
+  if (!f.code) return `<img src="shots/${f.img}" alt="${title}" loading="lazy" />`;
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const lines = f.code.map((l) => {
+    if (l.startsWith("$ ")) return `<span class="p">$</span> ${esc(l.slice(2))}`;
+    if (l.includes("✔")) return `<span class="ok">${esc(l)}</span>`;
+    return esc(l);
+  });
+  return `<pre class="term" aria-label="${title}">${lines.join("\n")}</pre>`;
+}
 
 function renderRows(lang) {
   for (const [section, items] of Object.entries(window.FEATURES)) {
@@ -37,7 +52,7 @@ function renderRows(lang) {
             <p>${f[lang].d}</p>
           </div>
           <div class="shot">
-            <img src="shots/${f.img}" alt="${f[lang].t}" loading="lazy" />
+            ${visualOf(f, f[lang].t)}
           </div>
         </article>`,
       )
@@ -65,6 +80,7 @@ const CHAPTERS = [
   { id: "c2", key: "g2.title", features: "g2" },
   { id: "c3", key: "g3.title", features: "g3" },
   { id: "c4", key: "g4.title", features: "g4" },
+  { id: "c7", key: "g6.title", features: "g6" },
   { id: "c5", key: "rest.title", features: null },
   { id: "c6", key: "g5.title", features: null },
 ];
