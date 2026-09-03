@@ -23,6 +23,16 @@ const ZH: Record<string, string> = {
     "在任何应用里选中文字后按它：magpie 复制选区，并带着这段文字弹出来。",
   Remove: "移除",
   "Notes file": "笔记文件",
+  "MCP server for AI assistants": "MCP 服务（给 AI 助手用）",
+  "Lets Claude Code, Cursor and other MCP clients search this index and read indexed text. Loopback only, behind a token, read-only, off by default.":
+    "让 Claude Code、Cursor 等 MCP 客户端搜索这份索引、读取已索引的文本。只监听本机回环地址，需令牌，只读，默认关闭。",
+  "Copy Claude Code command": "复制 Claude Code 命令",
+  "New token": "换新令牌",
+  "Listening at": "监听于",
+  "starting": "启动中",
+  "copied": "已复制",
+  "new token issued; add the server again in your clients": "已换新令牌；请在各客户端重新添加该服务",
+  "Other clients take the same URL with the header from this command:": "其他客户端用同一 URL 加上这条命令里的请求头：",
   "note buy milk appends one timestamped line to this file.":
     "输入 note 买牛奶，会把一行带时间戳的记录追加到这个文件。",
   "full path, or empty for the default": "完整路径，留空用默认",

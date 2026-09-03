@@ -1,5 +1,10 @@
 //! Thin Tauri shell over magpie-core: window/tray/shortcut plumbing + commands.
 
+// get_status builds one json! literal with every setting and counter the
+// settings page shows; past ~40 keys the macro's token muncher needs more
+// room than the default 128 levels
+#![recursion_limit = "256"]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -21,6 +26,8 @@ use magpie_core::history;
 use magpie_core::search::{self, SearchResult, VectorStore};
 use magpie_core::siglip::Siglip;
 use magpie_core::sync;
+
+pub mod mcp;
 
 struct AppState {
     db_path: PathBuf,
@@ -72,6 +79,10 @@ struct AppState {
     clip_watch: Arc<AtomicBool>,
     /// Liveness guard so toggling can't stack watcher threads.
     clip_thread_alive: Arc<AtomicBool>,
+    /// The MCP server for AI assistants while it runs (see `mcp`).
+    mcp: Arc<StdMutex<Option<mcp::Server>>>,
+    /// "" (off) / "starting" / "listening" / "failed: <why>".
+    mcp_status: Arc<StdMutex<String>>,
 }
 
 /// Reload the resident vector store from the database.
@@ -152,11 +163,23 @@ async fn search_stars(
         return Ok(Vec::new()); // superseded; the frontend drops stale answers
     };
     let store = state.store.lock().unwrap();
-    let mut hits =
-        search::search(&conn, &store, &query, qvec.as_deref(), sort, limit).map_err(err_str)?;
-    // frecency: repos the user actually opens edge ahead at similar relevance
+    rank_stars(&conn, &store, &query, qvec.as_deref(), sort, limit).map_err(err_str)
+}
+
+/// Repo hits as the palette ranks them: hybrid search, then a frecency edge
+/// for repos the user actually opens (relevance sort only). Shared with the
+/// MCP server so an assistant sees the same order the user does.
+fn rank_stars(
+    conn: &magpie_core::rusqlite::Connection,
+    store: &VectorStore,
+    query: &str,
+    qvec: Option<&[f32]>,
+    sort: search::RepoSort,
+    limit: usize,
+) -> Result<Vec<SearchResult>> {
+    let mut hits = search::search(conn, store, query, qvec, sort, limit)?;
     if matches!(sort, search::RepoSort::Relevance) {
-        let f = magpie_core::frecency::factors(&conn, "repo", unix_now()).map_err(err_str)?;
+        let f = magpie_core::frecency::factors(conn, "repo", unix_now())?;
         magpie_core::frecency::boost(
             &mut hits,
             &f,
@@ -297,6 +320,19 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
     let hf_endpoint = db::meta_get(&conn, "hf_endpoint")
         .map_err(err_str)?
         .unwrap_or_else(|| "https://huggingface.co".to_string());
+    // MCP server: the switch, the live state, and the command to paste
+    let mcp_enabled = db::meta_get(&conn, "mcp_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let mcp_status = state.mcp_status.lock().unwrap().clone();
+    let mcp_port = state.mcp.lock().unwrap().as_ref().map(|s| s.port);
+    let mcp_url = mcp_port.map(mcp::url).unwrap_or_default();
+    let mcp_command = match (mcp_port, db::meta_get(&conn, "mcp_token").ok().flatten()) {
+        (Some(p), Some(t)) => mcp::client_command(p, &t),
+        _ => String::new(),
+    };
     Ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "repo_count": count,
@@ -333,6 +369,10 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "skip_worktrees": db::meta_get(&conn, "skip_worktrees").ok().flatten().map(|v| v != "0").unwrap_or(true),
         "index_threads": magpie_core::threads::displayed(magpie_core::threads::setting(&conn), magpie_core::threads::cores()),
         "cpu_cores": magpie_core::threads::cores(),
+        "mcp_enabled": mcp_enabled,
+        "mcp_status": mcp_status,
+        "mcp_url": mcp_url,
+        "mcp_command": mcp_command,
         "note_path": note_path_from(&conn, &state.db_path).to_string_lossy().into_owned(),
         "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
@@ -435,24 +475,29 @@ async fn search_local(
         return Ok(Vec::new()); // superseded; the frontend drops stale answers
     };
     let store = state.store.lock().unwrap();
-    // the videos scope is its own pipeline: filename + semantic shots, fused
+    rank_local(&conn, &store, &query, qvec.as_deref(), image_qvec.as_deref(), scope, limit)
+        .map_err(err_str)
+}
+
+/// Local hits as the palette ranks them. The videos scope is its own
+/// pipeline (filename + semantic shots, fused); files get a frecency edge on
+/// real queries. Shared with the MCP server.
+fn rank_local(
+    conn: &magpie_core::rusqlite::Connection,
+    store: &VectorStore,
+    query: &str,
+    qvec: Option<&[f32]>,
+    image_qvec: Option<&[f32]>,
+    scope: search::LocalScope,
+    limit: usize,
+) -> Result<Vec<serde_json::Value>> {
     if matches!(scope, search::LocalScope::Videos) {
-        let vids = search::search_videos_scope(&conn, &store, &query, image_qvec.as_deref(), limit)
-            .map_err(err_str)?;
+        let vids = search::search_videos_scope(conn, store, query, image_qvec, limit)?;
         return Ok(tag_hits(Vec::new(), vids, false));
     }
-    let mut files = search::search_files(
-        &conn,
-        &store,
-        &query,
-        qvec.as_deref(),
-        image_qvec.as_deref(),
-        scope,
-        limit,
-    )
-    .map_err(err_str)?;
+    let mut files = search::search_files(conn, store, query, qvec, image_qvec, scope, limit)?;
     if !query.trim().is_empty() {
-        let f = magpie_core::frecency::factors(&conn, "file", unix_now()).map_err(err_str)?;
+        let f = magpie_core::frecency::factors(conn, "file", unix_now())?;
         magpie_core::frecency::boost(
             &mut files,
             &f,
@@ -934,7 +979,19 @@ async fn recent_hits(
     let Some(conn) = take_state_search_conn(&state).await else {
         return Ok(Vec::new());
     };
-    let keys = magpie_core::frecency::recent(&conn, kinds, limit * 2).map_err(err_str)?;
+    let apps = state.apps.lock().unwrap();
+    recent_rows(&conn, &apps, kinds, limit).map_err(err_str)
+}
+
+/// The rows behind the most recently opened hits of the given kinds, newest
+/// first, tagged for the mixed result list. Shared with the MCP server.
+fn recent_rows(
+    conn: &magpie_core::rusqlite::Connection,
+    apps: &[magpie_core::apps::AppEntry],
+    kinds: &[&str],
+    limit: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let keys = magpie_core::frecency::recent(conn, kinds, limit * 2)?;
     let tag = |mut v: serde_json::Value, kind: &str| {
         v["kind"] = serde_json::Value::from(kind);
         if v.get("score").is_none() {
@@ -947,14 +1004,10 @@ async fn recent_hits(
         let row = match kind.as_str() {
             // a video opened from a shot comes back as its file row: the shot
             // itself is not a stable identity, the path is
-            "file" | "video" => files::file_by_path(&conn, &key)
-                .map_err(err_str)?
+            "file" | "video" => files::file_by_path(conn, &key)?
                 .and_then(|f| serde_json::to_value(&f).ok())
                 .map(|v| tag(v, "file")),
-            "app" => state
-                .apps
-                .lock()
-                .unwrap()
+            "app" => apps
                 .iter()
                 .find(|a| a.target == key)
                 .and_then(|a| serde_json::to_value(a).ok())
@@ -962,16 +1015,14 @@ async fn recent_hits(
             "repo" => key
                 .parse::<i64>()
                 .ok()
-                .and_then(|id| db::repos_by_ids(&conn, &[id]).ok())
+                .and_then(|id| db::repos_by_ids(conn, &[id]).ok())
                 .and_then(|mut r| r.pop())
                 .and_then(|r| serde_json::to_value(&r).ok())
                 .map(|v| tag(v, "repo")),
-            "bookmark" => bookmarks::bookmark_by_url(&conn, &key)
-                .map_err(err_str)?
+            "bookmark" => bookmarks::bookmark_by_url(conn, &key)?
                 .and_then(|b| serde_json::to_value(&b).ok())
                 .map(|v| tag(v, "bookmark")),
-            "history" => history::history_by_url(&conn, &key)
-                .map_err(err_str)?
+            "history" => history::history_by_url(conn, &key)?
                 .and_then(|h| serde_json::to_value(&h).ok())
                 .map(|v| tag(v, "history")),
             _ => None,
@@ -1387,6 +1438,230 @@ fn apply_index_threads(app: &AppHandle, state: &AppState) {
     );
 }
 
+// ---------- MCP server for AI assistants ----------
+
+/// The MCP tools over the live app: a fresh read connection per call (WAL
+/// keeps it clear of the writer, and the palette's cancellable connection
+/// stays the palette's), the loaded models for query vectors, the resident
+/// vector store. The ranking is the palette's own, through the shared
+/// `rank_*` helpers, so an assistant sees the order the user sees.
+struct TauriBackend {
+    app: AppHandle,
+}
+
+fn tag_kind(mut v: serde_json::Value, kind: &str) -> serde_json::Value {
+    v["kind"] = serde_json::Value::from(kind);
+    v
+}
+
+impl TauriBackend {
+    /// Query vectors the way the palette gets them: `try_lock`, so a bulk
+    /// embed pass owning a model degrades the call to keyword-only instead
+    /// of stalling it.
+    fn vectors(state: &AppState, words: &str, want_image: bool) -> (Option<Vec<f32>>, Option<Vec<f32>>) {
+        if words.trim().is_empty() {
+            return (None, None);
+        }
+        let text = state
+            .embedder
+            .try_lock()
+            .ok()
+            .and_then(|mut g| g.as_mut().and_then(|e| e.embed_query(words).ok()));
+        let image = if want_image {
+            state
+                .siglip
+                .try_lock()
+                .ok()
+                .and_then(|mut g| g.as_mut().and_then(|s| s.embed_query(words).ok()))
+        } else {
+            None
+        };
+        (text, image)
+    }
+}
+
+impl mcp::Backend for TauriBackend {
+    fn search(&self, source: mcp::Source, query: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
+        use mcp::Source::{Bookmarks, Clips, History, Local, Stars};
+        let state = self.app.state::<AppState>();
+        let conn = db::open(&state.db_path)?;
+        // local queries carry filter tokens: embed the words only, as the palette does
+        let words = match source {
+            Local => magpie_core::filters::parse(query).1,
+            _ => query.to_string(),
+        };
+        let (qvec, image_qvec) = Self::vectors(&state, &words, matches!(source, Local | Clips));
+        let store = state.store.lock().unwrap();
+        Ok(match source {
+            Local => rank_local(
+                &conn,
+                &store,
+                query,
+                qvec.as_deref(),
+                image_qvec.as_deref(),
+                search::LocalScope::All,
+                limit,
+            )?,
+            Stars => rank_stars(&conn, &store, query, qvec.as_deref(), search::RepoSort::Relevance, limit)?
+                .into_iter()
+                .map(|h| tag_kind(serde_json::to_value(&h).unwrap_or_default(), "repo"))
+                .collect(),
+            Bookmarks => rank_web(&conn, &store, query, qvec.as_deref(), "bookmarks", limit)?,
+            History => rank_web(&conn, &store, query, qvec.as_deref(), "history", limit)?,
+            Clips => {
+                search::search_clips(&conn, &store, query, qvec.as_deref(), image_qvec.as_deref(), limit)?
+                    .into_iter()
+                    .map(|c| tag_kind(serde_json::to_value(&c).unwrap_or_default(), "clip"))
+                    .collect()
+            }
+        })
+    }
+
+    fn read_file(&self, path: &str, max_chars: usize) -> Result<mcp::ReadOutcome> {
+        let state = self.app.state::<AppState>();
+        let conn = db::open(&state.db_path)?;
+        // the same fence open_file uses: only what the user chose to index
+        if !files::path_is_allowed(&conn, path)? {
+            return Ok(mcp::ReadOutcome::Outside);
+        }
+        let Some(hit) = files::file_by_path(&conn, path)? else {
+            return Ok(mcp::ReadOutcome::NotIndexed);
+        };
+        // the indexed text, not the bytes on disk: PDF, Office and OCR text
+        // come out as text, and the size cap the user set already applied
+        let content: Option<String> =
+            conn.query_row("SELECT content FROM files WHERE id = ?1", [hit.id], |r| r.get(0))?;
+        let full = content.unwrap_or_default();
+        let total = full.chars().count();
+        let text: String = full.chars().take(max_chars).collect();
+        Ok(mcp::ReadOutcome::Text(json!({
+            "path": hit.path,
+            "name": hit.name,
+            "ext": hit.ext,
+            "size": hit.size,
+            "mtime": hit.mtime,
+            "chars": total,
+            "clipped": total > max_chars,
+            "note": if total == 0 { "no indexed text: an image without OCR, a video, or a binary" } else { "" },
+            "text": text,
+        })))
+    }
+
+    fn recent(&self, source: mcp::Source, limit: usize) -> Result<Vec<serde_json::Value>> {
+        use mcp::Source::{Bookmarks, Clips, History, Local, Stars};
+        let kinds: &[&str] = match source {
+            Local => &["file", "video"],
+            Stars => &["repo"],
+            Bookmarks => &["bookmark"],
+            History => &["history"],
+            Clips => return Ok(Vec::new()),
+        };
+        let state = self.app.state::<AppState>();
+        let conn = db::open(&state.db_path)?;
+        recent_rows(&conn, &[], kinds, limit)
+    }
+}
+
+/// Start the MCP server from the stored settings: the remembered port (or
+/// any free one, then remembered so client configs stay valid) and the
+/// stored token (minted on first use). Reports through `mcp_status`.
+fn start_mcp(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let db_path = state.db_path.clone();
+    let slot = state.mcp.clone();
+    let status = state.mcp_status.clone();
+    tauri::async_runtime::spawn(async move {
+        let outcome = async {
+            let (port, token) = {
+                let conn = db::open(&db_path)?;
+                let port = db::meta_get(&conn, "mcp_port")?
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .unwrap_or(0);
+                let token = match db::meta_get(&conn, "mcp_token")? {
+                    Some(t) if t.len() >= 32 => t,
+                    _ => {
+                        let t = mcp::new_token()?;
+                        db::meta_set(&conn, "mcp_token", &t)?;
+                        t
+                    }
+                };
+                (port, token)
+            };
+            let backend: Arc<dyn mcp::Backend> = Arc::new(TauriBackend { app: app.clone() });
+            let server = mcp::serve(backend, token, port).await?;
+            if server.port != port {
+                let conn = db::open(&db_path)?;
+                db::meta_set(&conn, "mcp_port", &server.port.to_string())?;
+            }
+            anyhow::Ok(server)
+        }
+        .await;
+        match outcome {
+            Ok(server) => {
+                log::info!("mcp server listening on 127.0.0.1:{}", server.port);
+                *status.lock().unwrap() = "listening".into();
+                *slot.lock().unwrap() = Some(server);
+            }
+            Err(e) => {
+                log::warn!("mcp server failed to start: {e:#}");
+                *status.lock().unwrap() = format!("failed: {e}");
+            }
+        }
+    });
+}
+
+fn stop_mcp(state: &AppState) {
+    if let Some(server) = state.mcp.lock().unwrap().take() {
+        server.stop();
+        log::info!("mcp server stopped");
+    }
+    *state.mcp_status.lock().unwrap() = String::new();
+}
+
+/// Switch the MCP server on or off. Persisted, applied now.
+#[tauri::command]
+async fn set_mcp(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "mcp_enabled", if enabled { "1" } else { "0" }).map_err(err_str)?;
+    }
+    if enabled {
+        // one start at a time: a second one while the first still binds
+        // would lose the race for the remembered port and move it for nothing
+        let running = state.mcp.lock().unwrap().is_some();
+        let starting = *state.mcp_status.lock().unwrap() == "starting";
+        if !running && !starting {
+            *state.mcp_status.lock().unwrap() = "starting".into();
+            start_mcp(app);
+        }
+    } else {
+        stop_mcp(&state);
+    }
+    Ok(())
+}
+
+/// Mint a new bearer token. A running server restarts with it on the same
+/// port, so every client has to be re-added with the new command.
+#[tauri::command]
+async fn rotate_mcp_token(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    // a start in flight has already read the token it will serve with; a
+    // new one written now would not match it
+    if *state.mcp_status.lock().unwrap() == "starting" {
+        return Err("the server is still starting; try again in a moment".into());
+    }
+    let token = mcp::new_token().map_err(err_str)?;
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "mcp_token", &token).map_err(err_str)?;
+    }
+    if state.mcp.lock().unwrap().is_some() {
+        stop_mcp(&state);
+        *state.mcp_status.lock().unwrap() = "starting".into();
+        start_mcp(app);
+    }
+    Ok(())
+}
+
 // ---------- clipboard history ----------
 
 fn unix_now() -> i64 {
@@ -1742,27 +2017,36 @@ async fn search_web(
         return Ok(Vec::new()); // superseded; the frontend drops stale answers
     };
     let store = state.store.lock().unwrap();
-    let fb = magpie_core::frecency::factors(&conn, "bookmark", unix_now()).unwrap_or_default();
-    let fh = magpie_core::frecency::factors(&conn, "history", unix_now()).unwrap_or_default();
+    rank_web(&conn, &store, &query, qvec.as_deref(), &scope, limit).map_err(err_str)
+}
+
+/// Bookmark and history hits as the palette ranks them (`scope`: "all",
+/// "bookmarks" or "history"). Shared with the MCP server.
+fn rank_web(
+    conn: &magpie_core::rusqlite::Connection,
+    store: &VectorStore,
+    query: &str,
+    qvec: Option<&[f32]>,
+    scope: &str,
+    limit: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let fb = magpie_core::frecency::factors(conn, "bookmark", unix_now()).unwrap_or_default();
+    let fh = magpie_core::frecency::factors(conn, "history", unix_now()).unwrap_or_default();
     let mut out: Vec<(f32, serde_json::Value)> = Vec::new();
     if scope != "history" {
-        for b in search::search_bookmarks(&conn, &store, &query, qvec.as_deref(), limit)
-            .map_err(err_str)?
-        {
+        for b in search::search_bookmarks(conn, store, query, qvec, limit)? {
             // curated bookmarks get a small edge over raw history at a tie;
             // frecency nudges the ones the user actually reopens
             let bonus = 0.01 * fb.get(&b.url).copied().unwrap_or(0.0);
-            let mut v = serde_json::to_value(&b).map_err(err_str)?;
+            let mut v = serde_json::to_value(&b)?;
             v["kind"] = json!("bookmark");
             out.push((b.score + 0.05 + bonus, v));
         }
     }
     if scope != "bookmarks" {
-        for h in search::search_history(&conn, &store, &query, qvec.as_deref(), limit)
-            .map_err(err_str)?
-        {
+        for h in search::search_history(conn, store, query, qvec, limit)? {
             let bonus = 0.01 * fh.get(&h.url).copied().unwrap_or(0.0);
-            let mut v = serde_json::to_value(&h).map_err(err_str)?;
+            let mut v = serde_json::to_value(&h)?;
             v["kind"] = json!("history");
             out.push((h.score + bonus, v));
         }
@@ -3196,12 +3480,27 @@ pub fn run() {
                 ocr_indexing: Arc::new(AtomicBool::new(false)),
                 clip_watch: Arc::new(AtomicBool::new(clipboard_enabled)),
                 clip_thread_alive: Arc::new(AtomicBool::new(false)),
+                mcp: Arc::new(StdMutex::new(None)),
+                mcp_status: Arc::new(StdMutex::new(String::new())),
             });
             if clipboard_enabled {
                 spawn_clip_watcher(app.handle().clone());
             }
             spawn_app_scan(app.handle().clone());
             spawn_ffmpeg_check(app.handle().clone());
+            // the MCP server for AI assistants, only if the user switched it on
+            {
+                let state = app.state::<AppState>();
+                let on = db::open(&state.db_path)
+                    .ok()
+                    .and_then(|c| db::meta_get(&c, "mcp_enabled").ok().flatten())
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
+                if on {
+                    *state.mcp_status.lock().unwrap() = "starting".into();
+                    start_mcp(app.handle().clone());
+                }
+            }
 
             // tray: Show / Sync / Settings / Quit (labels follow the UI language)
             let ui_lang = {
@@ -3347,7 +3646,9 @@ pub fn run() {
             open_note_file,
             set_selection_hotkey,
             set_skip_worktrees,
-            set_index_threads
+            set_index_threads,
+            set_mcp,
+            rotate_mcp_token
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

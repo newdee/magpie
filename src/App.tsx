@@ -140,6 +140,10 @@ interface Status {
   video_hwaccel: boolean;
   index_threads: number;
   cpu_cores: number;
+  mcp_enabled: boolean;
+  mcp_status: string;
+  mcp_url: string;
+  mcp_command: string;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -505,6 +509,7 @@ export default function App() {
   const [selMsg, setSelMsg] = useState<string | null>(null);
   const [notePathDraft, setNotePathDraft] = useState("");
   const [noteMsg, setNoteMsg] = useState<string | null>(null);
+  const [mcpMsg, setMcpMsg] = useState<string | null>(null);
   const [emojiHits, setEmojiHits] = useState<EmojiHit[] | null>(null);
   const [topRowActive, setTopRowActive] = useState(true);
   const [bangsDraft, setBangsDraft] = useState<string | null>(null);
@@ -1444,6 +1449,28 @@ export default function App() {
     [refreshStatus],
   );
 
+  // the backend composes the command (URL + bearer header) so the settings
+  // row and the docs never drift from what the server actually expects
+  const copyMcpCommand = useCallback(async () => {
+    if (!status?.mcp_command) return;
+    try {
+      await invoke("copy_clip", { text: status.mcp_command });
+      setMcpMsg("copied");
+    } catch (e) {
+      setMcpMsg(String(e));
+    }
+  }, [status?.mcp_command]);
+  const rotateMcpToken = useCallback(async () => {
+    try {
+      setMcpMsg(null);
+      await invoke("rotate_mcp_token");
+      await refreshStatus();
+      setTimeout(() => void refreshStatus(), 600);
+      setMcpMsg("new token issued; add the server again in your clients");
+    } catch (e) {
+      setMcpMsg(String(e));
+    }
+  }, [refreshStatus]);
   const applyNotePath = useCallback(async () => {
     try {
       await invoke("set_note_path", { path: notePathDraft });
@@ -2617,6 +2644,78 @@ export default function App() {
               </div>
               {noteMsg && (
                 <p className={noteMsg === "saved" ? "set-empty" : "error-line"}>{t(noteMsg)}</p>
+              )}
+            </div>
+
+            <div className="set-row stack">
+              <div className="set-label">
+                <span className="set-name">{t("MCP server for AI assistants")}</span>
+                <span className="set-desc">
+                  {t(
+                    "Lets Claude Code, Cursor and other MCP clients search this index and read indexed text. Loopback only, behind a token, read-only, off by default.",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${(status?.mcp_enabled ?? false) === o.on ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        setMcpMsg(null);
+                        await invoke("set_mcp", { enabled: o.on });
+                        // the listener binds in the background; ask twice
+                        await refreshStatus();
+                        setTimeout(() => void refreshStatus(), 600);
+                      } catch (e) {
+                        setMcpMsg(String(e));
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+                {status?.mcp_enabled && (
+                  <>
+                    <button
+                      className="ghost-btn"
+                      disabled={!status.mcp_command}
+                      onClick={() => void copyMcpCommand()}
+                    >
+                      {t("Copy Claude Code command")}
+                    </button>
+                    <button className="ghost-btn" onClick={() => void rotateMcpToken()}>
+                      {t("New token")}
+                    </button>
+                  </>
+                )}
+              </div>
+              {status?.mcp_enabled && (
+                <p className={status.mcp_status.startsWith("failed") ? "error-line" : "set-empty"}>
+                  {status.mcp_status.startsWith("failed") ? (
+                    t(status.mcp_status)
+                  ) : status.mcp_url ? (
+                    <>
+                      {t("Listening at")} <code>{status.mcp_url}</code>
+                    </>
+                  ) : (
+                    t("starting")
+                  )}
+                </p>
+              )}
+              {status?.mcp_enabled && status.mcp_command && (
+                <p className="set-desc">
+                  {t("Other clients take the same URL with the header from this command:")}
+                  <br />
+                  <code className="mono-wrap">{status.mcp_command}</code>
+                </p>
+              )}
+              {mcpMsg && (
+                <p className={mcpMsg === "copied" ? "set-empty" : "error-line"}>{t(mcpMsg)}</p>
               )}
             </div>
 

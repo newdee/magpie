@@ -57,6 +57,10 @@ const status = {
   video_hwaccel: false,
   index_threads: 4,
   cpu_cores: 8,
+  mcp_enabled: false,
+  mcp_status: "",
+  mcp_url: "",
+  mcp_command: "",
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",
@@ -263,6 +267,12 @@ const clipHits = [
   { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
 ];
 
+// the demo's MCP server: a fixed port and a token that "rotates" between two
+// values, so the settings row can be driven end to end without a listener
+let mcpToken = "demo0000000000000000000000000000000000000000000000000000000000a1";
+const mcpCommand = () =>
+  `claude mcp add --transport http magpie http://127.0.0.1:51999/mcp --header "Authorization: Bearer ${mcpToken}"`;
+
 mockIPC((cmd, args) => {
   const q = (args as { query?: string })?.query ?? "";
   switch (cmd) {
@@ -395,6 +405,21 @@ mockIPC((cmd, args) => {
     }
     case "set_index_threads": {
       status.index_threads = (args as { threads: number }).threads;
+      return null;
+    }
+    case "set_mcp": {
+      const on = (args as { enabled: boolean }).enabled;
+      status.mcp_enabled = on;
+      status.mcp_status = on ? "listening" : "";
+      status.mcp_url = on ? "http://127.0.0.1:51999/mcp" : "";
+      status.mcp_command = on ? mcpCommand() : "";
+      return null;
+    }
+    case "rotate_mcp_token": {
+      mcpToken = mcpToken.endsWith("a1")
+        ? "demo0000000000000000000000000000000000000000000000000000000000b2"
+        : "demo0000000000000000000000000000000000000000000000000000000000a1";
+      if (status.mcp_enabled) status.mcp_command = mcpCommand();
       return null;
     }
     case "set_ocr_pdf": {

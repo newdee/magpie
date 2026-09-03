@@ -289,9 +289,39 @@ HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
 search toggle · decode limits (threads / hardware decode) · indexing
 threads (1 to every core) · tab order and
 default tab · clipboard history controls · model download status · one-click
-in-place updates (signed, verified) · settings export/import ·
-open-log-folder (local activity log for bug reports; queries never logged) ·
-app version.
+in-place updates (signed, verified) · settings export/import · MCP server
+for AI assistants (off by default) · open-log-folder (local activity log for
+bug reports; queries never logged) · app version.
+
+## AI assistants (MCP)
+
+magpie can serve its index to Claude Code, Cursor and any other MCP client,
+over HTTP on the loopback interface. Off by default. Switch it on in Settings
+→ "MCP server for AI assistants", press "Copy Claude Code command" and paste
+into a terminal:
+
+```
+claude mcp add --transport http magpie http://127.0.0.1:PORT/mcp --header "Authorization: Bearer TOKEN"
+```
+
+Other clients take the same URL with the same `Authorization` header.
+
+Three read-only tools:
+
+- `search`: `source` is one of `local`, `stars`, `bookmarks`, `history`,
+  `clips`; local queries take the palette's filters (`ext:pdf`, `>10mb`,
+  `7d`, `in:folder`). Hits are ranked exactly as the palette ranks them.
+- `read_file`: the indexed text of one local hit (PDF, Office and OCR text
+  included), 20 000 characters by default. Only paths inside the indexed
+  folders.
+- `recent`: what you opened lately through magpie.
+
+What keeps it contained: the server binds `127.0.0.1` on a random port that
+is then remembered; every request needs the bearer token (minted when first
+enabled, "New token" replaces it); foreign `Host` and browser `Origin`
+headers are refused; nothing writes. Token and port never enter a settings
+export. If your shell sets `HTTP_PROXY`, add `127.0.0.1` to `NO_PROXY` so the
+client reaches the server directly.
 
 ## Install
 

@@ -28,6 +28,19 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 enigo = "0.2"
+# MCP server for AI assistants (src/mcp.rs): rmcp speaks the protocol over
+# Streamable HTTP, axum hosts it on the loopback interface, schemars derives
+# the tool schemas, getrandom mints the bearer token
+rmcp = { version = "3.2.0", features = ["server", "transport-streamable-http-server"] }
+axum = "0.8"
+schemars = "1"
+getrandom = "0.3"
+tokio-util = "0.7"
+
+[dev-dependencies]
+# the MCP integration test talks to the server with rmcp's own client
+rmcp = { version = "3.2.0", features = ["client", "reqwest", "transport-streamable-http-client-reqwest"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 [target."cfg(windows)".dependencies]
 winreg = "0.55"

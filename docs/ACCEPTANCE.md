@@ -1,3 +1,71 @@
+# 验收记录 2026-09-03（MCP 服务给 AI 助手用，未出包）
+
+用户拍板"做"：把索引通过 MCP 开给 Claude Code / Cursor 等客户端。设计见上一
+条回复：应用内 Streamable HTTP，只绑回环，Bearer 令牌，三个只读工具，默认关。
+
+## 实现
+
+- `src-tauri/src/mcp.rs`：`rmcp` 3.2.0（官方 SDK，MSRV 1.88）+ `axum` 0.8。
+  `Backend` trait（同步：search / read_file / recent）隔开 Tauri，HTTP 层与工具
+  可用假后端测试。工具参数 `schemars` 出 schema；结果走 `structured` +
+  文本双份；`slim` 去掉缩略图与高亮标记。鉴权：axum 中间件常量时间比对
+  `Authorization: Bearer`，不通过 401 且不建会话；rmcp 自带 Host 回环白名单
+  （防 DNS rebinding），Origin 固定为本服务自身。端口记忆（`mcp_port`），
+  被占时先重试 1 秒（换令牌重启的窗口）再换新端口；令牌 256 位随机 hex
+  （`mcp_token`），首次开启生成；两者都不进设置导出。
+- `lib.rs`：面板的三段排序逻辑抽成 `rank_local` / `rank_stars` / `rank_web`，
+  最近打开抽成 `recent_rows`，面板命令与 `TauriBackend` 共用，AI 看到的顺序
+  与用户一致；MCP 每次请求自开只读连接，不碰面板的可取消连接。`read_file`
+  用 `path_is_allowed` 同一道栅栏，返回索引里的文本（PDF/Office/OCR 都在）。
+  `set_mcp` / `rotate_mcp_token` 命令；启动时按 `mcp_enabled` 自动开。
+  `get_status` 的 `json!` 超过默认递归上限，crate 加 `recursion_limit = 256`。
+- 设置行：开/关、监听地址、可复制的 `claude mcp add` 命令（由后端拼，界面
+  与文档不会漂）、换新令牌。demo mock、i18n、README 双语新增"AI 助手（MCP）"
+  一节、落地页两条。
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 逻辑/竞态 | `starting` 期间再点开或换令牌会并发起两个监听：后者抢不到记忆端口就换端口，客户端配置无谓失效；换令牌时在飞的启动已读旧令牌，新令牌与实际不符 | 开关：running 或 starting 都不再起；换令牌：starting 时返回"稍后再试" |
+| 2 | 静态 | README 新段落 3 个 em dash（项目规则为零） | 改冒号 |
+| 3 | 静态 | 后端错误串的 zh 词条在 TS 无引用（死键） | 删；后端错误保持英文 |
+
+以下三条是仪器/编译期问题，不计入产品发现但记账：`Implementation` 是
+non_exhaustive 要走 `new`；`json!` 递归上限；集成测试的 reqwest 走了系统代理
+（本机 Clash）→ 502，客户端加 `no_proxy()`。
+
+## 连续四轮干净（第 3 项之后重新计数）
+
+- A 静态一致：a1 10/10、a3-ipc 3/3、docs-parity 20/20、round1 24/24
+- B 代码正确：clippy 全 target 0；147 测试（新增 10：mcp 单元 6、HTTP 集成
+  4——401/403/握手+三工具形状/停服释放端口）
+- C 机制通路：无头 T3 11/11（默认关、开后地址与命令、换令牌进命令、复制、
+  关后折叠）；真机 T4（生产 exe）18/18：日志端口 = 记忆端口、64 位 hex 令牌、
+  initialize 200 + 会话、tools/list 恰好三个、本地搜索命中探针文件且无缩略图
+  /高亮标记、read_file 截 40 字符含探针词、越界路径为工具错误、recent/stars
+  有应答、未知 source 拒绝、无令牌 401 + `WWW-Authenticate: Bearer`、错令牌
+  401、外部 Host 403、监听地址仅 127.0.0.1、**Claude Code 本尊 `claude mcp add`
+  后 `claude mcp list` 报 ✔ Connected**、测试条目已移除、清理 0 残留
+- E 可复现：套件 ×3 均 147/0
+
+## 仪器坑（记账）
+
+- Windows PowerShell 5.1 按 ANSI 读脚本，一个勾号字符把整段解析炸掉；脚本改
+  纯 ASCII（正则里用反斜杠 u 转义序列）并用 pwsh 跑。
+- 会话模式下响应是 SSE（`data:` 行），python 客户端按纯 JSON 解析全 FAIL；
+  Claude Code 与 rmcp 客户端本就能处理，客户端加 SSE 解析。
+- 第一版 T4 跑在含守卫之前的 exe 上；重建后在最终 exe 上又跑一次，同样
+  18/18。最终 exe 的前端包比源码多一条随后删掉的死键（zh 词条），无行为差异。
+
+## 未验证项
+
+- Cursor / Claude Desktop 未实测（同一 URL + 头；Claude Desktop 对无 OAuth 的
+  本地 HTTP 服务支持度未知）。
+- 同时多个客户端并发调用未压测（每请求独立连接 + 阻塞池，理论上无共享状态）。
+- macOS / Linux 未跑真机。
+
+---
 # 验收记录 2026-09-03（索引线程数上限，未出包）
 
 用户提问："索引的时候是不是可以控制一下 cpu 的使用率或者线程数，有时候可能

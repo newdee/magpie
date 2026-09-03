@@ -231,7 +231,34 @@ hf-mirror.com 国内镜像）· 文件大小上限（4/16/64 MB 或无上限）�
 搜索开关 · 解码限制（线程/硬解）· 索引线程数（1 到全部核心）· 标签页顺序与
 默认标签页 · 剪贴板历史
 开关 · 模型下载状态 · 一键原地更新（minisign 签名校验）· 设置导出/导入 ·
-打开日志文件夹（本地运行日志，报 issue 用；搜索内容永不记录）· 版本号。
+MCP 服务（给 AI 助手用，默认关闭）· 打开日志文件夹（本地运行日志，报 issue
+用；搜索内容永不记录）· 版本号。
+
+## AI 助手（MCP）
+
+magpie 可以把索引通过本机回环地址上的 HTTP 提供给 Claude Code、Cursor 等任何
+MCP 客户端。默认关闭。在设置里打开"MCP 服务（给 AI 助手用）"，点"复制 Claude
+Code 命令"，粘贴到终端：
+
+```
+claude mcp add --transport http magpie http://127.0.0.1:端口/mcp --header "Authorization: Bearer 令牌"
+```
+
+其他客户端用同一 URL 和同一个 `Authorization` 请求头。
+
+三个只读工具：
+
+- `search`：`source` 为 `local` / `stars` / `bookmarks` / `history` / `clips`
+  之一；本地搜索支持面板同款过滤（`ext:pdf`、`>10mb`、`7d`、`in:文件夹`），
+  排序与面板完全一致。
+- `read_file`：某个本地命中的已索引文本（PDF、Office、OCR 文本都在），默认
+  最多 20000 字符；只限已索引文件夹内的路径。
+- `recent`：你最近通过 magpie 打开过的东西。
+
+边界：只绑定 `127.0.0.1`，端口随机分配后记住；每个请求都要带令牌（首次开启
+时生成，"换新令牌"可作废旧的）；非本机的 `Host` 与浏览器 `Origin` 一律拒绝；
+不做任何写入。令牌和端口不会进入设置导出。若终端设置了 `HTTP_PROXY`，把
+`127.0.0.1` 加进 `NO_PROXY`，客户端才能直连。
 
 ## 安装
 
