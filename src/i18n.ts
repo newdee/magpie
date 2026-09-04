@@ -157,6 +157,17 @@ const ZH: Record<string, string> = {
   "Scanned PDFs": "扫描版 PDF",
   "Also read pages of PDFs that have no text layer. Large scans take a while, so this is your call.":
     "同时识别没有文字层的 PDF 页面。大部头扫描件较耗时，开不开由你。",
+  "File changes": "文件变化",
+  "Changes inside indexed folders reach the index within seconds, without waiting for the next full walk.":
+    "索引文件夹里的改动几秒内进索引，不用等下一次全量遍历。",
+  "Watching": "正在监听",
+  "folders": "个文件夹",
+  "Full rescan": "全量重扫",
+  "Every so often all folders are walked again, so anything the watcher missed still lands. Off leaves it to the watcher and to startup.":
+    "每隔一段时间把所有文件夹重新遍历一遍，监听漏掉的也能补上。关闭则只靠监听和启动时那一次。",
+  "min": "分钟",
+  "Rescan now": "立即重扫",
+  "rescanning": "重扫中",
   "Indexing threads": "索引线程数",
   "CPU threads each model (text, image, OCR) may use while indexing. Fewer keeps the machine responsive; all cores finishes a first index sooner. Applies right away.":
     "索引时每个模型（文本、图片、OCR）最多占用的 CPU 线程数。少一点前台更流畅，全部核心则首次索引更快。改完立即生效。",

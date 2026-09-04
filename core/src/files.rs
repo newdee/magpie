@@ -6,8 +6,8 @@ use anyhow::{bail, Result};
 use ignore::WalkBuilder;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::embed::{self, Embedder};
 
@@ -187,54 +187,84 @@ pub fn folder_count(conn: &Connection) -> Result<i64> {
 
 // ---------- indexing ----------
 
-/// Incremental scan of all registered folders. Unchanged files (same mtime and
-/// size) are skipped; files gone from disk are removed from the index.
-pub fn index_folders(
-    conn: &Connection,
-    mut progress: impl FnMut(usize),
-) -> Result<IndexReport> {
-    let mut report = IndexReport::default();
-    let limits = limits_from(conn);
+/// One scan's rules and bookkeeping, shared by the full walk and the
+/// change-driven one so both index exactly the same files the same way:
+/// the ignore rules (`.gitignore`, dotfiles, linked worktrees), the per-file
+/// upsert with its size caps, what the index knew before, what this scan
+/// has seen.
+struct Scan<'a> {
+    conn: &'a Connection,
+    limits: Limits,
+    folders: Vec<FolderInfo>,
+    roots: Vec<PathBuf>,
+    skip_worktrees: bool,
+    /// path -> (id, mtime, size), as the index had it before this scan
+    known: HashMap<String, (i64, i64, i64)>,
+    seen: HashSet<String>,
+    report: IndexReport,
+}
 
-    // current index state: path -> (id, mtime, size)
-    let mut known: HashMap<String, (i64, i64, i64)> = HashMap::new();
-    {
-        let mut stmt = conn.prepare("SELECT path, id, mtime, size FROM files")?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?),
-            ))
-        })?;
-        for row in rows {
-            let (path, v) = row?;
-            known.insert(path, v);
+impl<'a> Scan<'a> {
+    fn new(conn: &'a Connection) -> Result<Self> {
+        let limits = limits_from(conn);
+        let mut known: HashMap<String, (i64, i64, i64)> = HashMap::new();
+        {
+            let mut stmt = conn.prepare("SELECT path, id, mtime, size FROM files")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?),
+                ))
+            })?;
+            for row in rows {
+                let (path, v) = row?;
+                known.insert(path, v);
+            }
         }
+        let folders = list_folders(conn)?;
+        // linked git worktrees whose main checkout is indexed are copies;
+        // prune them unless the user switched that off (see worktree.rs)
+        let skip_worktrees = crate::db::meta_get(conn, "skip_worktrees")
+            .ok()
+            .flatten()
+            .map(|v| v != "0")
+            .unwrap_or(true);
+        let roots = folders.iter().map(|f| PathBuf::from(&f.path)).collect();
+        Ok(Self {
+            conn,
+            limits,
+            folders,
+            roots,
+            skip_worktrees,
+            known,
+            seen: HashSet::new(),
+            report: IndexReport::default(),
+        })
     }
 
-    let folders = list_folders(conn)?;
-    let mut seen: Vec<String> = Vec::new();
-    // linked git worktrees whose main checkout is indexed are copies; prune
-    // them unless the user switched that off (see worktree.rs)
-    let skip_worktrees = crate::db::meta_get(conn, "skip_worktrees")
-        .ok()
-        .flatten()
-        .map(|v| v != "0")
-        .unwrap_or(true);
-    let roots: Vec<std::path::PathBuf> =
-        folders.iter().map(|f| std::path::PathBuf::from(&f.path)).collect();
-
-    for folder in &folders {
-        let roots = roots.clone();
-        let walker = WalkBuilder::new(&folder.path)
+    /// Walk `start` (inside the registered folder `folder_id`) down to
+    /// `max_depth` (None = the whole subtree) and upsert every file that is
+    /// new or changed. `.gitignore` files above `start` still apply: the
+    /// walker reads them from the parent directories.
+    fn walk(
+        &mut self,
+        folder_id: i64,
+        start: &Path,
+        max_depth: Option<usize>,
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<()> {
+        let roots = self.roots.clone();
+        let skip_worktrees = self.skip_worktrees;
+        let walker = WalkBuilder::new(start)
             .follow_links(false)
             .hidden(true) // skip dotfiles
             .git_ignore(true)
             .require_git(false) // honor .gitignore even outside git repos
             .git_global(false)
             .git_exclude(true)
-            // depth 0 is the registered folder itself: adding a worktree
-            // explicitly always wins over the pruning rule
+            .max_depth(max_depth)
+            // depth 0 is the start directory itself: adding a worktree as a
+            // folder of its own always wins over the pruning rule
             .filter_entry(move |e| {
                 !(skip_worktrees
                     && e.depth() > 0
@@ -247,83 +277,194 @@ pub fn index_folders(
             if !ft.is_file() {
                 continue;
             }
-            let path = entry.path();
             let Ok(meta) = entry.metadata() else { continue };
-            let path_str = path.to_string_lossy().to_string();
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let size = meta.len() as i64;
-
-            report.scanned += 1;
-            if report.scanned.is_multiple_of(200) {
-                progress(report.scanned);
+            self.report.scanned += 1;
+            if self.report.scanned.is_multiple_of(200) {
+                progress(self.report.scanned);
             }
-            seen.push(path_str.clone());
+            self.upsert(folder_id, entry.path(), &meta)?;
+        }
+        Ok(())
+    }
 
-            if let Some((_, m, s)) = known.get(&path_str) {
-                if *m == mtime && *s == size {
-                    continue; // unchanged
+    fn upsert(&mut self, folder_id: i64, path: &Path, meta: &std::fs::Metadata) -> Result<()> {
+        let path_str = path.to_string_lossy().to_string();
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let size = meta.len() as i64;
+        self.seen.insert(path_str.clone());
+        if let Some((_, m, s)) = self.known.get(&path_str) {
+            if *m == mtime && *s == size {
+                return Ok(()); // unchanged
+            }
+        }
+        let limits = self.limits;
+        // every file is indexed by name; content is extracted only for
+        // types we understand and only under the size cap. Anything else
+        // (binaries, video, oversized files) stays findable by filename.
+        let content = if is_image(path) {
+            None // pixels are indexed via SigLIP, not as text
+        } else if is_pdf(path) {
+            (meta.len() <= limits.doc_bytes)
+                .then(|| extract_pdf_text(path, limits.char_cap))
+                .flatten()
+        } else if is_office(path) {
+            (meta.len() <= limits.doc_bytes)
+                .then(|| extract_office_text(path, limits.char_cap))
+                .flatten()
+        } else if is_text_ext(path) {
+            (meta.len() <= limits.file_bytes)
+                .then(|| read_text_full(path, limits))
+                .flatten()
+        } else {
+            None // unknown type: name-only
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase());
+        self.conn.execute(
+            "INSERT INTO files(folder_id, path, name, ext, size, mtime, content)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(path) DO UPDATE SET
+                folder_id = excluded.folder_id,
+                name = excluded.name, ext = excluded.ext,
+                size = excluded.size, mtime = excluded.mtime,
+                content = excluded.content",
+            params![folder_id, path_str, name, ext, size, mtime, content],
+        )?;
+        self.report.indexed += 1;
+        Ok(())
+    }
+
+    /// Delete the rows this scan expected to see and did not, among those
+    /// `covered`: the full walk covers everything, a change-driven scan only
+    /// what it looked at, so the rest of the index stays put.
+    fn prune(&mut self, covered: impl Fn(&str) -> bool) -> Result<()> {
+        let stale: Vec<i64> = self
+            .known
+            .iter()
+            .filter(|(p, _)| !self.seen.contains(p.as_str()) && covered(p))
+            .map(|(_, (id, _, _))| *id)
+            .collect();
+        for id in &stale {
+            self.conn.execute("DELETE FROM files WHERE id = ?1", [id])?;
+        }
+        self.report.removed += stale.len();
+        Ok(())
+    }
+
+    /// The registered folder a path lives in.
+    fn folder_of(&self, path: &Path) -> Option<&FolderInfo> {
+        self.folders
+            .iter()
+            .filter(|f| path.starts_with(&f.path))
+            .max_by_key(|f| f.path.len())
+    }
+
+    /// Would the full walk reach `path`? Dotfile components below the root
+    /// and shadowed worktree directories are pruned there, so a change
+    /// inside them is not news for the index.
+    fn walk_reaches(&self, root: &Path, path: &Path) -> bool {
+        let Ok(rel) = path.strip_prefix(root) else { return false };
+        let mut dir = root.to_path_buf();
+        for comp in rel.components() {
+            if comp.as_os_str().to_string_lossy().starts_with('.') {
+                return false;
+            }
+            dir.push(comp.as_os_str());
+            if self.skip_worktrees && dir.is_dir() && crate::worktree::is_shadowed(&dir, &self.roots) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Incremental scan of all registered folders. Unchanged files (same mtime and
+/// size) are skipped; files gone from disk are removed from the index.
+pub fn index_folders(
+    conn: &Connection,
+    mut progress: impl FnMut(usize),
+) -> Result<IndexReport> {
+    let mut scan = Scan::new(conn)?;
+    for folder in scan.folders.clone() {
+        scan.walk(folder.id, Path::new(&folder.path), None, &mut progress)?;
+    }
+    // prune files that vanished from disk (or whose folder was removed)
+    scan.prune(|_| true)?;
+    progress(scan.report.scanned);
+    Ok(scan.report)
+}
+
+/// Re-index only what a file watcher reported, with the full walk's rules:
+/// a changed or new file re-reads its directory (one level), a directory
+/// that appeared or was renamed in is walked whole, a path that is gone is
+/// dropped with everything under it. Paths outside every registered folder,
+/// or in places the full walk would not reach (dotfiles, pruned worktrees),
+/// are ignored. Nothing outside the touched scopes is pruned, so the rest of
+/// the index is exactly as the last full walk left it.
+pub fn index_changed(
+    conn: &Connection,
+    paths: &[PathBuf],
+    mut progress: impl FnMut(usize),
+) -> Result<IndexReport> {
+    let mut scan = Scan::new(conn)?;
+    let mut trees: Vec<(i64, PathBuf)> = Vec::new();
+    let mut dirs: Vec<(i64, PathBuf)> = Vec::new();
+    let mut gone: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        let Some(folder) = scan.folder_of(p) else { continue };
+        let (fid, root) = (folder.id, PathBuf::from(&folder.path));
+        if !scan.walk_reaches(&root, p) {
+            continue;
+        }
+        match std::fs::metadata(p) {
+            Ok(m) if m.is_dir() => trees.push((fid, p.clone())),
+            Ok(_) => dirs.push((fid, p.parent().map(Path::to_path_buf).unwrap_or(root))),
+            Err(_) => {
+                gone.push(p.clone());
+                // a rename shows up as the old name gone: the parent is
+                // re-read so the new name is picked up in the same batch
+                if let Some(parent) = p.parent() {
+                    if parent.starts_with(&root) {
+                        dirs.push((fid, parent.to_path_buf()));
+                    }
                 }
             }
-            // every file is indexed by name; content is extracted only for
-            // types we understand and only under the size cap. Anything else
-            // (binaries, video, oversized files) stays findable by filename.
-            let content = if is_image(path) {
-                None // pixels are indexed via SigLIP, not as text
-            } else if is_pdf(path) {
-                (meta.len() <= limits.doc_bytes)
-                    .then(|| extract_pdf_text(path, limits.char_cap))
-                    .flatten()
-            } else if is_office(path) {
-                (meta.len() <= limits.doc_bytes)
-                    .then(|| extract_office_text(path, limits.char_cap))
-                    .flatten()
-            } else if is_text_ext(path) {
-                (meta.len() <= limits.file_bytes)
-                    .then(|| read_text_full(path, limits))
-                    .flatten()
-            } else {
-                None // unknown type: name-only
-            };
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let ext = path
-                .extension()
-                .map(|e| e.to_string_lossy().to_lowercase());
-            conn.execute(
-                "INSERT INTO files(folder_id, path, name, ext, size, mtime, content)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(path) DO UPDATE SET
-                    folder_id = excluded.folder_id,
-                    name = excluded.name, ext = excluded.ext,
-                    size = excluded.size, mtime = excluded.mtime,
-                    content = excluded.content",
-                params![folder.id, path_str, name, ext, size, mtime, content],
-            )?;
-            report.indexed += 1;
         }
     }
+    trees.sort();
+    trees.dedup();
+    let all_trees = trees.clone();
+    trees.retain(|(_, t)| !all_trees.iter().any(|(_, o)| o != t && t.starts_with(o)));
+    dirs.sort();
+    dirs.dedup();
+    dirs.retain(|(_, d)| !trees.iter().any(|(_, t)| d.starts_with(t)));
 
-    // prune files that vanished from disk (or whose folder was removed)
-    let seen_set: std::collections::HashSet<&str> = seen.iter().map(String::as_str).collect();
-    let mut stale_ids = Vec::new();
-    for (path, (id, _, _)) in &known {
-        if !seen_set.contains(path.as_str()) {
-            stale_ids.push(*id);
+    for (fid, tree) in &trees {
+        scan.walk(*fid, tree, None, &mut progress)?;
+    }
+    for (fid, dir) in &dirs {
+        if dir.is_dir() {
+            scan.walk(*fid, dir, Some(1), &mut progress)?;
         }
     }
-    for id in &stale_ids {
-        conn.execute("DELETE FROM files WHERE id = ?1", [id])?;
-    }
-    report.removed = stale_ids.len();
-    progress(report.scanned);
-    Ok(report)
+    scan.prune(|path| {
+        let p = Path::new(path);
+        gone.iter().any(|g| p.starts_with(g))
+            || trees.iter().any(|(_, t)| p.starts_with(t))
+            || dirs.iter().any(|(_, d)| p.parent() == Some(d.as_path()))
+    })?;
+    progress(scan.report.scanned);
+    Ok(scan.report)
 }
 
 fn is_image(path: &Path) -> bool {

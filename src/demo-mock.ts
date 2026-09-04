@@ -61,6 +61,10 @@ const status = {
   mcp_status: "",
   mcp_url: "",
   mcp_command: "",
+  watch_enabled: true,
+  watch_status: "watching",
+  watched_folders: 2,
+  rescan_minutes: 30,
   max_file_mb: 16,
   hotkey: "Alt+Space",
   hf_endpoint: "https://huggingface.co",
@@ -420,6 +424,17 @@ mockIPC((cmd, args) => {
         ? "demo0000000000000000000000000000000000000000000000000000000000b2"
         : "demo0000000000000000000000000000000000000000000000000000000000a1";
       if (status.mcp_enabled) status.mcp_command = mcpCommand();
+      return null;
+    }
+    case "set_watch": {
+      const on = (args as { enabled: boolean }).enabled;
+      status.watch_enabled = on;
+      status.watch_status = on ? "watching" : "";
+      status.watched_folders = on ? 2 : 0;
+      return null;
+    }
+    case "set_rescan_minutes": {
+      status.rescan_minutes = (args as { minutes: number }).minutes;
       return null;
     }
     case "set_ocr_pdf": {

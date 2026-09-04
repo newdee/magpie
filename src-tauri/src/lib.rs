@@ -5,8 +5,8 @@
 // room than the default 128 levels
 #![recursion_limit = "256"]
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
@@ -28,6 +28,7 @@ use magpie_core::siglip::Siglip;
 use magpie_core::sync;
 
 pub mod mcp;
+mod watch;
 
 struct AppState {
     db_path: PathBuf,
@@ -83,6 +84,16 @@ struct AppState {
     mcp: Arc<StdMutex<Option<mcp::Server>>>,
     /// "" (off) / "starting" / "listening" / "failed: <why>".
     mcp_status: Arc<StdMutex<String>>,
+    /// The file watcher over the indexed folders while it runs (see `watch`);
+    /// dropping it stops the events.
+    watcher: Arc<StdMutex<Option<notify::RecommendedWatcher>>>,
+    /// Changed paths the watcher has reported and the ticker has not yet
+    /// handed to a scoped re-index.
+    pending: Arc<StdMutex<watch::Pending>>,
+    /// "" (off) / "watching" / "failed: <why>".
+    watch_status: Arc<StdMutex<String>>,
+    /// How many of the registered folders the watcher covers.
+    watched_folders: Arc<AtomicUsize>,
 }
 
 /// Reload the resident vector store from the database.
@@ -210,6 +221,8 @@ const EXPORTABLE_META: &[&str] = &[
     "ocr_pdf",
     "skip_worktrees",
     "index_threads",
+    "watch_enabled",
+    "rescan_minutes",
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -327,6 +340,19 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         .map(|v| v == "1")
         .unwrap_or(false);
     let mcp_status = state.mcp_status.lock().unwrap().clone();
+    // file watcher and the reconciliation walk behind it
+    let watch_enabled = db::meta_get(&conn, "watch_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let watch_status = state.watch_status.lock().unwrap().clone();
+    let watched_folders = state.watched_folders.load(Ordering::SeqCst);
+    let rescan_every = db::meta_get(&conn, "rescan_minutes")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RESCAN_MINUTES);
     let mcp_port = state.mcp.lock().unwrap().as_ref().map(|s| s.port);
     let mcp_url = mcp_port.map(mcp::url).unwrap_or_default();
     let mcp_command = match (mcp_port, db::meta_get(&conn, "mcp_token").ok().flatten()) {
@@ -373,6 +399,10 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "mcp_status": mcp_status,
         "mcp_url": mcp_url,
         "mcp_command": mcp_command,
+        "watch_enabled": watch_enabled,
+        "watch_status": watch_status,
+        "watched_folders": watched_folders,
+        "rescan_minutes": rescan_every,
         "note_path": note_path_from(&conn, &state.db_path).to_string_lossy().into_owned(),
         "hf_endpoint": hf_endpoint,
         "embedded_count": embedded,
@@ -1054,18 +1084,24 @@ async fn add_folder(
         files::add_folder(&conn, &path).map_err(err_str)?;
         files::list_folders(&conn).map_err(err_str)?
     };
+    rewatch(&app);
     spawn_local_index(app);
     Ok(out)
 }
 
 #[tauri::command]
 async fn remove_folder(
+    app: AppHandle,
     state: State<'_, AppState>,
     folder_id: i64,
 ) -> Result<Vec<FolderInfo>, String> {
-    let conn = state.db.lock().await;
-    files::remove_folder(&conn, folder_id).map_err(err_str)?;
-    files::list_folders(&conn).map_err(err_str)
+    let out = {
+        let conn = state.db.lock().await;
+        files::remove_folder(&conn, folder_id).map_err(err_str)?;
+        files::list_folders(&conn).map_err(err_str)?
+    };
+    rewatch(&app);
+    Ok(out)
 }
 
 #[tauri::command]
@@ -1662,6 +1698,133 @@ async fn rotate_mcp_token(app: AppHandle, state: State<'_, AppState>) -> Result<
     Ok(())
 }
 
+// ---------- file watcher ----------
+
+/// Minutes between full reconciliation walks when nothing is stored.
+const DEFAULT_RESCAN_MINUTES: u64 = 30;
+
+/// How often the full walk runs, in minutes; 0 means never.
+fn rescan_minutes(app: &AppHandle) -> u64 {
+    let state = app.state::<AppState>();
+    db::open(&state.db_path)
+        .ok()
+        .and_then(|c| db::meta_get(&c, "rescan_minutes").ok().flatten())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_RESCAN_MINUTES)
+}
+
+/// Watch every registered folder. Events land in `pending`; the ticker
+/// turns them into scoped re-indexes. Called at startup and whenever the
+/// folder list or the switch changes: a fresh watcher replaces the old one
+/// each time, and switching off simply drops it.
+fn rewatch(app: &AppHandle) {
+    use notify::Watcher;
+    let state = app.state::<AppState>();
+    let conn = db::open(&state.db_path).ok();
+    let enabled = conn
+        .as_ref()
+        .and_then(|c| db::meta_get(c, "watch_enabled").ok().flatten())
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    if !enabled {
+        *state.watcher.lock().unwrap() = None;
+        *state.watch_status.lock().unwrap() = String::new();
+        state.watched_folders.store(0, Ordering::SeqCst);
+        return;
+    }
+    let folders = conn.as_ref().and_then(|c| files::list_folders(c).ok()).unwrap_or_default();
+    let roots: Vec<PathBuf> = folders.iter().map(|f| PathBuf::from(&f.path)).collect();
+    let pending = state.pending.clone();
+    let built = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+        Ok(ev) => {
+            let now = std::time::Instant::now();
+            let mut p = pending.lock().unwrap();
+            if ev.need_rescan() {
+                // the OS dropped events: only a full walk knows what changed
+                p.rescan_all(now);
+            } else if !matches!(ev.kind, notify::EventKind::Access(_)) {
+                // dotfile churn (.git above all) never reaches the index;
+                // keep it out of the queue so it cannot force a full walk
+                for path in ev.paths.into_iter().filter(|path| !watch::is_noise(path, &roots)) {
+                    p.push(path, now);
+                }
+            }
+        }
+        Err(e) => log::warn!("file watcher: {e}"),
+    });
+    let mut watcher = match built {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("file watcher unavailable: {e}");
+            *state.watcher.lock().unwrap() = None;
+            *state.watch_status.lock().unwrap() = format!("failed: {e}");
+            state.watched_folders.store(0, Ordering::SeqCst);
+            return;
+        }
+    };
+    let mut watched = 0usize;
+    for f in &folders {
+        match watcher.watch(Path::new(&f.path), notify::RecursiveMode::Recursive) {
+            Ok(()) => watched += 1,
+            Err(e) => log::warn!("file watcher: cannot watch {}: {e}", f.path),
+        }
+    }
+    log::info!("file watcher on {watched} of {} folders", folders.len());
+    state.watched_folders.store(watched, Ordering::SeqCst);
+    *state.watch_status.lock().unwrap() = "watching".into();
+    // the old watcher (if any) drops here and stops reporting
+    *state.watcher.lock().unwrap() = Some(watcher);
+}
+
+/// Once a second: when the disk has been quiet, hand the pending changes
+/// to a scoped re-index. A pass already running (a full walk, say) keeps
+/// them queued for the next tick.
+fn spawn_watch_ticker(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let now = std::time::Instant::now();
+            let batch = app.state::<AppState>().pending.lock().unwrap().take_if_quiet(now);
+            let Some(batch) = batch else { continue };
+            let started = match &batch {
+                watch::Batch::All => start_local_index(app.clone(), Scope::All),
+                watch::Batch::Paths(paths) => {
+                    log::info!("file watcher: re-indexing {} changed path(s)", paths.len());
+                    start_local_index(app.clone(), Scope::Paths(paths.clone()))
+                }
+            };
+            if !started {
+                app.state::<AppState>().pending.lock().unwrap().put_back(batch, now);
+            }
+        }
+    });
+}
+
+/// Switch the file watcher on or off (default on). Persisted, applied now;
+/// switching on also runs a full walk, since what changed meanwhile is
+/// unknown.
+#[tauri::command]
+async fn set_watch(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "watch_enabled", if enabled { "1" } else { "0" }).map_err(err_str)?;
+    }
+    rewatch(&app);
+    if enabled {
+        spawn_local_index(app);
+    }
+    Ok(())
+}
+
+/// Minutes between full reconciliation walks (0 = never). Read by the
+/// periodic loop once a minute, so it applies without a restart.
+#[tauri::command]
+async fn set_rescan_minutes(state: State<'_, AppState>, minutes: u32) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, "rescan_minutes", &minutes.to_string()).map_err(err_str)?;
+    Ok(())
+}
+
 // ---------- clipboard history ----------
 
 fn unix_now() -> i64 {
@@ -2132,10 +2295,25 @@ async fn open_file(state: State<'_, AppState>, path: String) -> Result<(), Strin
     tauri_plugin_opener::reveal_item_in_dir(&path).map_err(err_str)
 }
 
+/// What a local index pass looks at.
+enum Scope {
+    /// Every registered folder: the full walk, which also prunes what is gone.
+    All,
+    /// Only these paths, as the file watcher reported them (see `watch`).
+    Paths(Vec<PathBuf>),
+}
+
 fn spawn_local_index(app: AppHandle) {
+    start_local_index(app, Scope::All);
+}
+
+/// Scan (full or scoped), then embed whatever the scan left pending. One
+/// pass at a time: returns false when one is already running, so a caller
+/// with changes to report can queue them for later.
+fn start_local_index(app: AppHandle, scope: Scope) -> bool {
     let state = app.state::<AppState>();
     if state.local_indexing.swap(true, Ordering::SeqCst) {
-        return;
+        return false;
     }
     let running = state.local_indexing.clone();
     let embedder = state.embedder.clone();
@@ -2148,9 +2326,13 @@ fn spawn_local_index(app: AppHandle) {
         let outcome = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
             let conn = db::open(&db_path)?;
             let scan_app = app2.clone();
-            let report = files::index_folders(&conn, move |scanned| {
+            let progress = move |scanned| {
                 let _ = scan_app.emit("local-progress", json!({ "stage": "scan", "done": scanned }));
-            })?;
+            };
+            let report = match &scope {
+                Scope::All => files::index_folders(&conn, progress)?,
+                Scope::Paths(paths) => files::index_changed(&conn, paths, progress)?,
+            };
             let embedded = match embedder.lock().unwrap().as_mut() {
                 Some(e) => files::embed_pending_files(&conn, e, |done, total| {
                     let _ = app2.emit(
@@ -2188,6 +2370,7 @@ fn spawn_local_index(app: AppHandle) {
             }
         }
     });
+    true
 }
 
 // ---------- sync orchestration ----------
@@ -3482,6 +3665,10 @@ pub fn run() {
                 clip_thread_alive: Arc::new(AtomicBool::new(false)),
                 mcp: Arc::new(StdMutex::new(None)),
                 mcp_status: Arc::new(StdMutex::new(String::new())),
+                watcher: Arc::new(StdMutex::new(None)),
+                pending: Arc::new(StdMutex::new(watch::Pending::default())),
+                watch_status: Arc::new(StdMutex::new(String::new())),
+                watched_folders: Arc::new(AtomicUsize::new(0)),
             });
             if clipboard_enabled {
                 spawn_clip_watcher(app.handle().clone());
@@ -3501,6 +3688,11 @@ pub fn run() {
                     start_mcp(app.handle().clone());
                 }
             }
+
+            // file changes: a watcher on every indexed folder (unless switched
+            // off) and the ticker that turns its events into scoped re-indexes
+            rewatch(app.handle());
+            spawn_watch_ticker(app.handle().clone());
 
             // tray: Show / Sync / Settings / Quit (labels follow the UI language)
             let ui_lang = {
@@ -3566,15 +3758,21 @@ pub fn run() {
             spawn_sync(app.handle().clone());
             spawn_local_index(app.handle().clone());
             spawn_bookmark_sync(app.handle().clone());
-            // periodic incremental re-scan: picks up deleted/changed files and
-            // bookmarks while the app stays resident (unchanged scans are fast)
+            // periodic full re-scan: the reconciliation behind the file
+            // watcher (deleted/changed files it missed, bookmarks, videos).
+            // Every `rescan_minutes` (default 30, 0 = off), read once a
+            // minute so a change in settings applies without a restart.
             let periodic = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut tick =
-                    tokio::time::interval(std::time::Duration::from_secs(30 * 60));
-                tick.tick().await; // first tick fires immediately; startup already indexed
+                let mut elapsed: u64 = 0;
                 loop {
-                    tick.tick().await;
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    elapsed += 1;
+                    let every = rescan_minutes(&periodic);
+                    if every == 0 || elapsed < every {
+                        continue;
+                    }
+                    elapsed = 0;
                     spawn_local_index(periodic.clone());
                     spawn_bookmark_sync(periodic.clone());
                     spawn_video_index(periodic.clone());
@@ -3648,7 +3846,9 @@ pub fn run() {
             set_skip_worktrees,
             set_index_threads,
             set_mcp,
-            rotate_mcp_token
+            rotate_mcp_token,
+            set_watch,
+            set_rescan_minutes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

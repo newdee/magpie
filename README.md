@@ -173,6 +173,10 @@ name, and understood formats are searched in full text:
 - Indexing is capped at 4 CPU threads per model (text, image and OCR
   alike), so an embed pass never owns the machine. Settings offer 1, 2, 4,
   8 or every core; a change applies right away.
+- Changes inside indexed folders reach the index within seconds: a file
+  watcher reports them and only the touched paths are re-read. A full walk
+  every 30 minutes (adjustable, or off) reconciles anything the watcher
+  missed, and "Rescan now" runs it on demand.
 
 Images are embedded with **SigLIP 2** and searchable by content:
 
@@ -287,7 +291,8 @@ search-selection shortcut · notes file · recent opens on the empty box ·
 model download source (huggingface.co or hf-mirror.com for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
 search toggle · decode limits (threads / hardware decode) · indexing
-threads (1 to every core) · tab order and
+threads (1 to every core) · file watcher · full rescan interval and
+"Rescan now" · tab order and
 default tab · clipboard history controls · model download status · one-click
 in-place updates (signed, verified) · settings export/import · MCP server
 for AI assistants (off by default) · open-log-folder (local activity log for

@@ -144,6 +144,10 @@ interface Status {
   mcp_status: string;
   mcp_url: string;
   mcp_command: string;
+  watch_enabled: boolean;
+  watch_status: string;
+  watched_folders: number;
+  rescan_minutes: number;
   embedded_count: number;
   last_sync: string | null;
   username: string | null;
@@ -2044,6 +2048,96 @@ export default function App() {
                       {o.threads === 0 ? `${t("all cores")} (${status?.cpu_cores ?? "?"})` : o.label}
                     </button>
                   ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("File changes")}</span>
+                <span className="set-desc">
+                  {t(
+                    "Changes inside indexed folders reach the index within seconds, without waiting for the next full walk.",
+                  )}
+                  {status?.watch_enabled && status.watch_status === "watching" && (
+                    <>
+                      {" "}
+                      {t("Watching")} {status.watched_folders} {t("folders")}
+                    </>
+                  )}
+                  {status?.watch_enabled && status.watch_status.startsWith("failed") && (
+                    <>
+                      {" "}
+                      <span className="error-line">{status.watch_status}</span>
+                    </>
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${(status?.watch_enabled ?? true) === o.on ? "active" : ""}`}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_watch", { enabled: o.on });
+                        await refreshStatus();
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Full rescan")}</span>
+                <span className="set-desc">
+                  {t(
+                    "Every so often all folders are walked again, so anything the watcher missed still lands. Off leaves it to the watcher and to startup.",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[5, 15, 30, 60]
+                  .map((n) => ({ label: `${n} ${t("min")}`, minutes: n }))
+                  .concat([{ label: t("off"), minutes: 0 }])
+                  .map((o) => (
+                    <button
+                      key={o.minutes}
+                      className={`source ${(status?.rescan_minutes ?? 30) === o.minutes ? "active" : ""}`}
+                      onClick={async () => {
+                        try {
+                          await invoke("set_rescan_minutes", { minutes: o.minutes });
+                          await refreshStatus();
+                        } catch (e) {
+                          setLastError(String(e));
+                        }
+                      }}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                <button
+                  className="ghost-btn"
+                  disabled={status?.local_indexing ?? false}
+                  onClick={async () => {
+                    try {
+                      await invoke("index_local");
+                      await refreshStatus();
+                    } catch (e) {
+                      setLastError(String(e));
+                    }
+                  }}
+                >
+                  {status?.local_indexing ? t("rescanning") : t("Rescan now")}
+                </button>
               </div>
             </div>
 

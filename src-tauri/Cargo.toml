@@ -36,6 +36,7 @@ axum = "0.8"
 schemars = "1"
 getrandom = "0.3"
 tokio-util = "0.7"
+notify = "8.2.0"
 
 [dev-dependencies]
 # the MCP integration test talks to the server with rmcp's own client
