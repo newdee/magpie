@@ -3587,6 +3587,8 @@ fn show_window(app: &AppHandle) {
 }
 
 pub fn run() {
+    // `mut` is only exercised by the macOS activation-policy call below
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut app = tauri::Builder::default()
         // Registered before everything else so a second launch exits before it
         // opens the database or claims a tray icon. magpie lives in the tray
