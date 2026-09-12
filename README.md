@@ -68,6 +68,9 @@ vaguely remember (or drop in an image), hit Enter.
 - **Six things, one keystroke**: local files (full-text + by name), images
   by content, GitHub stars, browser bookmarks and history, your clipboard,
   and installed apps, all behind `Alt+Space`.
+- **Over full-screen apps too** (macOS): the palette opens on whatever Space
+  you are in, a full-screen browser or terminal included. magpie lives in the
+  menu bar there, with no Dock icon or Cmd-Tab entry, like Spotlight.
 - **Search inside your videos**: shots are detected and embedded, so a
   dropped image or a description finds the exact scene, with its time range.
 - **A real app launcher**: type an app name (prefix, substring, or acronym
@@ -264,7 +267,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 |---|---|
 | `Alt+Space` | summon / dismiss the palette (rebindable in settings) |
 | `↑` `↓` / `PgUp` `PgDn` | move / page through results |
-| `Enter` | context action: open a repo/bookmark/history page in the browser, reveal a file in Explorer/Finder, launch an app, or copy a clip |
+| `Enter` | context action: open a repo/bookmark/history page in the browser, reveal a file in Explorer/Finder, launch an app, or copy a clip. The box is empty on the next summon (`Esc` keeps what you typed) |
 | `Ctrl+Enter` | hand the query to the browser: URL-looking input opens directly, anything else web-searches |
 | `Ctrl+C` | copy what identifies the row: a path, a URL, a clip's text (`Ctrl+Shift+C`: the file itself) |
 | `Ctrl+Alt+Space` | in any app: look up the selected text (`Option+Shift+Space` on macOS; rebindable) |

@@ -3507,6 +3507,7 @@ dependencies = [
  "log",
  "magpie-core",
  "notify",
+ "objc2-app-kit",
  "reqwest 0.13.4",
  "rmcp",
  "schemars 1.2.2",

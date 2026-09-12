@@ -45,3 +45,8 @@ reqwest = { version = "0.13", features = ["json"] }
 
 [target."cfg(windows)".dependencies]
 winreg = "0.55"
+
+[target."cfg(target_os = \"macos\")".dependencies]
+# NSWindow collection behaviour: tao never sets FullScreenAuxiliary, so the
+# palette could not appear over another app's full-screen Space
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSWindow"] }

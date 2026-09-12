@@ -3510,6 +3510,29 @@ fn toggle_window(app: &AppHandle) {
     }
 }
 
+/// Let the palette appear over another app's full-screen Space.
+///
+/// `set_visible_on_all_workspaces` only sets `CanJoinAllSpaces`. A full-screen
+/// app lives in its own Space, and AppKit keeps every window out of it unless
+/// the window also carries `FullScreenAuxiliary`; without that flag the hotkey
+/// appears to do nothing while, say, a browser or video is full screen. Both
+/// flags are OR-ed in so tao's own bookkeeping of the first one is preserved.
+#[cfg(target_os = "macos")]
+fn allow_over_fullscreen(w: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    let w = w.clone();
+    let _ = w.clone().run_on_main_thread(move || {
+        let Ok(ptr) = w.ns_window() else { return };
+        // SAFETY: the pointer is the live NSWindow tao owns for this webview
+        // window, and NSWindow is main-thread-only, which this closure is
+        let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+        let behavior = ns.collectionBehavior()
+            | NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary;
+        ns.setCollectionBehavior(behavior);
+    });
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         // launcher position: horizontally centered, upper fifth (Spotlight
@@ -3555,6 +3578,8 @@ fn show_window(app: &AppHandle) {
         // may have claimed it) and follow the user across macOS Spaces
         let _ = w.set_always_on_top(true);
         let _ = w.set_visible_on_all_workspaces(true);
+        #[cfg(target_os = "macos")]
+        allow_over_fullscreen(&w);
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("palette-shown", ());
@@ -3562,7 +3587,7 @@ fn show_window(app: &AppHandle) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let mut app = tauri::Builder::default()
         // Registered before everything else so a second launch exits before it
         // opens the database or claims a tray icon. magpie lives in the tray
         // and answers to a hotkey, so clicking the icon again means "show me
@@ -3594,6 +3619,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             log::info!("magpie v{} starting", app.package_info().version);
+            // macOS activation policy is set in `run`, before the event loop
+            // starts; doing it here is too late for the palette window.
             let data_dir = app.path().app_data_dir()?;
             let db_path = data_dir.join("stars.db");
             let model_dir = data_dir.join("models");
@@ -3850,6 +3877,20 @@ pub fn run() {
             set_watch,
             set_rescan_minutes
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    // A launcher is an accessory app, like Spotlight: no Dock icon, no Cmd-Tab
+    // entry, and its windows can overlay another app's full-screen Space.
+    //
+    // This has to happen BEFORE the event loop starts, not in `setup`. tao
+    // applies the stored policy in applicationDidFinishLaunching and only then
+    // emits Ready; Tauri creates the config windows inside that Ready handler,
+    // just before `setup` runs. A window created while the app is Regular is
+    // never admitted to a full-screen Space afterwards, whatever the policy
+    // or collection behaviour is changed to later (verified on macOS 26), so
+    // the switch in `setup` looked right in every log and still left the
+    // palette invisible over full-screen apps.
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    app.run(|_app, _event| {});
 }
