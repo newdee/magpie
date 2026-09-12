@@ -1,3 +1,52 @@
+# 验收记录 2026-09-12（macOS 全屏之上唤出 + 用后清空查询，v0.2.2）
+
+用户反馈 macOS 下别的应用原生全屏时按 Alt+Space 看不到浮窗，只有切回普通桌面
+才出现；另外回车打开结果后再唤出，上次的搜索词还留在框里。
+
+## 根因
+
+- 全屏：AppKit 侧窗口 `collectionBehavior` 已含 CanJoinAllSpaces|FullScreenAuxiliary、
+  level 5、`isVisible=true`，但 `isOnActiveSpace=false`；用 CGS 私有接口查窗口
+  服务器，浮窗只挂在桌面 Space 1，全屏 Space 144 里没有它。同样 flag 的裸
+  NSWindow 能正常进全屏 Space。8 个 Swift 探针各测一种差异（defer 创建、
+  styleMask、透明/毛玻璃、WKWebView、NSStatusItem、KVO、调用顺序、激活策略
+  时机），只有一种复现：**窗口在 `NSApp.activationPolicy == .regular` 时创建，
+  之后永远进不了全屏 Space**，后改 Accessory、重设 collectionBehavior 都无效。
+  tao 在 `applicationDidFinishLaunching` 里显式设 Regular 后才发 Ready，Tauri
+  在 Ready 里先建配置窗口再跑 setup，所以 setup 里切 Accessory 已经晚了。
+- 清空：所有打开/复制/粘贴路径各自 `hide()`，没人动 query；`palette-shown`
+  只 `select()` 便于覆盖输入。
+
+## 实现
+
+- `lib.rs` `run()`：`build()` 之后、`app.run()` 之前 `set_activation_policy(Accessory)`，
+  tao 启动时应用的就是 Accessory，窗口在 Accessory 下创建。副作用：无 Dock
+  图标、无 Cmd-Tab 条目，只剩托盘（Spotlight/Raycast 同款）。
+- `allow_over_fullscreen`：每次唤出把 `FullScreenAuxiliary` OR 进
+  collectionBehavior（tao 只设 CanJoinAllSpaces）。macOS 直接依赖
+  `objc2-app-kit`（tao 已有的传递依赖，只开 NSWindow feature）。
+- `App.tsx` `finishAction`：打开结果、Ctrl+Enter、bang、计算/emoji 复制、剪贴条
+  复制/粘贴、笔记，统一先 hide 再清 query 与图片查询；Escape 只收起不清。
+  README 双语快捷键表与特性条、落地页一条。
+
+## 发现并修复
+
+| # | 视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 机制通路 | 在 setup 里切 Accessory：进程类型确实变成 UIElement，日志里 flag 全对，浮窗仍不在全屏 Space | 移到事件循环启动前 |
+| 2 | 误判 | 一次按键日志里出现 3 次 toggle，疑为热键重复触发 | 加事件日志证实是按了 3 下；插件按 id 存单个 handler，无泄漏 |
+| 3 | 误判 | NSWindow.windowNumber 4310 与服务器窗口 4369 不符，疑为窗口被重建 | 4310 是上一个进程的号，当前进程即 4369 |
+
+## 验证
+
+- 真机（macOS 26，dev 构建）：terminal 原生全屏下按 Alt+Space 浮窗叠在上方；
+  窗口服务器查询浮窗 Spaces=[153,150,1,144]（含当前全屏 Space 144，此前只有
+  [1]）；`lsappinfo` 进程类型 UIElement。
+- 回车打开结果后再唤出，输入框为空；Esc 收起保留。
+- `cargo check`、`cargo test --lib` 34/34、`tsc --noEmit` 通过。诊断日志全部移除。
+
+---
+
 # 验收记录 2026-09-04（文件变化监听 + 可调全量重扫，未出包）
 
 用户问本地文件变动如何感知、如何增量更新。现状：无监听，只有启动 + 每 30 分钟

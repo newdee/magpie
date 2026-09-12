@@ -958,6 +958,17 @@ export default function App() {
       ?.scrollIntoView({ block: "nearest" });
   }, [selected, results]);
 
+  // Every action that "uses" the query (open, copy, paste, note) ends here:
+  // the palette goes away and the query with it, so the next summon starts
+  // from an empty box instead of the last thing that was opened. Hide first
+  // so the empty state never flashes on screen. Escape deliberately keeps
+  // the query: dismissing is not finishing.
+  const finishAction = useCallback(async () => {
+    await getCurrentWindow().hide();
+    setQuery("");
+    setImageQuery(null);
+  }, []);
+
   const openHit = useCallback(async (hit: Hit | undefined) => {
     if (!hit) return;
     // frecency: remember what actually gets opened (stable identity per kind)
@@ -993,11 +1004,11 @@ export default function App() {
       } else {
         await invoke("open_file", { path: hit.path });
       }
-      await getCurrentWindow().hide();
+      await finishAction();
     } catch (e) {
       setLastError(String(e));
     }
-  }, []);
+  }, [finishAction]);
 
   // `note …` → one line into the notes file, then the palette goes away
   const saveNote = useCallback(async () => {
@@ -1005,12 +1016,11 @@ export default function App() {
     if (!n) return;
     try {
       await invoke("append_note", { text: n.text });
-      setQuery("");
-      await getCurrentWindow().hide();
+      await finishAction();
     } catch (e) {
       setLastError(String(e));
     }
-  }, [noteHit]);
+  }, [noteHit, finishAction]);
 
   // Ctrl/Cmd+Enter hands the raw query to the default browser: a URL-looking
   // input opens directly, anything else becomes a web search
@@ -1026,11 +1036,11 @@ export default function App() {
         : `https://www.google.com/search?q=${encodeURIComponent(q)}`;
     try {
       await invoke("open_repo", { url });
-      await getCurrentWindow().hide();
+      await finishAction();
     } catch (e) {
       setLastError(String(e));
     }
-  }, []);
+  }, [finishAction]);
 
   const switchSource = useCallback((idx: number) => {
     setSourceIdx(idx);
@@ -1210,18 +1220,14 @@ export default function App() {
           e.preventDefault();
           if (emojiHits && emojiHits.length > 0) {
             // emoji mode: Enter copies the first match (click copies any)
-            void invoke("copy_clip", { text: emojiHits[0].emoji }).then(() =>
-              getCurrentWindow().hide(),
-            );
+            void invoke("copy_clip", { text: emojiHits[0].emoji }).then(finishAction);
           } else if (topRowActive && noteHit && !e.ctrlKey && !e.metaKey) {
             void saveNote();
           } else if (topRowActive && bangHit && !e.ctrlKey && !e.metaKey) {
-            void invoke("open_repo", { url: bangHit.url }).then(() => getCurrentWindow().hide());
+            void invoke("open_repo", { url: bangHit.url }).then(finishAction);
           } else if (topRowActive && calcHit && !e.ctrlKey && !e.metaKey) {
             // color results copy the hex, not the whole display string
-            void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(() =>
-              getCurrentWindow().hide(),
-            );
+            void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(finishAction);
           } else if (e.ctrlKey || e.metaKey) {
             openWeb();
           } else if (e.shiftKey && source === "clips" && max >= 0) {
@@ -1231,7 +1237,12 @@ export default function App() {
               .filter((r) => r.kind === "clip" && r.clip_kind !== "image")
               .map((r) => (r as ClipHit).content)
               .join("\n");
-            if (text) void invoke("paste_clip", { text });
+            if (text) {
+              void invoke("paste_clip", { text }).then(() => {
+                setQuery("");
+                setImageQuery(null);
+              });
+            }
           } else if (source === "clips" && selAnchor != null && selHi > selLo) {
             // multi-select: copy every selected clip, list order, one per line
             const joined = results
@@ -1239,7 +1250,7 @@ export default function App() {
               .filter((r) => r.kind === "clip" && r.clip_kind !== "image")
               .map((r) => (r as ClipHit).content)
               .join("\n");
-            void invoke("copy_clip", { text: joined }).then(() => getCurrentWindow().hide());
+            void invoke("copy_clip", { text: joined }).then(finishAction);
           } else {
             openHit(results[selected]);
           }
@@ -1335,7 +1346,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, runSearch],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, runSearch, finishAction],
   );
 
   const refresh = useCallback(async () => {
@@ -3138,7 +3149,7 @@ export default function App() {
               className={`emoji-cell ${i === 0 ? "first" : ""}`}
               title={h.name}
               onClick={() =>
-                void invoke("copy_clip", { text: h.emoji }).then(() => getCurrentWindow().hide())
+                void invoke("copy_clip", { text: h.emoji }).then(finishAction)
               }
             >
               {h.emoji}
@@ -3153,9 +3164,7 @@ export default function App() {
               <div
                 className={`row extra-row ${topRowActive ? "selected" : ""}`}
                 onClick={() =>
-                  void invoke("open_repo", { url: bangHit.url }).then(() =>
-                    getCurrentWindow().hide(),
-                  )
+                  void invoke("open_repo", { url: bangHit.url }).then(finishAction)
                 }
               >
                 <div className="row-main">
@@ -3183,9 +3192,7 @@ export default function App() {
               <div
                 className={`row extra-row ${topRowActive ? "selected" : ""}`}
                 onClick={() =>
-                  void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(() =>
-                    getCurrentWindow().hide(),
-                  )
+                  void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(finishAction)
                 }
               >
                 <div className="row-main">
