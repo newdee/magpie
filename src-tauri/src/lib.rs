@@ -1252,6 +1252,7 @@ fn spawn_app_scan(app: AppHandle) {
             }
         }
         *apps.lock().unwrap() = list;
+        tauri::async_runtime::spawn(prefetch_app_icons(app));
     });
 }
 
@@ -1940,13 +1941,44 @@ async fn app_icon(
     if !known {
         return Ok(None);
     }
-    let icon = read_app_icon(&app, target.clone()).await;
-    let url = icon.map(|i| {
-        use base64::Engine;
-        format!("data:{};base64,{}", i.mime, base64::engine::general_purpose::STANDARD.encode(i.bytes))
-    });
+    let url = read_app_icon(&app, target.clone()).await.map(icon_data_url);
     state.app_icons.lock().unwrap().insert(target, url.clone());
     Ok(url)
+}
+
+fn icon_data_url(i: magpie_core::apps::Icon) -> String {
+    use base64::Engine;
+    format!("data:{};base64,{}", i.mime, base64::engine::general_purpose::STANDARD.encode(i.bytes))
+}
+
+/// Read every listed app's icon into the cache, one at a time, right after
+/// the app scan, while the palette is most likely still hidden. On macOS
+/// each read holds the main thread for 50 ms to a second (measured on a CI
+/// Mac; the first read warms the icon services up), and WKWebView's key
+/// events travel through that same thread: read on demand, the first search
+/// that listed apps stalled typing. The pause between icons lets queued
+/// events through. Elsewhere the reads are cheap (10 to 60 ms each, on the
+/// blocking pool) and this only makes the first search show icons at once.
+async fn prefetch_app_icons(app: AppHandle) {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return; // an alias change rescanned apps while a prefetch still runs
+    }
+    let state = app.state::<AppState>();
+    let targets: Vec<String> = state.apps.lock().unwrap().iter().map(|a| a.target.clone()).collect();
+    let started = std::time::Instant::now();
+    let mut read = 0usize;
+    for target in targets {
+        if state.app_icons.lock().unwrap().contains_key(&target) {
+            continue; // cached, or fetched on demand meanwhile
+        }
+        let url = read_app_icon(&app, target.clone()).await.map(icon_data_url);
+        state.app_icons.lock().unwrap().insert(target, url);
+        read += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    log::info!("app icons: {read} read ahead in {} ms", started.elapsed().as_millis());
+    RUNNING.store(false, Ordering::SeqCst);
 }
 
 /// AppKit wants the main thread; the Windows shell and the Linux file reads
@@ -2506,6 +2538,11 @@ fn start_local_index(app: AppHandle, scope: Scope) -> bool {
                 Scope::All => files::index_folders(&conn, progress)?,
                 Scope::Paths(paths) => files::index_changed(&conn, paths, progress)?,
             };
+            // the scan may have brought the first images or videos in: start
+            // the image model now, not after the text embedding below, which
+            // can wait a long time on a busy text model (first-run history
+            // catch-up held it 40 s); its own catch-up embeds the images
+            ensure_image_model(&app2);
             let embedded = match embedder.lock().unwrap().as_mut() {
                 Some(e) => files::embed_pending_files(&conn, e, |done, total| {
                     let _ = app2.emit(
