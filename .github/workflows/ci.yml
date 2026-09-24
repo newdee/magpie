@@ -68,3 +68,18 @@ jobs:
 
       - name: App icons through AppKit
         run: cargo test -p magpie-core --test app_icons_main
+
+      # magpie reads app icons on background threads; Apple's Main Thread
+      # Checker must find nothing in that, and must catch the control case
+      # (proof that it was loaded at all)
+      - name: App icons off the main thread, under the Main Thread Checker
+        run: |
+          bin=$(cargo test -p magpie-core --test app_icons_main --no-run --message-format=json \
+            | jq -r 'select(.executable != null and .target.name == "app_icons_main") | .executable')
+          mtc="$(xcode-select -p)/usr/lib/libMainThreadChecker.dylib"
+          test -f "$mtc"
+          DYLD_INSERT_LIBRARIES="$mtc" MTC_CRASH_ON_REPORT=1 "$bin"
+          if DYLD_INSERT_LIBRARIES="$mtc" MTC_CRASH_ON_REPORT=1 MAGPIE_MTC_CONTROL=1 "$bin"; then
+            echo "the Main Thread Checker did not catch the control case"; exit 1
+          fi
+          echo "control case caught, as it should be"

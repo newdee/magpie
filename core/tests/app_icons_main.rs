@@ -1,10 +1,15 @@
-//! App icons, read on the process's main thread the way the app does it.
+//! App icons, read the way the app reads them.
 //!
-//! A plain `#[test]` runs on a worker thread, and on macOS AppKit belongs to
-//! the main thread, so this file opts out of the test harness (see
-//! Cargo.toml) and runs its checks straight from `main`. CI runs it on
-//! macOS; Windows and Linux are covered by the unit tests in `apps.rs` and
-//! this binary only confirms the call is harmless there.
+//! A plain `#[test]` runs on a worker thread, and on macOS AppKit cares about
+//! threads, so this file opts out of the test harness (see Cargo.toml) and
+//! runs from `main`. CI runs it on macOS three ways:
+//!   - plain: icons read on the main thread and on a background thread
+//!   - under Apple's Main Thread Checker with MTC_CRASH_ON_REPORT=1: the
+//!     background reads must not trip it (magpie reads icons off the main
+//!     thread, so a report here would be a real bug)
+//!   - control, MAGPIE_MTC_CONTROL=1: a call the checker must catch, run off
+//!     the main thread, so CI proves the checker was actually loaded
+//! Windows and Linux are covered by the unit tests in `apps.rs`.
 
 fn main() {
     #[cfg(target_os = "macos")]
@@ -19,6 +24,19 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn macos() {
+    if std::env::var("MAGPIE_MTC_CONTROL").is_ok() {
+        std::thread::spawn(|| {
+            use objc2::MainThreadMarker;
+            // SAFETY: deliberately wrong. An NSView belongs to the main
+            // thread; the Main Thread Checker must stop the process here.
+            let _view = objc2_app_kit::NSView::new(unsafe { MainThreadMarker::new_unchecked() });
+        })
+        .join()
+        .unwrap();
+        println!("control: an NSView was created off the main thread and nothing stopped it");
+        return;
+    }
+
     // bundles every macOS install ships, plus whatever list_apps finds
     let mut targets: Vec<String> = [
         "/System/Applications/Calculator.app",
@@ -31,8 +49,26 @@ fn macos() {
     .collect();
     assert!(!targets.is_empty(), "no system app bundles found");
     targets.extend(magpie_core::apps::list_apps().into_iter().take(8).map(|a| a.target));
-    let mut ok = 0;
-    for t in &targets {
+
+    println!("-- main thread");
+    let main_ms = read_all(&targets);
+    // what the app does: every read on a background thread, several at once
+    println!("-- background threads");
+    let bg: Vec<std::thread::JoinHandle<u128>> = targets
+        .chunks(4)
+        .map(|chunk| {
+            let chunk = chunk.to_vec();
+            std::thread::spawn(move || read_all(&chunk))
+        })
+        .collect();
+    let bg_ms: u128 = bg.into_iter().map(|h| h.join().expect("background read panicked")).sum();
+    println!("app_icons_main: {} icons ok; main thread {main_ms} ms, background {bg_ms} ms", targets.len());
+}
+
+#[cfg(target_os = "macos")]
+fn read_all(targets: &[String]) -> u128 {
+    let mut total = 0;
+    for t in targets {
         let started = std::time::Instant::now();
         let icon = magpie_core::apps::icon(t, 64).unwrap_or_else(|| panic!("no icon for {t}"));
         assert_eq!(icon.mime, "image/png");
@@ -41,8 +77,9 @@ fn macos() {
         assert!(w >= 32 && h >= 32 && w <= 256 && h <= 256, "{t}: {w}x{h}");
         let visible = img.pixels().filter(|p| p[3] > 0).count();
         assert!(visible > (w * h / 10) as usize, "{t}: icon is nearly empty");
-        println!("{:>4}ms {w}x{h} {:>6}B {t}", started.elapsed().as_millis(), icon.bytes.len());
-        ok += 1;
+        let ms = started.elapsed().as_millis();
+        total += ms;
+        println!("{ms:>5}ms {w}x{h} {:>6}B {t}", icon.bytes.len());
     }
-    println!("app_icons_main: {ok} icons ok");
+    total
 }
