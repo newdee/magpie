@@ -348,10 +348,13 @@ pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize, use_pinyin: bool
             Some(0.9 - 0.001 * name.len() as f32) // shorter prefix match ranks higher
         } else if matches_word_start(&q, raw) {
             Some(0.75) // "mac" -> "MyMacCleaner", "code" -> "Visual Studio Code"
+        } else if matches_initials(&q, raw) {
+            // "vsc" -> "Visual Studio Code", "mt" -> "MacTap". A whole acronym
+            // says more than letters that happen to sit inside a word: below
+            // it, "mpt" lost its app to six "Command Prompt" shortcuts
+            Some(0.7)
         } else if name.contains(&q) {
             Some(0.6)
-        } else if matches_initials(&q, raw) {
-            Some(0.5) // "vsc" -> "Visual Studio Code", "mt" -> "MacTap"
         } else if use_pinyin {
             match_pinyin(&q, raw)
         } else {
@@ -480,6 +483,9 @@ fn lower_chars(raw: &str) -> Vec<char> {
 /// start of the name itself is the plain prefix match, scored above this.
 fn matches_word_start(q: &str, raw: &str) -> bool {
     let qc: Vec<char> = q.chars().collect();
+    if qc.is_empty() {
+        return false; // an empty query starts every word; it means nothing
+    }
     let lc = lower_chars(raw);
     let starts = word_starts(raw);
     (1..lc.len()).any(|i| starts[i] && lc[i..].starts_with(&qc))
@@ -952,6 +958,10 @@ mod tests {
         assert_eq!(match_apps(&[app("MacTap")], "mt", 10, true)[0].name, "MacTap");
         assert_eq!(match_apps(&[app("OmniDiskSweeper")], "ods", 10, true)[0].name, "OmniDiskSweeper");
         assert_eq!(match_apps(&[app("MyMacCleaner")], "mmc", 10, true)[0].name, "MyMacCleaner");
+        // an acronym outranks letters that merely sit inside a word (the
+        // "mpt" vs "Command Prompt" case found on a real Start Menu)
+        let apps = vec![app("Developer Command Prompt"), app("MagpieProbeTool"), app("x64 Native Tools Command Prompt")];
+        assert_eq!(match_apps(&apps, "mpt", 10, true)[0].name, "MagpieProbeTool");
         // the report's case: four apps start with "mac" and the cap used to
         // cut MyMacCleaner; a word-start match now ranks it above substrings
         let apps = vec![app("Mac Sai"), app("MacTap"), app("MacEverything"), app("MyMacCleaner"), app("Emacs")];
@@ -968,6 +978,35 @@ mod tests {
         assert!(matches_word_start("tap", "MacTap"));
         assert!(!matches_word_start("mac", "MacTap"), "the name start is the prefix tier, not this one");
         assert_eq!(word_starts("iTerm"), vec![true, true, false, false, false]);
+    }
+
+    #[test]
+    fn degenerate_names_and_files_never_panic_or_invent_matches() {
+        // empty, symbols only, emoji, digits
+        assert!(word_starts("").is_empty());
+        assert_eq!(word_starts("--"), vec![false, false]);
+        assert_eq!(word_starts("🍎Music"), vec![false, true, false, false, false, false]);
+        assert_eq!(word_starts("Office365"), vec![true, false, false, false, false, false, false, false, false]);
+        assert!(!matches_initials("m", "MacTap"), "one letter is never an acronym");
+        assert!(!matches_word_start("", "MacTap"));
+        assert!(match_apps(&[app("")], "a", 10, true).is_empty());
+        // a capital straight after a digit or an accent does not start a word
+        assert!(!matches_initials("oo", "Office365Online"));
+        assert!(matches_initials("éd", "Éclair Draw"));
+        // unreadable strings files and bare bundles give no names
+        let dir = std::env::temp_dir().join(format!("magpie-degenerate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Bare.app/Contents/Resources/zh_CN.lproj")).unwrap();
+        std::fs::write(dir.join("Bare.app/Contents/Resources/zh_CN.lproj/InfoPlist.strings"), [0xFF, 0xFE, 0x00]).unwrap();
+        std::fs::write(dir.join("Bare.app/Contents/Resources/InfoPlist.loctable"), b"not a plist").unwrap();
+        assert!(bundle_names(&dir.join("Bare.app")).is_empty());
+        assert!(bundle_names(&dir.join("Missing.app")).is_empty());
+        assert!(read_strings(&dir.join("nope.strings")).is_none());
+        // a Chinese interface keeps the installed name when there is no Chinese one
+        let mut plain = vec![app("Terminal")];
+        localize(&mut plain, "zh");
+        assert_eq!(plain[0].name, "Terminal");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

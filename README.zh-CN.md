@@ -173,12 +173,16 @@ README 全文（分块嵌入）。自动检测取消 star，README 用 ETag 增�
 ### 应用启动
 
 在「本地」tab 输入时，匹配的已装应用作为置顶命中出现，带应用自己的图标和
-`应用` 徽章，`Enter` 启动。名字支持前缀、子串、首字母缩写匹配（`vsc` → Visual Studio
-Code）。中文名还支持全拼和首字母拼音（`wx` / `weixin` → 微信，
+`应用` 徽章，`Enter` 启动。名字支持前缀、任一单词开头（`mac` → MyMacCleaner）、
+首字母缩写（`vsc` → Visual Studio Code，`mt` → MacTap：驼峰命名的大写字母也算单词开头）
+和子串匹配。中文名还支持全拼和首字母拼音（`wx` / `weixin` → 微信，
 `wangyiyun` → 网易云音乐），多音字全覆盖（`cq`、`zq` 都能找到重庆…），
 启动应用彻底告别切输入法，设置里可开关。应用来源：Windows 开始菜单、
-macOS `/Applications`、Linux `.desktop`。应用列表每 30 分钟在后台刷新一次，
-新装的应用不用重启就能搜到；图标有缓存，只有新装或更新过的应用才重新读取。
+macOS `/Applications`、Linux `.desktop`。macOS 上文件夹里的应用（实用工具、厂商
+文件夹）也能找到，应用还认它的本地化名称：`活动监视器` 或 `huodong` 都能找到
+Activity Monitor，界面为中文时直接显示中文名。唤出浮窗时会刷新应用列表（最多每分钟
+一次），后台也每 30 分钟刷新一次，新装或移动过的应用不用重启就能搜到；图标有缓存，
+只有新装或更新过的应用才重新读取。
 
 应用还认别名：内置中英名对照表打通两个方向（输 `lark` 找到飞书、输
 `weixin` 找到装成 *WeChat* 的微信），Linux 免费吃进 `.desktop` 的

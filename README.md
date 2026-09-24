@@ -224,14 +224,19 @@ are obvious.
 
 Typing in the Local tab surfaces matching installed apps as top hits, each
 with its own icon and an `App` badge, and `Enter` launches. Names match by prefix,
-substring, or acronym (`vsc` → Visual Studio Code). Chinese names also match
+by the start of any word (`mac` → MyMacCleaner), by acronym (`vsc` → Visual
+Studio Code, `mt` → MacTap: camelCase humps count as words), or by substring. Chinese names also match
 by full pinyin or initials (`wx` / `weixin` → 微信, `wangyiyun` → 网易云音乐),
 heteronyms included (`cq` and `zq` both find 重庆…), so you never switch input
 methods to launch an app. Toggleable in settings. Apps come from the Start
 Menu on Windows, `/Applications` on macOS, and `.desktop` entries on Linux.
-The list refreshes every 30 minutes in the background, so a newly installed
-app shows up without a restart; icons are cached and re-read only for apps
-that are new or updated.
+On macOS, apps inside folders are found too (Utilities, a vendor's folder),
+and an app also answers to its localized name: `活动监视器` or `huodong` finds
+Activity Monitor, shown under its Chinese name when the interface is in
+Chinese. The list refreshes when you summon the palette (at most once a
+minute) and every 30 minutes in the background, so a newly installed or
+moved app is found without a restart; icons are cached and re-read only for
+apps that are new or updated.
 
 Apps also answer to aliases: a built-in bilingual table bridges Chinese and
 English product names (`lark` finds 飞书, `weixin` finds an app installed as

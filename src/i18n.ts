@@ -335,6 +335,8 @@ const ZH: Record<string, string> = {
   Image: "图片",
   Shots: "镜头",
   "No preview": "无可预览内容",
+  "That app has moved or been removed; the app list was refreshed.":
+    "这个应用已被移动或删除，应用列表已刷新。",
   "Launch at login": "开机启动",
   "Start magpie in the tray when you log in.": "登录系统后在托盘里启动 magpie。",
   "Hide on click-out": "失焦时隐藏",

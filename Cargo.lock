@@ -3583,6 +3583,7 @@ dependencies = [
  "ort",
  "pdf-inspector",
  "pinyin",
+ "plist",
  "reqwest 0.13.4",
  "rusqlite",
  "serde",

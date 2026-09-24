@@ -1126,9 +1126,17 @@ export default function App() {
       }
       await finishAction();
     } catch (e) {
-      setLastError(String(e));
+      const msg = String(e);
+      if (hit.kind === "app" && msg.includes("moved or been removed")) {
+        // the backend is rescanning apps; search again once it has, so the
+        // stale row goes away
+        setLastError(t("That app has moved or been removed; the app list was refreshed."));
+        setTimeout(() => void runSearch(queryRef.current, sourceRef.current), 1200);
+      } else {
+        setLastError(msg);
+      }
     }
-  }, [finishAction]);
+  }, [finishAction, runSearch]);
 
   // `note …` → one line into the notes file, then the palette goes away
   const saveNote = useCallback(async () => {
