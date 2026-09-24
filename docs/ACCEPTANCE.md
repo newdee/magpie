@@ -1,3 +1,103 @@
+# 验收记录 2026-09-24（issue #4：首装用户十条建议，未出包）
+
+用户在 issue #4 提了十条（macOS 用户）。已回复 issue；除 Homebrew（排到再下一
+版）外本批全做。
+
+## 实现
+
+- Esc：焦点落在 `<body>`（点了行、空白处）时窗口级监听也走完整阶梯，最后收起
+  浮窗。原来只会关设置，不会收起，这就是用户说的"时灵时不灵"。
+- 失焦隐藏：`onFocusChanged` 失焦 120 ms 后仍未回焦就收起；原生对话框期间用
+  `holdOpen` 计数挡住。默认 macOS 开、Windows/Linux 关（从资源管理器拖文件进来
+  需要窗口失焦不消失），设置可切，随设置导出。
+- 设置快捷键：按字符或物理键匹配。Mac 上 Option+, 打出 "≤"，原来按字符匹配
+  永远失败；底栏在 Mac 上写 ⌘,、⌘⏎、⌘⌦。
+- Ctrl/Cmd+1~9 直达 tab（按 tab 栏顺序），可改 Alt 或关闭；读物理键 `Digit*`，
+  AltGr（=Ctrl+Alt）两种模式都不吃，不影响欧洲键盘打符号。tab 悬停提示写出
+  快捷键，另加一条启动小贴士。
+- 划词/粘贴的合成按键改到主线程。enigo 0.2.1 在 macOS 把字母转键码要调
+  `TISCopyCurrentKeyboardInputSource`，macOS 14 起非主线程调用直接杀进程：
+  这是"划词后程序消失"的最可能原因（推断，无 Mac 真机复现）。
+- 内存：
+  - SigLIP 按需加载：索引里有图片/视频或剪贴板里有图片才加载；启动、每次索引
+    结束、剪贴板记下图片、以图搜图时检查（`files::needs_image_model`）。
+  - 所有 ONNX 会话（文本、图片、OCR）关掉 CPU 内存池（`threads::cpu_provider`）。
+    内存池把每批推理的峰值永久留着，这才是 GB 级占用的主因。
+- 开机启动：`tauri-plugin-autostart`，状态从系统读回（Run 键 / LaunchAgent /
+  XDG），不另存。
+- 应用图标：Windows `IShellItemImageFactory`（无快捷方式箭头，预乘 alpha 还原），
+  macOS `NSWorkspace iconForFile`（主线程），Linux `.desktop` 的 `Icon=` 查
+  hicolor/pixmaps；按启动目标缓存，只服务应用列表里的目标。
+- 预览：mp4 在"全部"范围里是普通文件行，内容为空，原来只显示"无可预览内容"。
+  现在有镜头显示镜头；没有镜头且本机已有 ffmpeg 就截一帧（十分之一处，最多一
+  分钟；太短回退首帧），预览绝不触发 ffmpeg 下载；其余无内容文件显示所在
+  文件夹、大小、修改时间。
+- CI 加 macOS job：clippy + 主线程上跑 AppKit 取图标的无 harness 测试。
+
+## 发现并修复
+
+| # | 轮/视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | R1 机制通路（实测） | ORT CPU 内存池永久保留批次峰值：e5-small 跑 4 批 16×512 后 1910 MB，关池 784 MB | 三类会话统一 `cpu_provider()` 关池；向量逐位相同（maxdiff 0） |
+| 2 | R1 单测 | Windows 开始菜单路径含 `/`，shell 解析失败，图标全为空 | 转 `\` |
+| 3 | R1 编译 | autostart `macos_launcher` 仅 macOS 存在；重复 i18n 键 Video；clippy `chunks_exact` | 改 `init()`；去重；`as_chunks` |
+| 4 | R2 代码正确 | `system_ffmpeg_works` 裸 `Command`：GUI 进程拉控制台程序会闪黑窗（预览新增了触发路径） | `CREATE_NO_WINDOW` |
+| 5 | R2 代码正确 | 启动应用 `cmd /c start` 同样闪黑窗（既有问题，同类） | `CREATE_NO_WINDOW`；实测目标照常启动（204 ms） |
+| 6 | R3 边界 | 设置快捷键只认物理键会坏 AZERTY（"," 在 KeyM 位） | 字符或物理键任一匹配 |
+| 7 | R3 边界 | 底栏新增 1~9 提示把索引状态挤没（有结果时 64→6 px） | 底栏不列，改 tab 悬停 + 设置行 + 小贴士；状态回到 64/111 px（与改前同） |
+| 8 | R3 边界 | `.desktop` 写 `Icon=foo.png` 时去找 foo.png.png | 纯函数 `desktop_icon_name` 去扩展名 + 单测 |
+| 9 | R3 CI | macOS 上 `player_seek_args` 无调用，clippy 死代码（既有，CI 首次跑 Mac 才暴露） | `cfg_attr(macos, allow(dead_code))` |
+| 10 | R4 实测 | macOS 取图标占主线程（CI Mac：首个 1037 ms，之后 50–600 ms），WKWebView 键盘事件也走主线程，首次搜出应用会卡打字 | 应用扫描后逐个预读进缓存（间隔 25 ms 让出主线程）；Windows 141 个 8 s，首个请求 2 ms 命中 |
+| 11 | R4 实测 | 全新档案里第一张图到图片模型就绪 45 s：`ensure` 只在索引一轮结束时调 | 扫描后立刻调一次。复测仍 45 s：卡在前一轮等文本模型（首启浏览历史补嵌入占锁），是既有的单嵌入锁设计，记为观察 |
+
+仪器问题（不计产品问题，照记）：旧版 exe 复制成 `old-magpie.exe` 进程名不同，
+停进程没停掉，清理时删临时目录失败，真实数据留在备份目录；手动杀进程、核对
+（1908 repo / 190 文件 / quick_check ok）后还原，脚本改为子目录同名 exe、按
+名模糊停、清理前查链接。PowerShell 的 `R` 是 Invoke-History 别名。T9 选择器
+把范围小按钮也算成 tab；T9 假设目标行排第一（语义检索会把所有文件都列出）。
+
+## 数据
+
+- 内存（全新档案、无文件夹、空闲 60 s，magpie.exe 私有字节）：旧版 2320 MB；
+  只按需加载 1864 MB；按需加载 + 关内存池 952 MB。T9 后（两个模型都在、嵌入过
+  图片和视频）1269 MB。探针：文本模型加载 771 MB → 4 批后 783 MB；SigLIP 加载
+  后 1294 MB → 嵌入 16 张后 1295 MB。
+- 真机 T9（生产 exe，WebView2 调试口驱动 DOM，不向桌面发按键）：图片模型
+  idle→loading→ready；mp4 截帧 200 ms、之后镜头；图标冷 79 ms / 热 3 ms；Run 键
+  写入/删除；Esc、Ctrl+2、失焦开/关、Option+, 全过。
+
+## 连续三轮干净（R1–R4 均有发现，R5 起重新计数）
+
+- R5 逻辑/不变量（所有入口执法）：4 个 ONNX 会话构造点 = 4 处 `cpu_provider()`；
+  4 个原生对话框全在 `holdOpen` 内，前端无 confirm/alert/prompt；6 个增改文件的
+  命令全走索引轮（轮末 + 扫描后都查图片模型），导入只写设置；Esc/失焦都算
+  "收起"不清查询，与上游 finishAction 语义一致。测试：166 通过；a1 0 FAIL、
+  a3-ipc 3/3、docs-parity 0 FAIL（新增 12 项必检）；pnpm build 过；T10 14/14。
+- R6 边界/退化：T11 11/11（损坏的 tabkeys/hideonblur 回落默认；选择跨刷新保留
+  且存 id；Alt 模式下 Ctrl+3 无效、Option+3（"£"）切到第三个 tab；AltGr+7、
+  Shift+Alt+3、Alt+0、Alt+小键盘 1 都不动；裸逗号不开设置；Option+, 开 Cmd+, 关；
+  body 上 Esc 先关设置）。复查：0 个应用时预读空转，空/未知目标得 None，库打不
+  开时保持 idle。
+- R7 可复现：套件 ×3 每次 166 通过、排序后逐行一致；T10、T11 各 ×2 输出逐字节
+  一致。另 R4 的 T9 ×2 判定 29/29 一致，确定性输出（截帧 33456 B64、图标
+  6810 B）两次相同。
+- CI（246e3fa）：Linux + 新增 macOS 均绿；macOS 主线程取 11 个系统/应用图标全
+  部 64×64（含 macOS 26 的系统设置）。
+
+## 未验证项
+
+- macOS 真机：划词崩溃的根因是推断（无 Mac 复现），修法按推断做，请报告者确认；
+  失焦隐藏、⌘+数字、Option+, 的真实按键（只用合成事件验证了匹配逻辑）；
+  LaunchAgent 开机启动；关内存池后的 macOS 内存数（只在 Windows 量过）。
+- Linux：图标只有编译 + 解析单测，没有真实桌面环境跑过。
+- 剪贴板出现第一张图片触发加载图片模型：只做了代码审查，端到端需要改动用户
+  的剪贴板，没做。
+- `holdOpen` 挡住真实原生对话框：需要人点对话框，没做。
+- 首启时图片模型最多等文本模型的历史补嵌入约 40 s（见第 11 项）。
+- Homebrew 按用户安排放到再下一版。
+
+---
+
 # 验收记录 2026-09-12（macOS 全屏之上唤出 + 用后清空查询，v0.2.2）
 
 用户反馈 macOS 下别的应用原生全屏时按 Alt+Space 看不到浮窗，只有切回普通桌面
