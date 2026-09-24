@@ -185,7 +185,9 @@ Activity Monitor，界面为中文时直接显示中文名。唤出浮窗时会�
 只有新装或更新过的应用才重新读取。
 
 应用还认别名：内置中英名对照表打通两个方向（输 `lark` 找到飞书、输
-`weixin` 找到装成 *WeChat* 的微信），Linux 免费吃进 `.desktop` 的
+`weixin` 找到装成 *WeChat* 的微信），常用软件简称也是内置的（`ps` 找到
+Adobe Photoshop 2026、`ae` 找到 After Effects、`ppt` 找到 PowerPoint，取自
+Adobe 图标上的官方简称），Linux 免费吃进 `.desktop` 的
 `Keywords=`/`GenericName=`，设置里还能自定义规则（`proxy = clash`，一行
 一条）。别名当作第二名字参与匹配，拼音同样生效。
 

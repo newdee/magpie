@@ -240,7 +240,9 @@ apps that are new or updated.
 
 Apps also answer to aliases: a built-in bilingual table bridges Chinese and
 English product names (`lark` finds 飞书, `weixin` finds an app installed as
-*WeChat*, whichever direction your system has), Linux picks up `.desktop`
+*WeChat*, whichever direction your system has), well-known short names come
+built in (`ps` finds Adobe Photoshop 2026, `ae` After Effects, `ppt`
+PowerPoint: the marks on Adobe's own icons), Linux picks up `.desktop`
 `Keywords=`/`GenericName=` for free, and you can add your own rules in
 Settings (`proxy = clash`, one per line). Aliases match like second names,
 pinyin included.

@@ -93,19 +93,78 @@ const NAME_GROUPS: &[&[&str]] = &[
     &["Microsoft Edge", "Edge"],
 ];
 
-/// Aliases the built-in table grants a given app name.
+/// Short names people use for well-known apps whose installed names do not
+/// spell them (issue #4: "ps" did not find "Adobe Photoshop 2026"). An app
+/// gets the short names when every phrase of a rule appears in its name as
+/// whole words, in any case, so a vendor's name with a version year still
+/// matches while an unrelated app that merely says "Bridge" or "Animate"
+/// does not. Only names printed on the apps' own icons (Adobe's two-letter
+/// marks) or used by nearly everyone go here; anything else is a user alias.
+const ABBREVIATIONS: &[(&[&str], &[&str])] = &[
+    (&["adobe", "photoshop"], &["ps"]),
+    (&["adobe", "illustrator"], &["ai"]),
+    (&["adobe", "premiere pro"], &["pr"]),
+    (&["adobe", "premiere rush"], &["ru"]),
+    (&["adobe", "after effects"], &["ae"]),
+    (&["adobe", "audition"], &["au"]),
+    (&["adobe", "lightroom"], &["lr"]),
+    (&["adobe", "lightroom classic"], &["lrc"]),
+    (&["adobe", "indesign"], &["id"]),
+    (&["adobe", "incopy"], &["ic"]),
+    (&["adobe", "animate"], &["an"]),
+    (&["adobe", "dreamweaver"], &["dw"]),
+    (&["adobe", "bridge"], &["br"]),
+    (&["adobe", "media encoder"], &["me"]),
+    (&["adobe", "character animator"], &["ch"]),
+    (&["adobe", "dimension"], &["dn"]),
+    (&["adobe", "substance 3d painter"], &["pt"]),
+    (&["adobe", "substance 3d designer"], &["ds"]),
+    (&["adobe", "substance 3d sampler"], &["sa"]),
+    (&["adobe", "substance 3d stager"], &["sg"]),
+    (&["powerpoint"], &["ppt"]),
+];
+
+/// The words of a name, lowercased, split at anything that is not a letter
+/// or a digit.
+fn plain_words(name: &str) -> Vec<String> {
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// Does `phrase` ("premiere pro") occur in `words` as consecutive whole words?
+fn has_phrase(words: &[String], phrase: &str) -> bool {
+    let want = plain_words(phrase);
+    !want.is_empty() && words.windows(want.len()).any(|w| w == want.as_slice())
+}
+
+/// Aliases the built-in tables grant a given app name: the zh↔en name
+/// groups (exact name) and the well-known short names (whole-word phrases).
 fn builtin_aliases(name: &str) -> Vec<String> {
     let ln = name.trim().to_lowercase();
-    for group in NAME_GROUPS {
-        if group.iter().any(|m| m.to_lowercase() == ln) {
-            return group
+    let mut out: Vec<String> = NAME_GROUPS
+        .iter()
+        .find(|group| group.iter().any(|m| m.to_lowercase() == ln))
+        .map(|group| {
+            group
                 .iter()
                 .filter(|m| m.to_lowercase() != ln)
                 .map(|m| m.to_string())
-                .collect();
+                .collect()
+        })
+        .unwrap_or_default();
+    let words = plain_words(name);
+    for (phrases, short) in ABBREVIATIONS {
+        if phrases.iter().all(|p| has_phrase(&words, p)) {
+            for s in *short {
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(s)) {
+                    out.push(s.to_string());
+                }
+            }
         }
     }
-    Vec::new()
+    out
 }
 
 /// Apply user alias rules ("proxy = Clash for Windows": alias → app-name
@@ -978,6 +1037,34 @@ mod tests {
         assert!(matches_word_start("tap", "MacTap"));
         assert!(!matches_word_start("mac", "MacTap"), "the name start is the prefix tier, not this one");
         assert_eq!(word_starts("iTerm"), vec![true, true, false, false, false]);
+    }
+
+    /// issue #4: "ps" found Apps, Maps and Tips (their names contain "ps")
+    /// but not Photoshop. The short names ride along automatically.
+    #[test]
+    fn well_known_short_names_find_adobe_apps_and_nothing_else() {
+        assert!(builtin_aliases("Adobe Photoshop 2026").contains(&"ps".to_string()));
+        assert!(builtin_aliases("Adobe Premiere Pro 2026").contains(&"pr".to_string()));
+        let lrc = builtin_aliases("Adobe Lightroom Classic");
+        assert!(lrc.contains(&"lr".to_string()) && lrc.contains(&"lrc".to_string()), "{lrc:?}");
+        assert!(builtin_aliases("Microsoft PowerPoint").contains(&"ppt".to_string()));
+        // whole words and the vendor: no "br" for any Bridge, no "an" for
+        // Animate-something, no "ps" hiding inside a longer word
+        assert!(builtin_aliases("Parallels Bridge").is_empty());
+        assert!(builtin_aliases("Adobe Animated GIF Tool").is_empty());
+        assert!(builtin_aliases("Photoshop Express").is_empty(), "not Adobe's name");
+        assert!(builtin_aliases("Adobe Photoshopper").is_empty());
+        // the screenshot's case: ps now puts Photoshop and Audition's own
+        // "au" where they belong, ahead of names that merely contain ps
+        let apps = vec![app("Apps"), app("Maps"), app("Tips"), app("Adobe Photoshop 2026"), app("Adobe Audition 2026")];
+        let hits = match_apps(&apps, "ps", 10, true);
+        assert_eq!(hits[0].name, "Adobe Photoshop 2026", "{:?}", hits.iter().map(|h| &h.name).collect::<Vec<_>>());
+        assert!(!hits.iter().any(|h| h.name == "Adobe Audition 2026"), "au is not ps");
+        assert_eq!(match_apps(&apps, "au", 10, true)[0].name, "Adobe Audition 2026");
+        // a user rule on top still works, and nothing is doubled
+        let mut ps = vec![app("Adobe Photoshop 2026")];
+        apply_user_aliases(&mut ps, &parse_alias_rules("ps = Photoshop"));
+        assert_eq!(ps[0].aliases.iter().filter(|a| a.as_str() == "ps").count(), 1);
     }
 
     #[test]

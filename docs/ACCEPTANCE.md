@@ -1,3 +1,31 @@
+# 验收记录 2026-09-24（内置常用软件简称，未出包）
+
+Tikas 在 0.3.2 上报：`ps` 找不到 "Adobe Photoshop 2026"（首字母 a-p-2，名字里也没有
+连续的 ps），反而出 Apps/Maps/Tips（本地化英文名含 "ps"）。他提议加"自动添加常用
+软件别名"按钮；按用户决定改为扩展内置表、自动生效（与中英名对照表一致）。
+
+## 实现
+
+`ABBREVIATIONS`：一条规则 = 若干短语 + 简称；应用名里每个短语都以完整单词（大小写
+不敏感）出现才生效，Adobe 规则要求同时有 "adobe"。收 Adobe 图标上的官方两字母
+（ps/ai/pr/ae/au/lr/lrc/id/an/dw/br/me/ch…）和 PowerPoint → ppt。`builtin_aliases`
+合并两张表，用户规则叠加不重复。
+
+## 发现并修复
+
+无（三轮均无发现）。
+
+## 连续三轮干净
+
+- 静态：clippy 0；a1/a3/docs-parity 0 FAIL；README 双语补"内置常用简称"。
+- 机制（真机，开始菜单放 "Adobe Photoshop 2026" 探针快捷方式，脚本自删）：T14 3/3，
+  `ps` 首位为 Photoshop（0.950），其后 PowerShell 7 靠驼峰首字母 0.700；`photoshop`
+  仍命中；`pr` 不会带出 Photoshop。单测：Parallels Bridge / Adobe Animated… /
+  Photoshop Express / Adobe Photoshopper 均不获简称。
+- 可复现：套件 ×2 各 174 通过、逐行一致。
+
+---
+
 # 验收记录 2026-09-24（issue #4 追报：子目录应用、本地化名、驼峰首字母，v0.3.2）
 
 Tikas 在 0.3.0 上报：活动监视器（`/System/Applications/Utilities`）用"活动/hd/
