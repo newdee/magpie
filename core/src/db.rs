@@ -342,6 +342,16 @@ fn migrate(conn: &Connection) -> Result<()> {
             dim     INTEGER NOT NULL,
             vec     BLOB NOT NULL
         );
+
+        -- app icons across launches (apps::IconCache): a row stays valid
+        -- while the app's stamp (its modification time) is unchanged; a
+        -- NULL image records that the OS had no icon for it
+        CREATE TABLE IF NOT EXISTS app_icons (
+            target TEXT PRIMARY KEY,
+            stamp  INTEGER NOT NULL,
+            mime   TEXT,
+            image  BLOB
+        );
         "#,
     )?;
     Ok(())

@@ -299,7 +299,8 @@ async fn import_settings(
 
 /// The user opened a hit — feed the frecency stats (stable identity per
 /// kind: path / url / target / repo id).
-#[tauri::command]
+// async: opens the database; nothing of that belongs on the main thread
+#[tauri::command(async)]
 fn record_hit_use(state: State<'_, AppState>, kind: String, key: String) -> Result<(), String> {
     let conn = db::open(&state.db_path).map_err(err_str)?;
     magpie_core::frecency::record_use(&conn, &kind, &key, unix_now()).map_err(err_str)
@@ -628,7 +629,8 @@ async fn search_by_image(
 }
 
 /// Thumbnail of a query image for the input-row chip. Read-only, never stored.
-#[tauri::command]
+// async: decodes an image from disk, off the main thread
+#[tauri::command(async)]
 fn preview_thumb(path: String) -> Result<Option<String>, String> {
     Ok(files::thumb_b64_for(std::path::Path::new(&path)))
 }
@@ -1201,7 +1203,10 @@ async fn rebuild_folder(
 
 // ---------- application launcher ----------
 
-#[tauri::command]
+// async: off the main thread. It runs on every keystroke, and on macOS the
+// main thread also carries window work and WKWebView's key events; queued
+// behind that, a search waited seconds in 0.3.0
+#[tauri::command(async)]
 fn search_apps(
     state: State<'_, AppState>,
     query: String,
@@ -1941,9 +1946,26 @@ async fn app_icon(
     if !known {
         return Ok(None);
     }
-    let url = read_app_icon(&app, target.clone()).await.map(icon_data_url);
+    let (url, _) = read_and_remember_icon(&app, target.clone()).await;
     state.app_icons.lock().unwrap().insert(target, url.clone());
     Ok(url)
+}
+
+/// Read one icon from the OS and keep it in the database with the app's
+/// stamp, so the next launch finds it there. Returns the data URL and
+/// whether the OS had an icon.
+async fn read_and_remember_icon(app: &AppHandle, target: String) -> (Option<String>, bool) {
+    let stamp = magpie_core::apps::icon_stamp(&target);
+    let icon = read_app_icon(target.clone()).await;
+    let url = icon.as_ref().map(|i| icon_data_url(i.clone()));
+    let found = icon.is_some();
+    let db_path = app.state::<AppState>().db_path.clone();
+    let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+        let conn = db::open(&db_path)?;
+        magpie_core::apps::store_icon(&conn, &target, stamp, icon.as_ref())
+    })
+    .await;
+    (url, found)
 }
 
 fn icon_data_url(i: magpie_core::apps::Icon) -> String {
@@ -1951,14 +1973,14 @@ fn icon_data_url(i: magpie_core::apps::Icon) -> String {
     format!("data:{};base64,{}", i.mime, base64::engine::general_purpose::STANDARD.encode(i.bytes))
 }
 
-/// Read every listed app's icon into the cache, one at a time, right after
-/// the app scan, while the palette is most likely still hidden. On macOS
-/// each read holds the main thread for 50 ms to a second (measured on a CI
-/// Mac; the first read warms the icon services up), and WKWebView's key
-/// events travel through that same thread: read on demand, the first search
-/// that listed apps stalled typing. The pause between icons lets queued
-/// events through. Elsewhere the reads are cheap (10 to 60 ms each, on the
-/// blocking pool) and this only makes the first search show icons at once.
+/// Fill the icon cache right after the app scan. Icons remembered in the
+/// database from an earlier launch are used as long as the app's stamp has
+/// not moved, so after the first launch this reads only new or updated
+/// apps. Reading is what costs: 10 to 60 ms an icon on Windows, 50 ms to a
+/// second on macOS (measured on a CI Mac), which on the first launch of
+/// 0.3.0 kept a Mac busy for a minute or more. Icons of apps that are gone
+/// are forgotten. The short pause between reads keeps this in the
+/// background.
 async fn prefetch_app_icons(app: AppHandle) {
     static RUNNING: AtomicBool = AtomicBool::new(false);
     if RUNNING.swap(true, Ordering::SeqCst) {
@@ -1967,40 +1989,65 @@ async fn prefetch_app_icons(app: AppHandle) {
     let state = app.state::<AppState>();
     let targets: Vec<String> = state.apps.lock().unwrap().iter().map(|a| a.target.clone()).collect();
     let started = std::time::Instant::now();
-    let mut read = 0usize;
-    for target in targets {
-        if state.app_icons.lock().unwrap().contains_key(&target) {
-            continue; // cached, or fetched on demand meanwhile
+    let db_path = state.db_path.clone();
+    let listed = targets.clone();
+    // stamps and remembered icons in one blocking pass: a stat per app
+    let remembered = tokio::task::spawn_blocking(move || -> Result<(Vec<i64>, _, usize)> {
+        let conn = db::open(&db_path)?;
+        let stamps = listed.iter().map(|t| magpie_core::apps::icon_stamp(t)).collect();
+        let cached = magpie_core::apps::cached_icons(&conn)?;
+        let installed = listed.iter().cloned().collect();
+        let pruned = magpie_core::apps::prune_icons(&conn, &installed)?;
+        Ok((stamps, cached, pruned))
+    })
+    .await;
+    let (stamps, mut cached, pruned) = match remembered {
+        Ok(Ok(v)) => v,
+        _ => (vec![0; targets.len()], Default::default(), 0),
+    };
+    let mut from_cache = 0usize;
+    let mut stale = Vec::new();
+    {
+        let mut mem = state.app_icons.lock().unwrap();
+        for (target, stamp) in targets.into_iter().zip(stamps) {
+            match cached.remove(&target) {
+                Some((s, icon)) if s == stamp && stamp != 0 => {
+                    mem.insert(target, icon.map(icon_data_url));
+                    from_cache += 1;
+                }
+                _ => stale.push(target),
+            }
         }
-        let url = read_app_icon(&app, target.clone()).await.map(icon_data_url);
+    }
+    let mut read = 0usize;
+    for target in stale {
+        if state.app_icons.lock().unwrap().contains_key(&target) {
+            continue; // fetched on demand meanwhile
+        }
+        let (url, _) = read_and_remember_icon(&app, target.clone()).await;
         state.app_icons.lock().unwrap().insert(target, url);
         read += 1;
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-    log::info!("app icons: {read} read ahead in {} ms", started.elapsed().as_millis());
+    log::info!(
+        "app icons: {from_cache} remembered, {read} read, {pruned} forgotten, in {} ms",
+        started.elapsed().as_millis()
+    );
     RUNNING.store(false, Ordering::SeqCst);
 }
 
-/// AppKit wants the main thread; the Windows shell and the Linux file reads
-/// run on the blocking pool so the UI thread never waits on a disk.
-async fn read_app_icon(app: &AppHandle, target: String) -> Option<magpie_core::apps::Icon> {
-    #[cfg(target_os = "macos")]
-    {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || {
-            let _ = tx.send(magpie_core::apps::icon(&target, APP_ICON_PX));
-        })
-        .ok()?;
-        rx.await.ok().flatten()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        tokio::task::spawn_blocking(move || magpie_core::apps::icon(&target, APP_ICON_PX))
-            .await
-            .ok()
-            .flatten()
-    }
+/// Read one icon on the blocking pool, on every platform. 0.3.0 read macOS
+/// icons on the main thread to be safe with AppKit; that thread also runs
+/// window work and WKWebView's key events, and a Mac's first launch spent a
+/// minute or more there reading icons while searches waited seconds. The
+/// reads are safe off it: CI runs them on background threads under Apple's
+/// Main Thread Checker with crash-on-report, clean, while a control call
+/// (an NSView made off the main thread) is caught.
+async fn read_app_icon(target: String) -> Option<magpie_core::apps::Icon> {
+    tokio::task::spawn_blocking(move || magpie_core::apps::icon(&target, APP_ICON_PX))
+        .await
+        .ok()
+        .flatten()
 }
 
 // ---------- clipboard history ----------
@@ -3201,7 +3248,8 @@ fn set_ocr(
 
 /// Inline calculator / unit conversion / text transforms for the query box.
 /// None = the query is neither (the frontend shows plain search results).
-#[tauri::command]
+// async: runs on every keystroke, keep it off the main thread
+#[tauri::command(async)]
 fn calc_query(query: String) -> Option<serde_json::Value> {
     if let Some(r) = magpie_core::calc::eval(&query) {
         return Some(json!({ "value": r.value, "alt": r.alt }));

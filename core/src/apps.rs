@@ -368,9 +368,10 @@ pub struct Icon {
 /// square (raster icons; an SVG is returned as is). None when the OS has no
 /// icon for it or it cannot be read; the palette then shows no icon.
 ///
-/// Threading: on macOS this calls AppKit, so the caller runs it on the main
-/// thread. On Windows it initializes COM for the calling thread and releases
-/// it again, so any worker thread will do.
+/// Threading: any worker thread will do. On macOS the AppKit calls used here
+/// are safe off the main thread (CI checks that under the Main Thread
+/// Checker, see tests/app_icons_main.rs). On Windows it initializes COM for
+/// the calling thread and releases it again.
 pub fn icon(target: &str, px: u32) -> Option<Icon> {
     #[cfg(target_os = "windows")]
     {
@@ -385,6 +386,72 @@ pub fn icon(target: &str, px: u32) -> Option<Icon> {
     {
         linux_icon(target, px)
     }
+}
+
+/// What a cached icon's validity hangs on: the app's modification time, in
+/// seconds. For a macOS bundle that is `Contents/Info.plist`, which every
+/// update rewrites (the bundle directory's own time does not move);
+/// elsewhere the Start Menu shortcut or the .desktop file. 0 when it cannot
+/// be read, and a 0 stamp never counts as a cache hit.
+pub fn icon_stamp(target: &str) -> i64 {
+    let path = std::path::Path::new(target);
+    let plist = path.join("Contents").join("Info.plist");
+    let file = if plist.is_file() { plist } else { path.to_path_buf() };
+    std::fs::metadata(file)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// One remembered icon: the stamp it was read at, and the icon (None when
+/// the OS had none, which is worth remembering too).
+pub type CachedIcon = (i64, Option<Icon>);
+
+/// Every icon remembered from earlier launches, by launch target. Reading an
+/// icon costs 10 to 60 ms on Windows and up to a second on macOS, so a
+/// launch only reads the apps that are new or changed since.
+pub fn cached_icons(conn: &rusqlite::Connection) -> Result<std::collections::HashMap<String, CachedIcon>> {
+    let mut stmt = conn.prepare("SELECT target, stamp, mime, image FROM app_icons")?;
+    let rows = stmt.query_map([], |r| {
+        let mime: Option<String> = r.get(2)?;
+        let image: Option<Vec<u8>> = r.get(3)?;
+        // only the two types `icon` produces; anything else reads as none
+        let mime: Option<&'static str> = match mime.as_deref() {
+            Some("image/png") => Some("image/png"),
+            Some("image/svg+xml") => Some("image/svg+xml"),
+            _ => None,
+        };
+        let icon = match (mime, image) {
+            (Some(mime), Some(bytes)) => Some(Icon { mime, bytes }),
+            _ => None,
+        };
+        Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, icon)))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+pub fn store_icon(conn: &rusqlite::Connection, target: &str, stamp: i64, icon: Option<&Icon>) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_icons (target, stamp, mime, image) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(target) DO UPDATE SET stamp = ?2, mime = ?3, image = ?4",
+        rusqlite::params![target, stamp, icon.map(|i| i.mime), icon.map(|i| i.bytes.as_slice())],
+    )?;
+    Ok(())
+}
+
+/// Forget icons of apps that are no longer installed. Returns how many.
+pub fn prune_icons(conn: &rusqlite::Connection, installed: &std::collections::HashSet<String>) -> Result<usize> {
+    let known: Vec<String> = conn
+        .prepare("SELECT target FROM app_icons")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut gone = 0;
+    for t in known.iter().filter(|t| !installed.contains(*t)) {
+        gone += conn.execute("DELETE FROM app_icons WHERE target = ?1", [t])?;
+    }
+    Ok(gone)
 }
 
 #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"))))]
@@ -518,7 +585,7 @@ mod macos_icon {
 
     /// The Finder's icon for a bundle, rendered to a `px`-point PNG. AppKit
     /// picks the best representation, Assets.car icons included, which
-    /// reading the bundle's .icns by hand would miss. Main thread only.
+    /// reading the bundle's .icns by hand would miss. Any thread.
     pub fn png(path: &str, px: u32) -> Option<Vec<u8>> {
         objc2::rc::autoreleasepool(|_| {
             let icon = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path));
@@ -765,6 +832,64 @@ mod tests {
         let before = straight.clone();
         unpremultiply(&mut straight);
         assert_eq!(straight, before);
+    }
+
+    #[test]
+    fn icon_cache_round_trips_updates_and_prunes() {
+        let conn = crate::db::open_in_memory().unwrap();
+        assert!(cached_icons(&conn).unwrap().is_empty());
+        let png = Icon { mime: "image/png", bytes: vec![1, 2, 3] };
+        store_icon(&conn, "/Apps/A.app", 100, Some(&png)).unwrap();
+        store_icon(&conn, "/Apps/B.app", 200, None).unwrap();
+        let got = cached_icons(&conn).unwrap();
+        assert_eq!(got.len(), 2);
+        let (stamp, icon) = &got["/Apps/A.app"];
+        assert_eq!(*stamp, 100);
+        assert_eq!(icon.as_ref().map(|i| (i.mime, i.bytes.clone())), Some(("image/png", vec![1, 2, 3])));
+        assert!(got["/Apps/B.app"].1.is_none(), "no icon is remembered as none");
+        // a re-read replaces the row in place
+        let svg = Icon { mime: "image/svg+xml", bytes: b"<svg/>".to_vec() };
+        store_icon(&conn, "/Apps/A.app", 150, Some(&svg)).unwrap();
+        let got = cached_icons(&conn).unwrap();
+        assert_eq!(got["/Apps/A.app"].0, 150);
+        assert_eq!(got["/Apps/A.app"].1.as_ref().unwrap().mime, "image/svg+xml");
+        // uninstalled apps are forgotten
+        let installed: std::collections::HashSet<String> = ["/Apps/A.app".to_string()].into();
+        assert_eq!(prune_icons(&conn, &installed).unwrap(), 1);
+        assert_eq!(cached_icons(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn damaged_icon_rows_read_as_no_icon_instead_of_failing() {
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO app_icons VALUES ('/a', 1, 'image/gif', x'00');
+             INSERT INTO app_icons VALUES ('/b', 2, 'image/png', NULL);
+             INSERT INTO app_icons VALUES ('/c', 3, NULL, x'0102');",
+        )
+        .unwrap();
+        let got = cached_icons(&conn).unwrap();
+        assert_eq!(got.len(), 3, "every row still loads");
+        assert!(got.values().all(|(_, icon)| icon.is_none()), "an unknown type or a missing half is no icon");
+        // a stamp still counts, so these are re-read only when the app changes
+        assert_eq!(got["/b"].0, 2);
+    }
+
+    #[test]
+    fn icon_stamp_follows_the_bundle_plist_and_misses_as_zero() {
+        let dir = std::env::temp_dir().join(format!("magpie-stamp-{}", std::process::id()));
+        let bundle = dir.join("X.app");
+        std::fs::create_dir_all(bundle.join("Contents")).unwrap();
+        let plist = bundle.join("Contents").join("Info.plist");
+        std::fs::write(&plist, "<plist/>").unwrap();
+        let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(&plist).unwrap().set_modified(t).unwrap();
+        assert_eq!(icon_stamp(bundle.to_str().unwrap()), 1_700_000_000, "a bundle reads its Info.plist");
+        let lnk = dir.join("App.lnk");
+        std::fs::write(&lnk, "x").unwrap();
+        assert!(icon_stamp(lnk.to_str().unwrap()) > 1_700_000_000, "a plain file reads itself");
+        assert_eq!(icon_stamp(dir.join("gone.lnk").to_str().unwrap()), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
