@@ -334,6 +334,16 @@ const ZH: Record<string, string> = {
   Image: "图片",
   Shots: "镜头",
   "No preview": "无可预览内容",
+  "Launch at login": "开机启动",
+  "Start magpie in the tray when you log in.": "登录系统后在托盘里启动 magpie。",
+  "Hide on click-out": "失焦时隐藏",
+  "The palette goes away when another window takes focus. Turn off to drag files in from other windows.":
+    "点到别的窗口，面板就收起。要从其他窗口拖文件进来时请关闭。",
+  "Jump to a tab": "数字键切换 tab",
+  "A modifier plus the tab's number opens it directly, in the order the tabs are shown.":
+    "修饰键加 tab 的序号直接切过去，序号按 tab 栏显示的顺序。",
+  "not loaded; loads once an image, video or image clip is indexed":
+    "未加载；索引到图片、视频或剪贴板图片后才加载",
 };
 
 export function resolveLang(pref: LangPref): Lang {

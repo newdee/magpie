@@ -40,7 +40,8 @@ impl Embedder {
             TextInitOptions::new(EmbeddingModel::MultilingualE5Small)
                 .with_cache_dir(cache_dir.to_path_buf())
                 .with_show_download_progress(false)
-                .with_intra_threads(threads),
+                .with_intra_threads(threads)
+                .with_execution_providers(vec![crate::threads::cpu_provider()]),
         )?;
         Ok(Self { model })
     }
@@ -106,7 +107,8 @@ impl Embedder {
             user_model,
             InitOptionsUserDefined::new()
                 .with_max_length(512)
-                .with_intra_threads(threads),
+                .with_intra_threads(threads)
+                .with_execution_providers(vec![crate::threads::cpu_provider()]),
         )?;
         Ok(Self { model })
     }

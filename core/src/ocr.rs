@@ -152,6 +152,8 @@ impl Ocr {
             Ok(Session::builder()?
                 .with_intra_threads(threads)
                 .map_err(|e| anyhow::anyhow!("intra threads: {e}"))?
+                .with_execution_providers([crate::threads::cpu_provider()])
+                .map_err(|e| anyhow::anyhow!("cpu provider: {e}"))?
                 .commit_from_file(manual.join(local))?)
         };
         let det = session(spec.det.local)?;

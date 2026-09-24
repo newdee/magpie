@@ -72,11 +72,16 @@ fn system_ffmpeg_works() -> bool {
     if std::env::var("MAGPIE_FORCE_MANAGED_FFMPEG").is_ok() {
         return false;
     }
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.arg("-version");
+    // the app is a GUI process on Windows: without this every probe flashes
+    // a console window (ffmpeg-sidecar sets the same flag on its own runs)
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Locate a usable ffmpeg and report how it was found ("system"/"bundled").
@@ -370,6 +375,61 @@ pub fn frame_at_sized(
         }
     }
     Err(anyhow!("no frame at {ts_ms}ms"))
+}
+
+/// Where a poster frame is taken: a tenth of the way in, which skips most
+/// black intros, capped at one minute; one second when the length is unknown.
+pub fn poster_ts(duration_ms: i64) -> i64 {
+    if duration_ms > 0 {
+        (duration_ms / 10).min(60_000)
+    } else {
+        1000
+    }
+}
+
+/// One frame of a video as a base64 JPEG, `width` pixels wide, for the
+/// preview pane. Falls back to the first frame when the chosen moment does
+/// not decode (a clip shorter than a second, a bad seek index).
+pub fn poster_b64(path: &str, duration_ms: i64, opts: DecodeOpts, width: u32) -> Result<String> {
+    let img = frame_at_sized(path, poster_ts(duration_ms), opts, width)
+        .or_else(|_| frame_at_sized(path, 0, opts, width))?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.to_rgb8().write_to(&mut out, image::ImageFormat::Jpeg)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(out.into_inner()))
+}
+
+/// Whether an ffmpeg can be used right now without downloading one: already
+/// resolved this session, on PATH, or unpacked in `cache_dir` by an earlier
+/// video pass. A missing ffmpeg is remembered for the session, so a preview
+/// per keystroke does not spawn a failing process each time.
+pub fn ffmpeg_available(cache_dir: &std::path::Path) -> bool {
+    static MISSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if FFMPEG.get().is_some() {
+        return true;
+    }
+    if MISSING.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    // the same order ensure_ffmpeg_with resolves in, minus the download
+    if system_ffmpeg_works() {
+        let _ = FFMPEG.set(std::path::PathBuf::from("ffmpeg"));
+        return true;
+    }
+    let exe = cache_dir
+        .join("ffmpeg-bin")
+        .join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    if exe.is_file() {
+        let _ = FFMPEG.set(exe);
+        return true;
+    }
+    // the upstream static build the last-resort download leaves behind
+    let sidecar = ffmpeg_sidecar::paths::ffmpeg_path();
+    if sidecar.is_file() {
+        let _ = FFMPEG.set(sidecar);
+        return true;
+    }
+    MISSING.store(true, std::sync::atomic::Ordering::Relaxed);
+    false
 }
 
 fn thumb_b64(img: &image::DynamicImage) -> Option<String> {
@@ -726,5 +786,56 @@ mod tests {
         assert!(is_video_ext(Some("MKV")));
         assert!(!is_video_ext(Some("png")));
         assert!(!is_video_ext(None));
+    }
+
+    #[test]
+    fn poster_moment_skips_intros_and_stays_inside_the_clip() {
+        assert_eq!(poster_ts(0), 1000, "unknown length: one second in");
+        assert_eq!(poster_ts(-5), 1000);
+        assert_eq!(poster_ts(500), 50, "a half-second clip: still inside it");
+        assert_eq!(poster_ts(90_000), 9000);
+        assert_eq!(poster_ts(3 * 3_600_000), 60_000, "capped at a minute");
+    }
+
+    /// Needs an ffmpeg on the machine (CI's Ubuntu image has one); without
+    /// it the test says so and passes, since the preview then falls back to
+    /// file details by design.
+    #[test]
+    fn poster_frame_from_a_real_clip_including_a_short_one() {
+        let dir = std::env::temp_dir().join(format!("magpie-poster-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        if !ffmpeg_available(&dir) {
+            eprintln!("no ffmpeg here; poster test skipped");
+            return;
+        }
+        let make = |name: &str, secs: &str| {
+            let p = dir.join(name);
+            let ok = std::process::Command::new(ffmpeg_bin())
+                .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+                .arg(format!("testsrc=size=320x240:rate=10:duration={secs}"))
+                .args(["-pix_fmt", "yuv420p"])
+                .arg(&p)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            assert!(ok, "ffmpeg could not make {name}");
+            p.to_string_lossy().into_owned()
+        };
+        let opts = DecodeOpts::default();
+        use base64::Engine;
+        let decode = |b64: String| {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+            image::load_from_memory(&bytes).unwrap()
+        };
+        let long = make("long.mp4", "3");
+        let img = decode(poster_b64(&long, 3000, opts, 560).unwrap());
+        assert_eq!((img.width(), img.height()), (560, 420), "scaled to the pane width");
+        // unknown length and shorter than the one-second guess: the first
+        // frame is used instead of failing
+        let short = make("short.mp4", "0.5");
+        let img = decode(poster_b64(&short, 0, opts, 560).unwrap());
+        assert_eq!(img.width(), 560);
+        assert!(poster_b64(&dir.join("missing.mp4").to_string_lossy(), 0, opts, 560).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

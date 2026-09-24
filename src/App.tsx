@@ -204,7 +204,74 @@ const LOCAL_KEYS = [
   "magpie.scope",
   "magpie.webscope",
   "magpie.sort",
+  "magpie.hideonblur",
+  "magpie.tabkeys",
 ] as const;
+
+/// macOS gets ⌘ in the key hints. The handlers themselves accept Ctrl or Cmd
+/// on every platform, so this only changes what the footer says.
+const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+const MOD = IS_MAC ? "⌘" : "ctrl";
+
+/// Hide the palette when it loses focus. Stored "1"/"0"; nothing stored
+/// means the platform default: on for macOS, where a Spotlight-style panel
+/// is expected to go away on click-out, off elsewhere, where dragging files
+/// in from Explorer needs the window to survive losing focus.
+function loadHideOnBlur(): boolean {
+  try {
+    const v = localStorage.getItem("magpie.hideonblur");
+    if (v === "1" || v === "0") return v === "1";
+  } catch {
+    /* fall through to the default */
+  }
+  return IS_MAC;
+}
+
+/// Which modifier plus 1–9 jumps straight to a tab.
+type TabKeys = "mod" | "alt" | "off";
+const TAB_KEYS: { id: TabKeys; label: string }[] = [
+  { id: "mod", label: IS_MAC ? "⌘ 1–9" : "Ctrl 1–9" },
+  { id: "alt", label: IS_MAC ? "⌥ 1–9" : "Alt 1–9" },
+  { id: "off", label: "off" },
+];
+
+function loadTabKeys(): TabKeys {
+  try {
+    const v = localStorage.getItem("magpie.tabkeys");
+    if (v === "mod" || v === "alt" || v === "off") return v;
+  } catch {
+    /* fall through to the default */
+  }
+  return "mod";
+}
+
+/// The 0-based tab a keydown asks for, or null. Reads the physical key
+/// (`code`), not the character: Option+1 types "¡" on macOS.
+function tabFromKey(
+  e: Pick<KeyboardEvent, "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">,
+  keys: TabKeys,
+): number | null {
+  const m = /^Digit([1-9])$/.exec(e.code);
+  if (!m || e.shiftKey || keys === "off") return null;
+  const mod = e.ctrlKey || e.metaKey;
+  const ok = keys === "mod" ? mod && !e.altKey : e.altKey && !mod;
+  return ok ? Number(m[1]) - 1 : null;
+}
+
+/// Native dialogs take focus from the palette. While one is up, a
+/// hide-on-blur must not fire, or the palette vanishes under its own dialog.
+let holdOpenCount = 0;
+async function holdOpen<T>(f: () => Promise<T>): Promise<T> {
+  holdOpenCount++;
+  try {
+    return await f();
+  } finally {
+    // focus comes back a moment after the dialog closes
+    setTimeout(() => {
+      holdOpenCount--;
+    }, 300);
+  }
+}
 
 const ALL_SOURCES = [
   { id: "local", label: "Local Files" },
@@ -453,6 +520,15 @@ export default function App() {
   );
   const pinyinRef = useRef(pinyinOn);
   pinyinRef.current = pinyinOn;
+  const [hideOnBlur, setHideOnBlur] = useState(loadHideOnBlur);
+  const hideOnBlurRef = useRef(hideOnBlur);
+  hideOnBlurRef.current = hideOnBlur;
+  const [tabKeys, setTabKeys] = useState(loadTabKeys);
+  const tabKeysRef = useRef(tabKeys);
+  tabKeysRef.current = tabKeys;
+  // launch at login: the OS registration is the truth, so it's read back
+  // from the backend rather than remembered here (null = not known yet)
+  const [autostart, setAutostart] = useState<boolean | null>(null);
 
   // language: update the module-level dictionary BEFORE the re-render, then
   // tell the backend so the tray menu follows
@@ -535,6 +611,8 @@ export default function App() {
   const needsTokenRef = useRef(false);
   const imageQueryRef = useRef<ImageQuery | null>(null);
   imageQueryRef.current = imageQuery;
+  const showSettingsRef = useRef(showSettings);
+  showSettingsRef.current = showSettings;
 
   const source = (sources[sourceIdx] ?? sources[0]).id;
   const needsToken = source === "github-stars" && status !== null && !status.has_token;
@@ -578,6 +656,9 @@ export default function App() {
     if (showSettings) {
       refreshStatus();
       refreshFolders();
+      invoke<boolean>("get_autostart")
+        .then((on) => setAutostart(!!on))
+        .catch(() => setAutostart(null));
     }
   }, [showSettings, refreshStatus, refreshFolders]);
 
@@ -790,20 +871,46 @@ export default function App() {
   // Settings toggle on the WINDOW, not the panel: with settings open the
   // input is hidden and focus can sit on <body>, so a panel-level handler
   // would open settings but never close them. Alt+, matches the app's own
-  // Alt family; Ctrl/Cmd+, keeps the platform convention working too.
+  // Alt family; Ctrl/Cmd+, keeps the platform convention working too. The
+  // physical key is matched, not the character: Option+, types "≤" on macOS.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "," && (e.altKey || e.ctrlKey || e.metaKey)) {
+      if (e.code === "Comma" && (e.altKey || e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         setShowSettings((s) => !s);
       } else if (e.key === "Escape" && document.activeElement === document.body) {
-        // focus fell to <body> (e.g. after clicking a settings pill): the
-        // panel handler can't hear this Esc, so mirror its top layer here
-        setShowSettings((s) => (s ? false : s));
+        // focus fell to <body> (a click on a row, a pill, the empty strip
+        // under the list): the panel handler can't hear this Esc, so run
+        // its whole ladder here, down to hiding the palette
+        e.preventDefault();
+        if (imageQueryRef.current) {
+          setImageQuery(null);
+        } else if (showSettingsRef.current) {
+          setShowSettings(false);
+        } else {
+          void getCurrentWindow().hide();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // hide on click-out (opt-in, on by default on macOS). A short grace keeps
+  // a focus bounce while the window is being shown from hiding it again.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const un = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      clearTimeout(timer);
+      if (focused || !hideOnBlurRef.current || holdOpenCount > 0) return;
+      timer = setTimeout(() => {
+        if (hideOnBlurRef.current && holdOpenCount === 0) void getCurrentWindow().hide();
+      }, 120);
+    });
+    return () => {
+      clearTimeout(timer);
+      void un.then((f) => f());
+    };
   }, []);
 
   // whenever settings close (shortcut, Esc, ✕), typing must work immediately
@@ -942,7 +1049,9 @@ export default function App() {
           if (!stale) setPreview(p);
         })
         .catch(() => {
-          if (!stale) setPreview(null);
+          // "none", not null: null means still loading, and a failed
+          // fetch should fall back to the file details, not spin forever
+          if (!stale) setPreview({ kind: "none" });
         });
     }, 100);
     return () => {
@@ -1049,6 +1158,24 @@ export default function App() {
     setShowSettings(false);
     inputRef.current?.focus();
   }, []);
+
+  // Ctrl/Cmd (or Alt) + 1–9 jumps straight to a tab, in the order the strip
+  // shows. On the window so it works whether focus is in the query box, on
+  // <body>, or in settings; other text fields (the shortcut recorders, the
+  // alias box) keep the keys to themselves.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      const free = el === document.body || el === inputRef.current || el == null;
+      if (!free) return;
+      const i = tabFromKey(e, tabKeysRef.current);
+      if (i == null || i >= sourcesRef.current.length) return;
+      e.preventDefault();
+      switchSource(i);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [switchSource]);
 
   // move a tab one slot left/right; keeps the active tab selected by id
   const moveTab = useCallback(
@@ -1381,10 +1508,12 @@ export default function App() {
   }, [tokenInput, tokenBusy, refreshStatus]);
 
   const pickQueryImage = useCallback(async () => {
-    const file = await openDialog({
-      multiple: false,
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
-    });
+    const file = await holdOpen(() =>
+      openDialog({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      }),
+    );
     if (typeof file !== "string") return;
     const thumb = await invoke<string | null>("preview_thumb", { path: file }).catch(() => null);
     acceptImageQuery({
@@ -1395,7 +1524,7 @@ export default function App() {
   }, [acceptImageQuery]);
 
   const addFolder = useCallback(async () => {
-    const dir = await openDialog({ directory: true, multiple: false });
+    const dir = await holdOpen(() => openDialog({ directory: true, multiple: false }));
     if (typeof dir !== "string") return;
     try {
       setFolders(await invoke<FolderInfo[]>("add_folder", { path: dir }));
@@ -1666,6 +1795,11 @@ export default function App() {
             className={`source ${i === sourceIdx ? "active" : ""}`}
             onClick={() => switchSource(i)}
             tabIndex={-1}
+            title={
+              tabKeys === "off" || i >= 9
+                ? undefined
+                : `${tabKeys === "alt" ? (IS_MAC ? "⌥" : "Alt+") : IS_MAC ? "⌘" : "Ctrl+"}${i + 1}`
+            }
           >
             {t(s.label)}
           </button>
@@ -2394,7 +2528,9 @@ export default function App() {
                     ? t("ready")
                     : status?.image_model === "loading"
                       ? t("downloading (~200 MB, first run)…")
-                      : (status?.image_model ?? "…")}
+                      : status?.image_model === "idle"
+                        ? t("not loaded; loads once an image, video or image clip is indexed")
+                        : (status?.image_model ?? "…")}
                 </span>
               </div>
             </div>
@@ -2441,6 +2577,96 @@ export default function App() {
                     onClick={() => chooseLang(o.id)}
                   >
                     {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Launch at login")}</span>
+                <span className="set-desc">
+                  {t("Start magpie in the tray when you log in.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${autostart === o.on ? "active" : ""}`}
+                    disabled={autostart == null}
+                    onClick={async () => {
+                      try {
+                        await invoke("set_autostart", { on: o.on });
+                        setAutostart(await invoke<boolean>("get_autostart"));
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Hide on click-out")}</span>
+                <span className="set-desc">
+                  {t(
+                    "The palette goes away when another window takes focus. Turn off to drag files in from other windows.",
+                  )}
+                </span>
+              </div>
+              <div className="pill-row">
+                {[
+                  { label: "off", on: false },
+                  { label: "on", on: true },
+                ].map((o) => (
+                  <button
+                    key={o.label}
+                    className={`source ${hideOnBlur === o.on ? "active" : ""}`}
+                    onClick={() => {
+                      setHideOnBlur(o.on);
+                      try {
+                        localStorage.setItem("magpie.hideonblur", o.on ? "1" : "0");
+                      } catch {
+                        /* preference just won't persist */
+                      }
+                    }}
+                  >
+                    {t(o.label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="set-row">
+              <div className="set-label">
+                <span className="set-name">{t("Jump to a tab")}</span>
+                <span className="set-desc">
+                  {t("A modifier plus the tab's number opens it directly, in the order the tabs are shown.")}
+                </span>
+              </div>
+              <div className="pill-row">
+                {TAB_KEYS.map((o) => (
+                  <button
+                    key={o.id}
+                    className={`source ${tabKeys === o.id ? "active" : ""}`}
+                    onClick={() => {
+                      setTabKeys(o.id);
+                      try {
+                        localStorage.setItem("magpie.tabkeys", o.id);
+                      } catch {
+                        /* preference just won't persist */
+                      }
+                    }}
+                  >
+                    {o.id === "off" ? t("off") : o.label}
                   </button>
                 ))}
               </div>
@@ -3092,10 +3318,12 @@ export default function App() {
                   className="ghost-btn"
                   onClick={async () => {
                     try {
-                      const path = await saveDialog({
-                        defaultPath: "magpie-settings.json",
-                        filters: [{ name: "JSON", extensions: ["json"] }],
-                      });
+                      const path = await holdOpen(() =>
+                        saveDialog({
+                          defaultPath: "magpie-settings.json",
+                          filters: [{ name: "JSON", extensions: ["json"] }],
+                        }),
+                      );
                       if (!path) return;
                       const frontend: Record<string, string> = {};
                       for (const k of LOCAL_KEYS) {
@@ -3115,10 +3343,12 @@ export default function App() {
                   className="ghost-btn"
                   onClick={async () => {
                     try {
-                      const path = await openDialog({
-                        multiple: false,
-                        filters: [{ name: "JSON", extensions: ["json"] }],
-                      });
+                      const path = await holdOpen(() =>
+                        openDialog({
+                          multiple: false,
+                          filters: [{ name: "JSON", extensions: ["json"] }],
+                        }),
+                      );
                       if (typeof path !== "string") return;
                       const frontend = await invoke<Record<string, string>>("import_settings", {
                         path,
@@ -3262,9 +3492,12 @@ export default function App() {
                   </>
                 ) : r.kind === "app" ? (
                   <>
-                    <div className="row-main">
-                      <span className="row-title">{r.name}</span>
-                      <span className="row-sub">{t("Application")}</span>
+                    <div className="row-lead">
+                      <AppIcon target={r.target} />
+                      <div className="row-main">
+                        <span className="row-title">{r.name}</span>
+                        <span className="row-sub">{t("Application")}</span>
+                      </div>
                     </div>
                     <div className="row-meta">
                       <span className="app-badge">{t("App")}</span>
@@ -3437,7 +3670,9 @@ export default function App() {
             <kbd>⏎</kbd> {source === "clips" ? t("copy") : t("open")}
           </span>
           <span>
-            <kbd>tab</kbd> {t("source")}
+            <kbd>tab</kbd>
+            {tabKeys !== "off" && <kbd>{`${tabKeys === "alt" ? (IS_MAC ? "⌥" : "alt") : MOD}1–${sources.length}`}</kbd>}{" "}
+            {t("source")}
           </span>
           {source === "clips" && (
             <>
@@ -3448,7 +3683,7 @@ export default function App() {
                 <kbd>⇧↑↓</kbd> {t("select")}
               </span>
               <span>
-                <kbd>ctrl⌦</kbd> {t("delete")}
+                <kbd>{MOD}⌦</kbd> {t("delete")}
               </span>
             </>
           )}
@@ -3463,13 +3698,13 @@ export default function App() {
             </span>
           )}
           <span>
-            <kbd>alt,</kbd> {t("settings")}
+            <kbd>{IS_MAC ? "⌘," : "alt,"}</kbd> {t("settings")}
             {(updPhase === "available" || updPhase === "downloading") && (
               <i className="upd-dot" title={tf("Version {v} is available.", { v: updVersion ?? "" })} />
             )}
           </span>
           <span>
-            <kbd>ctrl⏎</kbd> {t("web")}
+            <kbd>{MOD}⏎</kbd> {t("web")}
           </span>
           <span>
             <kbd>esc</kbd> {t("hide")}
@@ -3555,6 +3790,35 @@ function highlightQuery(text: string, query: string): React.ReactNode[] {
 
 /// Right-hand preview of the selected hit. Web/clip/app hits carry all their
 /// data already; file/video/repo previews arrive via get_preview.
+/// App icons by launch target, for the whole session: the backend caches
+/// too, this just saves the round trip on every re-render and keystroke.
+const appIconCache = new Map<string, string | null>();
+
+/// The OS icon for an app row. Until it arrives (or when there is none) an
+/// empty box of the same size holds the title's place, so rows never shift.
+function AppIcon({ target }: { target: string }) {
+  const [src, setSrc] = useState<string | null | undefined>(() => appIconCache.get(target));
+  useEffect(() => {
+    if (appIconCache.has(target)) {
+      setSrc(appIconCache.get(target));
+      return;
+    }
+    let live = true;
+    invoke<string | null>("app_icon", { target })
+      .then((url) => {
+        appIconCache.set(target, url ?? null);
+        if (live) setSrc(url ?? null);
+      })
+      .catch(() => {
+        if (live) setSrc(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [target]);
+  return src ? <img className="app-icon" src={src} alt="" /> : <span className="app-icon" />;
+}
+
 function PreviewPane({
   hit,
   data,
@@ -3630,7 +3894,13 @@ function PreviewPane({
           {highlightQuery(data.text, query)}
           {data.clipped_tail ? " …" : ""}
         </pre>
-      ) : hit.kind === "video" && data?.kind === "shots" && Array.isArray(data.shots) ? (
+      ) : hit.kind === "video" && data?.kind === "image" && typeof data.image === "string" ? (
+        // a video the index has not cut into shots yet: one frame of it
+        <img className="pv-image" src={`data:image/jpeg;base64,${data.image}`} alt="" />
+      ) : (hit.kind === "video" || hit.kind === "file") &&
+        data?.kind === "shots" &&
+        Array.isArray(data.shots) &&
+        data.shots.length > 0 ? (
         <>
           <p className="pv-title">{t("Shots")}</p>
           <div className="pv-shots">
@@ -3650,6 +3920,20 @@ function PreviewPane({
               ),
             )}
           </div>
+        </>
+      ) : data == null ? null /* still loading */ : hit.kind === "file" || hit.kind === "video" ? (
+        // nothing to render inline (a binary, an empty file, a video with
+        // no ffmpeg at hand): the facts about the file instead of a blank
+        <>
+          <p className="pv-title">{hit.name}</p>
+          <p className="pv-meta mono-wrap">{parentDir(hit.path)}</p>
+          <p className="pv-meta">
+            {hit.kind === "file"
+              ? [formatSize(hit.size), relTimeUnix(hit.mtime)].filter(Boolean).join(" · ")
+              : hit.duration_ms > 0
+                ? fmtTime(hit.duration_ms)
+                : t("Video")}
+          </p>
         </>
       ) : (
         <p className="pv-meta">{t("No preview")}</p>

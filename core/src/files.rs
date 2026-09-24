@@ -842,6 +842,34 @@ pub fn all_image_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>)>> {
     Ok(out)
 }
 
+/// Whether anything in the index needs the image model (SigLIP): an image or
+/// a video among the indexed files, or an image in the clipboard history.
+/// The model costs several hundred MB resident, so the app loads it only
+/// when this holds, and again whenever an index pass or a copied image
+/// could have made it true.
+pub fn needs_image_model(conn: &Connection) -> Result<bool> {
+    let exts = IMAGE_EXTS
+        .iter()
+        .chain(crate::videos::VIDEO_EXTS)
+        .map(|e| format!("'{e}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let files: bool = conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM files WHERE lower(ext) IN ({exts}))"),
+        [],
+        |r| r.get(0),
+    )?;
+    if files {
+        return Ok(true);
+    }
+    let clips: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM clips WHERE kind = 'image')",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(clips)
+}
+
 /// Embed every image whose (path, mtime, size) changed. Blocking.
 /// Corrupt/unreadable images get a dim-0 marker so they are not retried.
 pub fn embed_pending_images(
@@ -1251,6 +1279,47 @@ mod tests {
         // match at the very start: no leading ellipsis, no panic
         let s2 = substring_snippet(Some("本地搜索 tail"), "本地搜索");
         assert!(s2.starts_with('\u{1}'), "no lead elide: {s2:?}");
+    }
+
+    #[test]
+    fn image_model_is_needed_only_for_images_videos_or_image_clips() {
+        let tmp = std::env::temp_dir().join(format!("sr-needs-img-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let conn = open_in_memory().unwrap();
+        assert!(!needs_image_model(&conn).unwrap(), "an empty index needs nothing");
+
+        // text-only folder: still no
+        write(&tmp, "notes.md", "plain words");
+        add_folder(&conn, tmp.to_str().unwrap()).unwrap();
+        index_folders(&conn, |_| {}).unwrap();
+        assert!(!needs_image_model(&conn).unwrap(), "text files need only the text model");
+
+        // an upper-case extension counts like any other image
+        write(&tmp, "Shot.PNG", "\u{0}fake");
+        index_folders(&conn, |_| {}).unwrap();
+        assert!(needs_image_model(&conn).unwrap(), "an image file needs it");
+
+        // a video alone needs it too (its shots are embedded by SigLIP)
+        std::fs::remove_file(tmp.join("Shot.PNG")).unwrap();
+        index_folders(&conn, |_| {}).unwrap();
+        assert!(!needs_image_model(&conn).unwrap(), "pruned image no longer counts");
+        write(&tmp, "clip.mp4", "\u{0}movie");
+        index_folders(&conn, |_| {}).unwrap();
+        assert!(needs_image_model(&conn).unwrap(), "a video file needs it");
+
+        // an image on the clipboard history needs it with no folders at all
+        let conn2 = open_in_memory().unwrap();
+        let (w, h) = (8usize, 8usize);
+        let rgba = vec![200u8; w * h * 4];
+        let hash = crate::clips::sample_hash(w, h, &rgba);
+        let (jpeg, thumb, iw, ih) = crate::clips::encode_clipboard_image(w, h, &rgba).unwrap();
+        assert!(!needs_image_model(&conn2).unwrap());
+        crate::clips::record_clip(&conn2, "some text", 1, 10_000).unwrap();
+        assert!(!needs_image_model(&conn2).unwrap(), "text clips need only the text model");
+        crate::clips::record_image_clip(&conn2, &hash, &jpeg, &thumb, iw, ih, 2).unwrap();
+        assert!(needs_image_model(&conn2).unwrap(), "an image clip needs it");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     fn write(dir: &Path, rel: &str, content: &str) {

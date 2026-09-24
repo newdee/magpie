@@ -66,6 +66,9 @@ struct AppState {
     siglip_reinit: Arc<AtomicBool>,
     /// Installed-app list, enumerated once at startup, refreshable on demand.
     apps: Arc<StdMutex<Vec<magpie_core::apps::AppEntry>>>,
+    /// App icons as data URLs, by launch target; None = the OS had none.
+    /// Filled on first display and kept for the session.
+    app_icons: Arc<StdMutex<std::collections::HashMap<String, Option<String>>>>,
     /// Version string of a pending update ("" = none) — drives the tray
     /// badge and the extra tray menu item.
     update_badge: Arc<StdMutex<String>>,
@@ -578,12 +581,21 @@ fn tag_hits(
 /// list with the exact time range of the best-matching shot.
 #[tauri::command]
 async fn search_by_image(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: Option<String>,
     bytes_b64: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let limit = limit.unwrap_or(30).min(100);
+    if *state.siglip_status.lock().unwrap() == IMAGE_MODEL_IDLE {
+        // idle means no image, video or image clip is indexed, so there is
+        // nothing to match against; if that just changed, start the load
+        if !ensure_image_model(&app) {
+            return Ok(Vec::new());
+        }
+        return Err("image model not ready yet".into());
+    }
     let sig = state.siglip.clone();
     let qvec = tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
         let mut guard = sig
@@ -641,6 +653,17 @@ async fn get_preview(
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .map_err(err_str)?;
+            if magpie_core::videos::is_video_ext(ext.as_deref()) {
+                // a video found by name (the "all" scope lists it as a file):
+                // its shots when the video index has them, else one frame
+                let shots = shots_json(&conn, id).map_err(err_str)?;
+                if !shots.is_empty() {
+                    return Ok(json!({ "kind": "shots", "shots": shots }));
+                }
+                let (decode, duration) = video_poster_inputs(&conn, id);
+                drop(conn); // decoding takes a moment; nobody waits on the db for it
+                return Ok(video_poster(&state.model_dir, path, decode, duration).await);
+            }
             if files::is_image_ext(ext.as_deref()) {
                 // large preview rendered fresh from disk (index only keeps 96px)
                 let b64 = tokio::task::spawn_blocking(move || {
@@ -695,25 +718,20 @@ async fn get_preview(
             }
         }
         "video" => {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT start_ms, end_ms, ts_ms, thumb FROM video_shots
-                     WHERE file_id = ?1 ORDER BY start_ms LIMIT 60",
-                )
-                .map_err(err_str)?;
-            let shots = stmt
-                .query_map([id], |r| {
-                    Ok(json!({
-                        "start_ms": r.get::<_, i64>(0)?,
-                        "end_ms": r.get::<_, i64>(1)?,
-                        "ts_ms": r.get::<_, i64>(2)?,
-                        "thumb": r.get::<_, Option<String>>(3)?,
-                    }))
-                })
-                .map_err(err_str)?
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(err_str)?;
-            Ok(json!({ "kind": "shots", "shots": shots }))
+            let shots = shots_json(&conn, id).map_err(err_str)?;
+            if !shots.is_empty() {
+                return Ok(json!({ "kind": "shots", "shots": shots }));
+            }
+            // a filename match on a video the index has not reached yet
+            let path: Option<String> = conn
+                .query_row("SELECT path FROM files WHERE id = ?1", [id], |r| r.get(0))
+                .ok();
+            let Some(path) = path else {
+                return Ok(json!({ "kind": "none" }));
+            };
+            let (decode, duration) = video_poster_inputs(&conn, id);
+            drop(conn);
+            Ok(video_poster(&state.model_dir, path, decode, duration).await)
         }
         "repo" => {
             let row = conn
@@ -738,6 +756,69 @@ async fn get_preview(
             Ok(row)
         }
         _ => Ok(json!({ "kind": "none" })),
+    }
+}
+
+/// A video's indexed shots for the preview pane, in order (at most 60).
+fn shots_json(conn: &magpie_core::rusqlite::Connection, file_id: i64) -> Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT start_ms, end_ms, ts_ms, thumb FROM video_shots
+         WHERE file_id = ?1 ORDER BY start_ms LIMIT 60",
+    )?;
+    let shots = stmt
+        .query_map([file_id], |r| {
+            Ok(json!({
+                "start_ms": r.get::<_, i64>(0)?,
+                "end_ms": r.get::<_, i64>(1)?,
+                "ts_ms": r.get::<_, i64>(2)?,
+                "thumb": r.get::<_, Option<String>>(3)?,
+            }))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(shots)
+}
+
+/// Decode settings and the known duration (0 = unknown) for a poster frame.
+fn video_poster_inputs(
+    conn: &magpie_core::rusqlite::Connection,
+    file_id: i64,
+) -> (magpie_core::videos::DecodeOpts, i64) {
+    let duration = conn
+        .query_row("SELECT duration_ms FROM video_index WHERE file_id = ?1", [file_id], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap_or(0);
+    (decode_opts_from_meta(conn), duration)
+}
+
+/// Width of a poster frame, the same as the large image preview.
+const POSTER_WIDTH: u32 = 560;
+
+/// One frame of a video for the preview pane, when an ffmpeg is already at
+/// hand (on PATH or unpacked by an earlier video pass). A preview never
+/// starts the ffmpeg download: that stays with the video index. Without one,
+/// or when the file will not decode, the pane falls back to file details.
+async fn video_poster(
+    model_dir: &Path,
+    path: String,
+    decode: magpie_core::videos::DecodeOpts,
+    duration_ms: i64,
+) -> serde_json::Value {
+    let model_dir = model_dir.to_path_buf();
+    let frame = tokio::task::spawn_blocking(move || -> Option<String> {
+        if !magpie_core::videos::ffmpeg_available(&model_dir) {
+            return None;
+        }
+        magpie_core::videos::poster_b64(&path, duration_ms, decode, POSTER_WIDTH)
+            .map_err(|e| log::info!("no poster frame for a video: {e}"))
+            .ok()
+    })
+    .await
+    .ok()
+    .flatten();
+    match frame {
+        Some(b64) => json!({ "kind": "image", "image": b64 }),
+        None => json!({ "kind": "none" }),
     }
 }
 
@@ -816,21 +897,8 @@ fn register_hotkeys(app: &AppHandle, summon: &str, selection: Option<&str>) -> R
 fn search_selection(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let before = clips::clipboard_text().ok();
-        let copied = tokio::task::spawn_blocking(|| -> Result<()> {
-            use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-            let mut e = Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("input: {e}"))?;
-            #[cfg(target_os = "macos")]
-            let modifier = Key::Meta;
-            #[cfg(not(target_os = "macos"))]
-            let modifier = Key::Control;
-            e.key(modifier, Direction::Press).map_err(|e| anyhow::anyhow!("{e}"))?;
-            e.key(Key::Unicode('c'), Direction::Click).map_err(|e| anyhow::anyhow!("{e}"))?;
-            e.key(modifier, Direction::Release).map_err(|e| anyhow::anyhow!("{e}"))?;
-            Ok(())
-        })
-        .await;
-        if !matches!(copied, Ok(Ok(()))) {
-            log::warn!("selection search: could not synthesize the copy chord");
+        if let Err(e) = send_mod_chord(&app, 'c').await {
+            log::warn!("selection search: could not synthesize the copy chord: {e}");
         }
         // give the frontmost app a moment to service the copy
         tokio::time::sleep(std::time::Duration::from_millis(160)).await;
@@ -869,7 +937,10 @@ async fn set_hf_endpoint(
         state.model_reinit.store(true, Ordering::SeqCst);
         spawn_model_init(app.clone());
     }
-    if *state.siglip_status.lock().unwrap() != "ready" {
+    // an idle image model has nothing to do yet; it loads, from the new
+    // endpoint, once something needs it
+    let image = state.siglip_status.lock().unwrap().clone();
+    if image != "ready" && image != IMAGE_MODEL_IDLE {
         state.siglip_reinit.store(true, Ordering::SeqCst);
         spawn_siglip_init(app);
     }
@@ -1825,6 +1896,81 @@ async fn set_rescan_minutes(state: State<'_, AppState>, minutes: u32) -> Result<
     Ok(())
 }
 
+// ---------- launch at login ----------
+
+/// Whether magpie starts at login. Read from the OS registration itself (a
+/// LaunchAgent, the Run key, an XDG autostart file), never from a stored
+/// flag, so removing it in the OS's own settings shows up here too.
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(err_str)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, on: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let al = app.autolaunch();
+    if on {
+        al.enable().map_err(err_str)
+    } else {
+        al.disable().map_err(err_str)
+    }
+}
+
+// ---------- app icons ----------
+
+/// Rendered edge of an app icon. The row shows it at 26 CSS px; 64 keeps it
+/// sharp on a 2x display.
+const APP_ICON_PX: u32 = 64;
+
+/// The icon for an app from the installed-app list, as a data URL, or None.
+/// Only targets the app scan found are served, so the webview cannot use
+/// this to probe arbitrary paths. Cached per target for the session.
+#[tauri::command]
+async fn app_icon(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: String,
+) -> Result<Option<String>, String> {
+    if let Some(hit) = state.app_icons.lock().unwrap().get(&target) {
+        return Ok(hit.clone());
+    }
+    let known = state.apps.lock().unwrap().iter().any(|a| a.target == target);
+    if !known {
+        return Ok(None);
+    }
+    let icon = read_app_icon(&app, target.clone()).await;
+    let url = icon.map(|i| {
+        use base64::Engine;
+        format!("data:{};base64,{}", i.mime, base64::engine::general_purpose::STANDARD.encode(i.bytes))
+    });
+    state.app_icons.lock().unwrap().insert(target, url.clone());
+    Ok(url)
+}
+
+/// AppKit wants the main thread; the Windows shell and the Linux file reads
+/// run on the blocking pool so the UI thread never waits on a disk.
+async fn read_app_icon(app: &AppHandle, target: String) -> Option<magpie_core::apps::Icon> {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(magpie_core::apps::icon(&target, APP_ICON_PX));
+        })
+        .ok()?;
+        rx.await.ok().flatten()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        tokio::task::spawn_blocking(move || magpie_core::apps::icon(&target, APP_ICON_PX))
+            .await
+            .ok()
+            .flatten()
+    }
+}
+
 // ---------- clipboard history ----------
 
 fn unix_now() -> i64 {
@@ -1948,21 +2094,37 @@ async fn paste_clip(app: AppHandle, text: String) -> Result<(), String> {
         let _ = w.hide();
     }
     tokio::time::sleep(std::time::Duration::from_millis(220)).await;
-    tokio::task::spawn_blocking(|| -> Result<()> {
-        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-        let mut e = Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("input: {e}"))?;
-        #[cfg(target_os = "macos")]
-        let modifier = Key::Meta;
-        #[cfg(not(target_os = "macos"))]
-        let modifier = Key::Control;
-        e.key(modifier, Direction::Press).map_err(|e| anyhow::anyhow!("{e}"))?;
-        e.key(Key::Unicode('v'), Direction::Click).map_err(|e| anyhow::anyhow!("{e}"))?;
-        e.key(modifier, Direction::Release).map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(())
+    send_mod_chord(&app, 'v').await.map_err(err_str)
+}
+
+/// Synthesize the platform copy/paste chord (Cmd on macOS, Ctrl elsewhere)
+/// plus `letter`, on the main thread. macOS requires that: enigo turns a
+/// letter into a key code through the Text Input Sources API, which asserts
+/// it runs on the main queue, and since macOS 14 a call from any other
+/// thread kills the process outright. That was issue #4, where the
+/// selection chord made magpie vanish. The main thread is free to take this:
+/// the three key events are a few milliseconds of work.
+async fn send_mod_chord(app: &AppHandle, letter: char) -> Result<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(mod_chord_now(letter));
     })
-    .await
-    .map_err(err_str)?
-    .map_err(err_str)
+    .map_err(|e| anyhow::anyhow!("main thread: {e}"))?;
+    rx.await.map_err(|_| anyhow::anyhow!("the main thread dropped the key chord"))?
+}
+
+fn mod_chord_now(letter: char) -> Result<()> {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+    let mut e = Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("input: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+    e.key(modifier, Direction::Press).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let clicked = e.key(Key::Unicode(letter), Direction::Click);
+    // release the modifier even when the letter failed, or it stays held
+    e.key(modifier, Direction::Release).map_err(|e| anyhow::anyhow!("{e}"))?;
+    clicked.map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Seek arguments for known players, by executable stem. Pure — unit tested.
@@ -2088,6 +2250,7 @@ fn spawn_clip_watcher(app: AppHandle) {
     let embedder = state.embedder.clone();
     let siglip = state.siglip.clone();
     let store = state.store.clone();
+    let clip_app = app.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<()> {
             let conn = db::open(&db_path)?;
@@ -2118,10 +2281,17 @@ fn spawn_clip_watcher(app: AppHandle) {
                             .unwrap_or(false)
                         {
                             recorded = true;
+                            let mut loaded = false;
                             if let Ok(mut guard) = siglip.try_lock() {
                                 if let Some(s) = guard.as_mut() {
+                                    loaded = true;
                                     let _ = clips::embed_pending_image_clips(&conn, s);
                                 }
+                            }
+                            if !loaded {
+                                // the first image clip: an idle model loads
+                                // now and its catch-up embeds this one
+                                ensure_image_model(&clip_app);
                             }
                         }
                     }
@@ -2358,6 +2528,9 @@ fn start_local_index(app: AppHandle, scope: Scope) -> bool {
         running.store(false, Ordering::SeqCst);
         match outcome {
             Ok(Ok(v)) => {
+                // the pass may have brought the first images or videos in;
+                // the model's own catch-up then embeds them
+                ensure_image_model(&app);
                 let _ = app.emit("local-done", v);
             }
             Ok(Err(e)) => {
@@ -2777,6 +2950,30 @@ fn spawn_ocr_index(app: AppHandle) {
         }
         indexing.store(false, Ordering::SeqCst);
     });
+}
+
+/// SigLIP status while nothing needs it: not loaded, not loading. Issue #4:
+/// the model sat in memory for users who index no images at all.
+const IMAGE_MODEL_IDLE: &str = "idle";
+
+/// Load the image model if it is idle and something now needs it. Called
+/// wherever the need can appear: after an index pass (new images or videos),
+/// when an image lands on the clipboard history, and when the user searches
+/// by an image. A model that is loading, ready or failed is left alone.
+fn ensure_image_model(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    if *state.siglip_status.lock().unwrap() != IMAGE_MODEL_IDLE {
+        return false;
+    }
+    let needed = db::open(&state.db_path)
+        .ok()
+        .and_then(|c| files::needs_image_model(&c).ok())
+        .unwrap_or(false);
+    if needed {
+        log::info!("image model needed now; loading it");
+        spawn_siglip_init(app.clone());
+    }
+    needed
 }
 
 /// Load SigLIP in the background, then embed any images that are waiting.
@@ -3619,6 +3816,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // launch at login: a LaunchAgent on macOS, the HKCU Run key on
+        // Windows, an XDG autostart entry on Linux. Off until the user
+        // switches it on in settings.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             log::info!("magpie v{} starting", app.package_info().version);
             // macOS activation policy is set in `run`, before the event loop
@@ -3684,6 +3888,7 @@ pub fn run() {
                 siglip_initing: Arc::new(AtomicBool::new(false)),
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
                 apps: Arc::new(StdMutex::new(Vec::new())),
+                app_icons: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 update_badge: Arc::new(StdMutex::new(String::new())),
                 ocr: Arc::new(StdMutex::new(None)),
                 ocr_status: Arc::new(StdMutex::new(String::new())),
@@ -3770,7 +3975,21 @@ pub fn run() {
             }
 
             spawn_model_init(app.handle().clone());
-            spawn_siglip_init(app.handle().clone());
+            // the image model only when something already needs it; an index
+            // pass or a copied image loads it later if that changes
+            {
+                let state = app.state::<AppState>();
+                let needed = db::open(&state.db_path)
+                    .ok()
+                    .and_then(|c| files::needs_image_model(&c).ok())
+                    .unwrap_or(true); // unsure: keep the old behaviour
+                if needed {
+                    spawn_siglip_init(app.handle().clone());
+                } else {
+                    *state.siglip_status.lock().unwrap() = IMAGE_MODEL_IDLE.into();
+                    log::info!("no images, videos or image clips indexed; image model stays unloaded");
+                }
+            }
             // OCR is opt-in; only spin it up when the user enabled it
             {
                 let state = app.state::<AppState>();
@@ -3877,7 +4096,10 @@ pub fn run() {
             set_mcp,
             rotate_mcp_token,
             set_watch,
-            set_rescan_minutes
+            set_rescan_minutes,
+            get_autostart,
+            set_autostart,
+            app_icon
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -169,6 +169,8 @@ impl Siglip {
             Ok(Session::builder()?
                 .with_intra_threads(threads)
                 .map_err(|e| anyhow!("intra threads: {e}"))?
+                .with_execution_providers([crate::threads::cpu_provider()])
+                .map_err(|e| anyhow!("cpu provider: {e}"))?
                 .commit_from_file(file)?)
         };
         let text = session(&paths.text)?;

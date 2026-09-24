@@ -39,8 +39,21 @@ pinyin = "0.10"
 # auto-download a static build on first use
 ffmpeg-sidecar = "2"
 
+# runs on the main thread from its own main(): AppKit requires it on macOS
+[[test]]
+name = "app_icons_main"
+harness = false
+
 [target."cfg(windows)".dependencies]
 clipboard-win = "5.4.1"
+# app icons (apps.rs): the shell's own image for a Start Menu shortcut.
+# 0.61 is the version tauri already builds, so this adds no second copy.
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_UI_Shell",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

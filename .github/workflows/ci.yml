@@ -46,3 +46,25 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+
+  # macOS-only code (AppKit app icons, the main-thread key chord) never
+  # compiles on the Linux job above; this one builds it and runs the icon
+  # reader on a real Mac, on the main thread as the app does
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p magpie-core -p magpie --all-targets -- -D warnings
+
+      - name: App icons through AppKit
+        run: cargo test -p magpie-core --test app_icons_main

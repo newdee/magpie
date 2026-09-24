@@ -393,6 +393,21 @@ input.query:active {
   font-size: 11px;
 }
 
+/* an app row: the OS icon, then the usual title/sub column */
+.row-lead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-icon {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
 .row-main {
   min-width: 0;
   display: flex;

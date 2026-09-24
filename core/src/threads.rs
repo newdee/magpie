@@ -16,6 +16,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const META_KEY: &str = "index_threads";
 
+/// The CPU execution provider every ONNX session uses (text embedding, image
+/// embedding, OCR), with ONNX Runtime's memory arena switched off.
+///
+/// The arena keeps the peak of every batch a session has ever run and never
+/// hands it back, so a long-running app ends up holding the largest batch's
+/// working memory forever: that was most of the gigabytes in issue #4.
+/// Measured on e5-small after four batches of 16 passages at 512 tokens:
+/// arena on 1910 MB private, arena off 784 MB, the model's own size. Speed
+/// did not suffer: a batch took 1803 ms with the arena and 1432 ms without,
+/// a single query 10.2 ms and 3.4 ms.
+pub fn cpu_provider() -> ort::ep::ExecutionProviderDispatch {
+    ort::ep::CPU::default().with_arena_allocator(false).build()
+}
+
 /// The model an embed pass drives. Each has its own stop flag, so reloading
 /// one never interrupts a pass on the other. (OCR has none: its passes take
 /// the engine per item, so a reload swaps it in between two items anyway.)

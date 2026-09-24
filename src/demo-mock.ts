@@ -277,6 +277,14 @@ let mcpToken = "demo0000000000000000000000000000000000000000000000000000000000a1
 const mcpCommand = () =>
   `claude mcp add --transport http magpie http://127.0.0.1:51999/mcp --header "Authorization: Bearer ${mcpToken}"`;
 
+// launch at login, as the OS would report it
+let autostart = false;
+const appIconSvg =
+  "data:image/svg+xml;base64," +
+  btoa(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="14" fill="#2f80ed"/><path d="M42 14 24 30l-8-6-4 3 8 7-8 7 4 3 8-6 18 16 8-4V18z" fill="#fff"/></svg>',
+  );
+
 mockIPC((cmd, args) => {
   const q = (args as { query?: string })?.query ?? "";
   switch (cmd) {
@@ -441,6 +449,15 @@ mockIPC((cmd, args) => {
       status.ocr_pdf = (args as { enabled: boolean }).enabled;
       return null;
     }
+    case "get_autostart":
+      return autostart;
+    case "set_autostart": {
+      autostart = (args as { on: boolean }).on;
+      return null;
+    }
+    case "app_icon":
+      // a stand-in app icon: the demo has no OS to ask
+      return appIconSvg;
     case "plugin:event|listen":
       return 1;
     case "plugin:updater|check":

@@ -315,9 +315,14 @@ fn matches_initials(q: &str, name: &str) -> bool {
 pub fn launch_app(target: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        // ShellExecute via `cmd start` resolves .lnk targets and arguments
+        // ShellExecute via `cmd start` resolves .lnk targets and arguments.
+        // cmd is a console program and the app a GUI one, so without
+        // CREATE_NO_WINDOW every launch would flash a console window; `start`
+        // still gives a console target its own window.
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
             .args(["/c", "start", "", target])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| anyhow!("launch: {e}"))?;
     }
@@ -349,6 +354,231 @@ pub fn launch_app(target: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// An application's icon, ready to hand to the webview as a data URL.
+#[derive(Debug, Clone)]
+pub struct Icon {
+    /// `image/png`, or `image/svg+xml` for a Linux theme icon shipped as SVG
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+/// The icon the OS shows for an app target from [`list_apps`], `px` pixels
+/// square (raster icons; an SVG is returned as is). None when the OS has no
+/// icon for it or it cannot be read; the palette then shows no icon.
+///
+/// Threading: on macOS this calls AppKit, so the caller runs it on the main
+/// thread. On Windows it initializes COM for the calling thread and releases
+/// it again, so any worker thread will do.
+pub fn icon(target: &str, px: u32) -> Option<Icon> {
+    #[cfg(target_os = "windows")]
+    {
+        let img = windows_icon::rgba(target, px)?;
+        png_icon(&img)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_icon::png(target, px).map(|bytes| Icon { mime: "image/png", bytes })
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        linux_icon(target, px)
+    }
+}
+
+#[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"))))]
+fn png_icon(img: &image::RgbaImage) -> Option<Icon> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(Icon { mime: "image/png", bytes: out.into_inner() })
+}
+
+/// Undo premultiplied alpha, in place. Shell bitmaps come premultiplied;
+/// a PNG wants straight alpha, or every soft edge renders too dark. A pixel
+/// whose colour exceeds its alpha proves the data was straight all along,
+/// and then nothing is touched.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+fn unpremultiply(rgba: &mut [u8]) {
+    let premultiplied = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]);
+    if !premultiplied {
+        return;
+    }
+    for p in rgba.as_chunks_mut::<4>().0 {
+        let a = p[3] as u32;
+        if a > 0 && a < 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_icon {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{
+        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
+        BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY};
+
+    /// The shell's own icon for a path (a Start Menu .lnk resolves to the
+    /// program's icon, without the shortcut arrow), as straight RGBA.
+    pub fn rgba(path: &str, px: u32) -> Option<image::RgbaImage> {
+        // SAFETY: plain Win32 calls; every handle obtained here is released
+        // before returning, and the COM init is paired with its uninit.
+        unsafe {
+            let inited = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+            let out = read(path, px);
+            if inited {
+                CoUninitialize();
+            }
+            out
+        }
+    }
+
+    unsafe fn read(path: &str, px: u32) -> Option<image::RgbaImage> {
+        // the shell's parser rejects forward slashes, and list_apps builds
+        // Start Menu paths with them
+        let path = path.replace('/', "\\");
+        let factory: IShellItemImageFactory =
+            SHCreateItemFromParsingName(&HSTRING::from(path.as_str()), None).ok()?;
+        let side = px as i32;
+        let hbm = factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_ICONONLY).ok()?;
+        let obj = HGDIOBJ(hbm.0);
+        let pixels = (|| {
+            let mut bm = BITMAP::default();
+            let n = GetObjectW(
+                obj,
+                std::mem::size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut BITMAP as *mut _),
+            );
+            if n == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0 {
+                return None;
+            }
+            let (w, h) = (bm.bmWidth, bm.bmHeight);
+            let mut info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w,
+                    biHeight: -h, // negative: rows top-down
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            let dc = GetDC(None);
+            let lines = GetDIBits(
+                dc,
+                hbm,
+                0,
+                h as u32,
+                Some(buf.as_mut_ptr() as *mut _),
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+            ReleaseDC(None, dc);
+            if lines == 0 {
+                return None;
+            }
+            // BGRA → RGBA
+            for p in buf.as_chunks_mut::<4>().0 {
+                p.swap(0, 2);
+            }
+            // a bitmap without an alpha channel reads back all-zero alpha
+            if buf.as_chunks::<4>().0.iter().all(|p| p[3] == 0) {
+                for p in buf.as_chunks_mut::<4>().0 {
+                    p[3] = 255;
+                }
+            } else {
+                super::unpremultiply(&mut buf);
+            }
+            image::RgbaImage::from_raw(w as u32, h as u32, buf)
+        })();
+        let _ = DeleteObject(obj);
+        pixels
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_icon {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSBitmapImageRepPropertyKey, NSWorkspace};
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
+
+    /// The Finder's icon for a bundle, rendered to a `px`-point PNG. AppKit
+    /// picks the best representation, Assets.car icons included, which
+    /// reading the bundle's .icns by hand would miss. Main thread only.
+    pub fn png(path: &str, px: u32) -> Option<Vec<u8>> {
+        objc2::rc::autoreleasepool(|_| {
+            let icon = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path));
+            let side = px as f64;
+            let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side, side));
+            // SAFETY: `rect` is a live NSRect; no context or hints are passed
+            let cg = unsafe { icon.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
+            let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg);
+            let props = NSDictionary::<NSBitmapImageRepPropertyKey, objc2::runtime::AnyObject>::new();
+            // SAFETY: an empty properties dictionary is always valid
+            let data = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }?;
+            Some(data.to_vec())
+        })
+    }
+}
+
+/// A .desktop entry's `Icon=`: an absolute file, or a name looked up the
+/// way desktops do (the hicolor theme at common sizes, then pixmaps).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_icon(target: &str, px: u32) -> Option<Icon> {
+    let text = std::fs::read_to_string(target).ok()?;
+    let name = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Icon="))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let file = if name.starts_with('/') {
+        Some(PathBuf::from(name))
+    } else {
+        icon_theme_file(name)
+    }?;
+    let bytes = std::fs::read(&file).ok()?;
+    if file.extension().and_then(|e| e.to_str()) == Some("svg") {
+        return Some(Icon { mime: "image/svg+xml", bytes });
+    }
+    let img = image::load_from_memory(&bytes).ok()?;
+    png_icon(&img.thumbnail(px, px).to_rgba8())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn icon_theme_file(name: &str) -> Option<PathBuf> {
+    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
+    let mut bases = vec![home.join(".local/share/icons")];
+    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    bases.extend(data_dirs.split(':').filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("icons")));
+    for base in &bases {
+        for size in ["64x64", "48x48", "128x128", "256x256", "96x96", "32x32", "scalable"] {
+            for ext in ["png", "svg"] {
+                let p = base.join("hicolor").join(size).join("apps").join(format!("{name}.{ext}"));
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    // xpm is left out: the webview cannot render it and `image` cannot read it
+    ["png", "svg"]
+        .iter()
+        .map(|ext| PathBuf::from(format!("/usr/share/pixmaps/{name}.{ext}")))
+        .find(|p| p.is_file())
 }
 
 #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"))))]
@@ -503,6 +733,42 @@ mod tests {
         assert_eq!(match_apps(&apps, "proxy", 10, true)[0].name, "Clash for Windows");
         assert_eq!(match_apps(&apps, "browser", 10, true)[0].name, "Chrome");
         assert!(match_apps(&apps, "proxy", 10, true).len() == 1);
+    }
+
+    #[test]
+    fn unpremultiply_restores_straight_alpha_and_leaves_straight_data_alone() {
+        // half-transparent white, premultiplied: (128,128,128,128)
+        let mut px = vec![128, 128, 128, 128, 0, 0, 0, 0, 10, 20, 30, 255];
+        unpremultiply(&mut px);
+        assert_eq!(&px[..4], &[255, 255, 255, 128]);
+        assert_eq!(&px[4..8], &[0, 0, 0, 0], "fully transparent stays as is");
+        assert_eq!(&px[8..], &[10, 20, 30, 255], "opaque pixels are unchanged");
+        // a colour above its alpha means straight data: nothing may change
+        let mut straight = vec![200, 10, 10, 100, 128, 128, 128, 128];
+        let before = straight.clone();
+        unpremultiply(&mut straight);
+        assert_eq!(straight, before);
+    }
+
+    /// Every Windows install has Start Menu shortcuts; the first few must
+    /// come back as real, visible 64px icons.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_start_menu_apps_have_icons() {
+        let apps = list_apps();
+        assert!(!apps.is_empty(), "no Start Menu shortcuts found");
+        let mut ok = 0;
+        for a in apps.iter().take(10) {
+            let Some(icon) = icon(&a.target, 64) else { continue };
+            assert_eq!(icon.mime, "image/png");
+            let img = image::load_from_memory(&icon.bytes).expect("decodes").to_rgba8();
+            assert_eq!(img.dimensions(), (64, 64), "{}", a.name);
+            let visible = img.pixels().filter(|p| p[3] > 0).count();
+            assert!(visible > 64 * 64 / 10, "{} icon is nearly empty", a.name);
+            ok += 1;
+        }
+        assert!(ok >= 5, "only {ok} of the first 10 shortcuts produced an icon");
+        assert!(icon(r"C:\definitely\not\here.lnk", 64).is_none());
     }
 
     #[test]

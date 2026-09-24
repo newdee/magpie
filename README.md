@@ -180,6 +180,9 @@ name, and understood formats are searched in full text:
   watcher reports them and only the touched paths are re-read. A full walk
   every 30 minutes (adjustable, or off) reconciles anything the watcher
   missed, and "Rescan now" runs it on demand.
+- The image model loads only once something needs it: an image or a video
+  in an indexed folder, or an image in the clipboard history. Index only
+  text and it never takes memory at all.
 
 Images are embedded with **SigLIP 2** and searchable by content:
 
@@ -199,7 +202,11 @@ description in one list. Decoding uses ffmpeg: a system install is picked up
 automatically, or a static build is fetched once from magpie's own releases
 (reachable wherever you downloaded magpie from;
 [GPL builds](https://ffmpeg.org/download.html) by gyan.dev / evermeet.cx /
-johnvansickle.com, sources at ffmpeg.org). Toggleable in Settings.
+johnvansickle.com, sources at ffmpeg.org). Toggleable in Settings. In the
+preview pane a video shows its shots, or a single frame when the shot index
+has not reached it yet (with an ffmpeg already on the machine; a preview
+never starts the download). Files with nothing to render show their folder,
+size and age instead.
 
 The index is incremental: startup, manual refresh, and a 30-minute timer pick
 up new, changed, and deleted files automatically.
@@ -215,8 +222,8 @@ are obvious.
 
 ### Applications
 
-Typing in the Local tab surfaces matching installed apps as top hits (an
-`App` badge marks them) and `Enter` launches. Names match by prefix,
+Typing in the Local tab surfaces matching installed apps as top hits, each
+with its own icon and an `App` badge, and `Enter` launches. Names match by prefix,
 substring, or acronym (`vsc` → Visual Studio Code). Chinese names also match
 by full pinyin or initials (`wx` / `weixin` → 微信, `wangyiyun` → 网易云音乐),
 heteronyms included (`cq` and `zq` both find 重庆…), so you never switch input
@@ -272,24 +279,30 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Ctrl+C` | copy what identifies the row: a path, a URL, a clip's text (`Ctrl+Shift+C`: the file itself) |
 | `Ctrl+Alt+Space` | in any app: look up the selected text (`Option+Shift+Space` on macOS; rebindable) |
 | `Tab` | next source (Local / Stars / Web / Clipboard, order set in settings) |
+| `Ctrl+1` … `Ctrl+9` | jump straight to that tab, in strip order (`Alt` instead, or off, in settings) |
 | `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
 | `Shift+Enter` | paste the selected clip(s) into the previous app (Clipboard tab) |
 | `Shift`+`↑` `↓` | extend a multi-selection (Clipboard tab) |
 | `Ctrl+Delete` | delete the selected clips (Clipboard tab) |
 | `→` / `←` | open / close the preview pane (`→` with the cursor at the end of the query) |
-| `Alt+,` (or `Ctrl+,`) | toggle Settings ↔ search |
+| `Alt+,` or `Ctrl+,` (`⌘,` on macOS) | toggle Settings ↔ search |
 | `Esc` | clear image query → close settings → hide window |
 | drop / paste / pick an image | search local images by similarity |
 
-The palette sits top-center, stays above every window, never hides on focus
-loss (so drag-and-drop works), and can be dragged by its tab strip. Tab order
+On macOS, `Cmd` works wherever the table says `Ctrl`.
+
+The palette sits top-center, stays above every window, and can be dragged by
+its tab strip. It hides when another window takes focus, on by default on
+macOS; on Windows and Linux it stays until dismissed by default, so files can
+be dragged in from other windows. Settings switch it either way. Tab order
 and the tab that opens on launch are both configurable.
 
 ## Settings (tray icon → Settings…)
 
 GitHub token (with connection badge) · indexed folders (add / remove /
 rebuild) · appearance (auto / light / dark) · UI language (auto / English /
-中文) · pinyin app matching · app aliases · summon shortcut (recordable) ·
+中文) · launch at login · hide on click-out · jump-to-tab keys (Ctrl/Cmd,
+Alt or off) · pinyin app matching · app aliases · summon shortcut (recordable) ·
 search-selection shortcut · notes file · recent opens on the empty box ·
 model download source (huggingface.co or hf-mirror.com for networks where
 HF is unreachable) · max file size (4/16/64 MB or unlimited) · video shot
