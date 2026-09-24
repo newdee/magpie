@@ -177,7 +177,8 @@ README 全文（分块嵌入）。自动检测取消 star，README 用 ETag 增�
 Code）。中文名还支持全拼和首字母拼音（`wx` / `weixin` → 微信，
 `wangyiyun` → 网易云音乐），多音字全覆盖（`cq`、`zq` 都能找到重庆…），
 启动应用彻底告别切输入法，设置里可开关。应用来源：Windows 开始菜单、
-macOS `/Applications`、Linux `.desktop`。
+macOS `/Applications`、Linux `.desktop`。应用列表每 30 分钟在后台刷新一次，
+新装的应用不用重启就能搜到；图标有缓存，只有新装或更新过的应用才重新读取。
 
 应用还认别名：内置中英名对照表打通两个方向（输 `lark` 找到飞书、输
 `weixin` 找到装成 *WeChat* 的微信），Linux 免费吃进 `.desktop` 的

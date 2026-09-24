@@ -529,6 +529,9 @@ export default function App() {
   // launch at login: the OS registration is the truth, so it's read back
   // from the backend rather than remembered here (null = not known yet)
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  // bumped when the backend re-reads app icons; keys the icon components so
+  // rows already on screen fetch the fresh ones
+  const [iconEpoch, setIconEpoch] = useState(0);
 
   // language: update the module-level dictionary BEFORE the re-render, then
   // tell the backend so the tray menu follows
@@ -984,6 +987,12 @@ export default function App() {
       }),
       // tray menu entry point
       listen("open-settings", () => setShowSettings(true)),
+      // the backend re-read some app icons (new or updated apps): forget the
+      // palette's copies and let the rows on screen fetch them again
+      listen("app-icons-changed", () => {
+        appIconCache.clear();
+        setIconEpoch((n) => n + 1);
+      }),
       // the selection-search chord: the backend copied the selected text and
       // is about to summon the palette; make that text the query
       listen<string>("search-selection", (e) => {
@@ -3495,7 +3504,7 @@ export default function App() {
                 ) : r.kind === "app" ? (
                   <>
                     <div className="row-lead">
-                      <AppIcon target={r.target} />
+                      <AppIcon key={iconEpoch} target={r.target} />
                       <div className="row-main">
                         <span className="row-title">{r.name}</span>
                         <span className="row-sub">{t("Application")}</span>

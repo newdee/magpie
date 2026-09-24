@@ -1926,6 +1926,21 @@ fn set_autostart(app: AppHandle, on: bool) -> Result<(), String> {
 
 // ---------- app icons ----------
 
+/// How often the installed-app list and its icons are refreshed while the
+/// app runs (it is always refreshed at launch).
+const APP_RESCAN: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// [`APP_RESCAN`], or `MAGPIE_APP_RESCAN_SECS` when set: a test hook, so a
+/// check of the refresh does not have to wait half an hour.
+fn app_rescan_every() -> std::time::Duration {
+    std::env::var("MAGPIE_APP_RESCAN_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&s: &u64| s > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(APP_RESCAN)
+}
+
 /// Rendered edge of an app icon. The row shows it at 26 CSS px; 64 keeps it
 /// sharp on a 2x display.
 const APP_ICON_PX: u32 = 64;
@@ -2029,10 +2044,27 @@ async fn prefetch_app_icons(app: AppHandle) {
         read += 1;
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-    log::info!(
+    // the launch pass and any pass that changed something are worth a line;
+    // a quiet half-hourly refresh is not
+    static LOGGED_ONCE: AtomicBool = AtomicBool::new(false);
+    let changed = read > 0 || pruned > 0;
+    // swap before the test, never inside it: short-circuited behind
+    // `changed`, the flag stayed unset and the first quiet pass logged
+    let first = !LOGGED_ONCE.swap(true, Ordering::SeqCst);
+    let level = if changed || first {
+        log::Level::Info
+    } else {
+        log::Level::Debug
+    };
+    log::log!(
+        level,
         "app icons: {from_cache} remembered, {read} read, {pruned} forgotten, in {} ms",
         started.elapsed().as_millis()
     );
+    if changed {
+        // the palette keeps its own copy of each icon; drop it
+        let _ = app.emit("app-icons-changed", ());
+    }
     RUNNING.store(false, Ordering::SeqCst);
 }
 
@@ -4098,6 +4130,19 @@ pub fn run() {
             // watcher (deleted/changed files it missed, bookmarks, videos).
             // Every `rescan_minutes` (default 30, 0 = off), read once a
             // minute so a change in settings applies without a restart.
+            // installed apps change while magpie stays open for days: re-list
+            // them and refresh the icons of new or updated ones. Its own timer,
+            // not the file rescan's, which can be switched off. All off the
+            // main thread; with nothing changed a pass is a stat per app.
+            let apps_timer = app.handle().clone();
+            let every = app_rescan_every();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(every).await;
+                    spawn_app_scan(apps_timer.clone());
+                }
+            });
+
             let periodic = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut elapsed: u64 = 0;

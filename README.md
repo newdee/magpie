@@ -229,6 +229,9 @@ by full pinyin or initials (`wx` / `weixin` → 微信, `wangyiyun` → 网易�
 heteronyms included (`cq` and `zq` both find 重庆…), so you never switch input
 methods to launch an app. Toggleable in settings. Apps come from the Start
 Menu on Windows, `/Applications` on macOS, and `.desktop` entries on Linux.
+The list refreshes every 30 minutes in the background, so a newly installed
+app shows up without a restart; icons are cached and re-read only for apps
+that are new or updated.
 
 Apps also answer to aliases: a built-in bilingual table bridges Chinese and
 English product names (`lark` finds 飞书, `weixin` finds an app installed as
