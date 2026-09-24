@@ -537,18 +537,35 @@ mod macos_icon {
 
 /// A .desktop entry's `Icon=`: an absolute file, or a name looked up the
 /// way desktops do (the hicolor theme at common sizes, then pixmaps).
-#[cfg(all(unix, not(target_os = "macos")))]
-fn linux_icon(target: &str, px: u32) -> Option<Icon> {
-    let text = std::fs::read_to_string(target).ok()?;
-    let name = text
+/// The icon a .desktop file names: an absolute path, or a theme icon name.
+/// Only the main entry's `Icon=` counts (the first one; localized `Icon[xx]=`
+/// keys do not match). The spec wants a bare theme name, but `Icon=foo.png`
+/// is common in the wild, so a trailing image extension is dropped.
+#[cfg_attr(not(any(all(unix, not(target_os = "macos")), test)), allow(dead_code))]
+fn desktop_icon_name(desktop: &str) -> Option<String> {
+    let name = desktop
         .lines()
         .find_map(|l| l.strip_prefix("Icon="))
         .map(str::trim)
         .filter(|s| !s.is_empty())?;
+    if name.starts_with('/') {
+        return Some(name.to_string());
+    }
+    let bare = ["png", "svg", "xpm"]
+        .iter()
+        .find_map(|ext| name.strip_suffix(&format!(".{ext}")))
+        .unwrap_or(name);
+    Some(bare.to_string())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_icon(target: &str, px: u32) -> Option<Icon> {
+    let text = std::fs::read_to_string(target).ok()?;
+    let name = desktop_icon_name(&text)?;
     let file = if name.starts_with('/') {
         Some(PathBuf::from(name))
     } else {
-        icon_theme_file(name)
+        icon_theme_file(&name)
     }?;
     let bytes = std::fs::read(&file).ok()?;
     if file.extension().and_then(|e| e.to_str()) == Some("svg") {
@@ -748,6 +765,26 @@ mod tests {
         let before = straight.clone();
         unpremultiply(&mut straight);
         assert_eq!(straight, before);
+    }
+
+    #[test]
+    fn desktop_icon_names_as_found_in_the_wild() {
+        let entry = |icon: &str| format!("[Desktop Entry]\nName=App\n{icon}\nExec=app\n");
+        assert_eq!(desktop_icon_name(&entry("Icon=firefox")).as_deref(), Some("firefox"));
+        assert_eq!(desktop_icon_name(&entry("Icon=code.png")).as_deref(), Some("code"), "extension dropped");
+        assert_eq!(desktop_icon_name(&entry("Icon=gimp.svg")).as_deref(), Some("gimp"));
+        assert_eq!(
+            desktop_icon_name(&entry("Icon=/opt/app/icon.png")).as_deref(),
+            Some("/opt/app/icon.png"),
+            "absolute paths are kept whole"
+        );
+        assert_eq!(desktop_icon_name(&entry("Icon=  ")), None, "blank");
+        assert_eq!(desktop_icon_name(&entry("Comment=no icon")), None);
+        // localized keys never match; the main entry's key comes first
+        let text = "[Desktop Entry]\nIcon[de]=de-icon\nIcon=main\n[Desktop Action new]\nIcon=action\n";
+        assert_eq!(desktop_icon_name(text).as_deref(), Some("main"));
+        // a dotted name that is not an image extension stays as is
+        assert_eq!(desktop_icon_name(&entry("Icon=org.gnome.Nautilus")).as_deref(), Some("org.gnome.Nautilus"));
     }
 
     /// Every Windows install has Start Menu shortcuts; the first few must

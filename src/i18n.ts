@@ -229,6 +229,7 @@ const ZH: Record<string, string> = {
     "应用名支持拼音——wx 找到微信，vsc 找到 VS Code",
   "Ctrl+Enter hands your query to the browser — URLs open directly":
     "Ctrl+Enter 把输入交给浏览器——网址直接打开",
+  "Ctrl+1 to Ctrl+9 jump straight to a tab (⌘ on a Mac)": "Ctrl+1 到 Ctrl+9 直接切到对应 tab（Mac 上用 ⌘）",
   "Unit conversion lives in the box: 100 mb to gb, 32 f to c":
     "单位换算就在输入框：100 mb to gb、32 f to c",
   "Give apps aliases in settings: proxy = clash":

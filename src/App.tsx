@@ -872,10 +872,12 @@ export default function App() {
   // input is hidden and focus can sit on <body>, so a panel-level handler
   // would open settings but never close them. Alt+, matches the app's own
   // Alt family; Ctrl/Cmd+, keeps the platform convention working too. The
-  // physical key is matched, not the character: Option+, types "≤" on macOS.
+  // character OR the physical key matches: Option+, types "≤" on macOS (the
+  // key is still Comma), and on AZERTY the comma sits on another key (the
+  // character is still ",").
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === "Comma" && (e.altKey || e.ctrlKey || e.metaKey)) {
+      if ((e.key === "," || e.code === "Comma") && (e.altKey || e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         setShowSettings((s) => !s);
       } else if (e.key === "Escape" && document.activeElement === document.body) {
@@ -3669,10 +3671,11 @@ export default function App() {
           <span>
             <kbd>⏎</kbd> {source === "clips" ? t("copy") : t("open")}
           </span>
+          {/* the 1–9 jump chord is not listed here: the footer is full, and
+              an extra key pushed the index status off its right end. Each
+              tab's tooltip names it, and so does a launch tip. */}
           <span>
-            <kbd>tab</kbd>
-            {tabKeys !== "off" && <kbd>{`${tabKeys === "alt" ? (IS_MAC ? "⌥" : "alt") : MOD}1–${sources.length}`}</kbd>}{" "}
-            {t("source")}
+            <kbd>tab</kbd> {t("source")}
           </span>
           {source === "clips" && (
             <>

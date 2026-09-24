@@ -113,6 +113,7 @@ export const TIPS: string[] = [
   "Enter on a video hit starts playback right at the matched scene",
   "App names match by pinyin too — wx finds 微信, vsc finds VS Code",
   "Ctrl+Enter hands your query to the browser — URLs open directly",
+  "Ctrl+1 to Ctrl+9 jump straight to a tab (⌘ on a Mac)",
   "Unit conversion lives in the box: 100 mb to gb, 32 f to c",
   "Give apps aliases in settings: proxy = clash",
   "Shift+Tab cycles the local scope: all / text / images / videos",

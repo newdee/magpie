@@ -2128,6 +2128,9 @@ fn mod_chord_now(letter: char) -> Result<()> {
 }
 
 /// Seek arguments for known players, by executable stem. Pure — unit tested.
+/// macOS opens videos with the default app and never seeks, so there it is
+/// only exercised by the tests.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn player_seek_args(exe_stem: &str, path: &str, ts_ms: i64) -> Option<Vec<String>> {
     let secs = ts_ms as f64 / 1000.0;
     let (h, rem) = (ts_ms / 3_600_000, ts_ms % 3_600_000);
