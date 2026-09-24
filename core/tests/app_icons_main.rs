@@ -2,13 +2,15 @@
 //!
 //! A plain `#[test]` runs on a worker thread, and on macOS AppKit cares about
 //! threads, so this file opts out of the test harness (see Cargo.toml) and
-//! runs from `main`. CI runs it on macOS three ways:
-//!   - plain: icons read on the main thread and on a background thread
-//!   - under Apple's Main Thread Checker with MTC_CRASH_ON_REPORT=1: the
-//!     background reads must not trip it (magpie reads icons off the main
-//!     thread, so a report here would be a real bug)
-//!   - control, MAGPIE_MTC_CONTROL=1: a call the checker must catch, run off
-//!     the main thread, so CI proves the checker was actually loaded
+//! runs from `main`. CI runs it on macOS three ways.
+//!
+//! - Plain: icons read on the main thread and on background threads.
+//! - Under Apple's Main Thread Checker with MTC_CRASH_ON_REPORT=1: the
+//!   background reads must not trip it (magpie reads icons off the main
+//!   thread, so a report here would be a real bug).
+//! - Control, MAGPIE_MTC_CONTROL=1: a call the checker must catch, run off
+//!   the main thread, so CI proves the checker was actually loaded.
+//!
 //! Windows and Linux are covered by the unit tests in `apps.rs`.
 
 fn main() {
