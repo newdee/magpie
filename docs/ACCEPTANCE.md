@@ -86,7 +86,9 @@
 
 ## 未验证项
 
-- macOS 真机：划词崩溃的根因是推断（无 Mac 复现），修法按推断做，请报告者确认；
+- macOS 真机：划词崩溃的根因已由报告者贴的 3 份 ips 证实（macOS 26.5 / Mac14,2 /
+  0.2.2，崩溃线程均为 `search_selection` → enigo → `TSMGetInputSourceProperty` →
+  `dispatch_assert_queue_fail`），修复是否生效待报告者在 0.3.0 上确认；
   失焦隐藏、⌘+数字、Option+, 的真实按键（只用合成事件验证了匹配逻辑）；
   LaunchAgent 开机启动；关内存池后的 macOS 内存数（只在 Windows 量过）。
 - Linux：图标只有编译 + 解析单测，没有真实桌面环境跑过。
