@@ -113,6 +113,20 @@ vaguely remember (or drop in an image), hit Enter.
 - **Dates too**: `today + 30d`, `2026-10-01 - today`, `until 2026-10-01`,
   `tomorrow + 3 months`. A lone `2026-10-01` tells you the weekday and how
   far off it is.
+- **Time zones, offline**: `tokyo time`, `time in new york`, `东京时间`, or
+  `3pm pst to beijing` and `9am to london` (from your local time). Daylight
+  saving is applied for the date; a bare `tokyo` stays a search.
+- **System commands**: lock the screen, sleep, restart, shut down, empty the
+  trash, toggle dark mode, by name in either language (`lock`, `锁屏`,
+  `sp`). Restart, shut down and emptying the trash take a second `Enter`.
+- **End a process**: `kill chrome` lists running processes by name with
+  their memory; `Enter` twice ends the selected one. magpie and the system's
+  own processes are never listed.
+- **An action menu on every row**: `Ctrl+K` (`⌘K` on macOS) lists what the
+  selected result can do: open with the default app or show in its folder,
+  copy the path or the file, run an app as administrator (Windows), copy a
+  repo's clone command or a page as a Markdown link, pin or delete a clip,
+  end a process.
 - **Text verbs work on your clipboard**: `json` alone pretty-prints whatever
   you just copied; `upper`, `lower`, `trim`, `slug`, `lines` (dedupe and
   sort) and `count` (chars, words, lines) likewise. Give them an argument
@@ -287,6 +301,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Enter` | context action: open a repo/bookmark/history page in the browser, reveal a file in Explorer/Finder, launch an app, or copy a clip. The box is empty on the next summon (`Esc` keeps what you typed) |
 | `Ctrl+Enter` | hand the query to the browser: URL-looking input opens directly, anything else web-searches |
 | `Ctrl+C` | copy what identifies the row: a path, a URL, a clip's text (`Ctrl+Shift+C`: the file itself) |
+| `Ctrl+K` | the selected result's action menu (`↑↓` to pick, `Enter` to run, `Esc` to close) |
 | `Ctrl+Alt+Space` | in any app: look up the selected text (`Option+Shift+Space` on macOS; rebindable) |
 | `Tab` | next source (Local / Stars / Web / Clipboard, order set in settings) |
 | `Ctrl+1` … `Ctrl+9` | jump straight to that tab, in strip order (`Alt` instead, or off, in settings) |
@@ -296,7 +311,7 @@ recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Ctrl+Delete` | delete the selected clips (Clipboard tab) |
 | `→` / `←` | open / close the preview pane (`→` with the cursor at the end of the query) |
 | `Alt+,` or `Ctrl+,` (`⌘,` on macOS) | toggle Settings ↔ search |
-| `Esc` | clear image query → close settings → hide window |
+| `Esc` | close the action menu → clear image query → close settings → hide window |
 | drop / paste / pick an image | search local images by similarity |
 
 On macOS, `Cmd` works wherever the table says `Ctrl`.

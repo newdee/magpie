@@ -20,6 +20,9 @@ pub fn eval(query: &str) -> Option<CalcResult> {
     if q.len() < 2 || q.len() > 200 {
         return None;
     }
+    if let Some(r) = crate::tz::eval(q) {
+        return Some(r);
+    }
     if let Some(r) = eval_date(q) {
         return Some(r);
     }

@@ -455,6 +455,39 @@ mockIPC((cmd, args) => {
       autostart = (args as { on: boolean }).on;
       return null;
     }
+    case "search_commands": {
+      // a small stand-in for the backend matcher: prefix of an English name
+      const ql = q.toLowerCase();
+      const table: [string, string[], boolean][] = [
+        ["lock", ["lock screen", "锁屏"], false],
+        ["sleep", ["sleep", "睡眠"], false],
+        ["restart", ["restart", "reboot", "重启"], true],
+        ["shutdown", ["shut down", "shutdown", "关机"], true],
+        ["empty_trash", ["empty trash", "trash", "清空回收站"], true],
+        ["dark_mode", ["toggle dark mode", "dark mode", "深色模式"], false],
+      ];
+      return ql.length < 2
+        ? []
+        : table
+            .filter(([, names]) => names.some((n) => n.startsWith(ql)))
+            .map(([id, , destructive]) => ({ id, destructive, score: 0.9 }));
+    }
+    case "list_processes": {
+      const procs = [
+        { pid: 4312, name: "chrome.exe", memory: 412_000_000, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+        { pid: 5120, name: "chrome.exe", memory: 188_000_000, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+        { pid: 7788, name: "Code.exe", memory: 356_000_000, exe: "C:\\Users\\dfine\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe" },
+      ];
+      const want = String((args as { query?: string }).query ?? "").toLowerCase();
+      return procs.filter((p) => p.name.toLowerCase().includes(want));
+    }
+    case "run_system_command":
+      return "dry run";
+    case "end_process":
+    case "open_path_default":
+    case "reveal_app":
+    case "run_app_as_admin":
+      return null;
     case "app_icon":
       // a stand-in app icon: the demo has no OS to ask
       return appIconSvg;

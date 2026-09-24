@@ -109,7 +109,54 @@ interface VideoHit {
   score: number;
 }
 
-type Hit = RepoHit | FileHit | BookmarkHit | HistoryHit | ClipHit | AppHit | VideoHit;
+/// A system command (lock, sleep, restart, …) offered next to apps.
+interface CommandHit {
+  kind: "command";
+  id: string;
+  destructive: boolean;
+  score: number;
+}
+
+/// A running process, listed by `kill <name>`.
+interface ProcessHit {
+  kind: "process";
+  pid: number;
+  name: string;
+  memory: number;
+  exe: string | null;
+}
+
+type Hit =
+  | RepoHit
+  | FileHit
+  | BookmarkHit
+  | HistoryHit
+  | ClipHit
+  | AppHit
+  | VideoHit
+  | CommandHit
+  | ProcessHit;
+
+/// A stable identity per row, for React keys and for the "press Enter
+/// again" confirmation.
+function hitKey(r: Hit): string {
+  switch (r.kind) {
+    case "app":
+      return `app-${r.target}`;
+    case "command":
+      return `command-${r.id}`;
+    case "process":
+      return `process-${r.pid}`;
+    default:
+      return `${r.kind}-${r.id}`;
+  }
+}
+
+/// `kill chrome` / `结束 chrome` → "chrome"; anything else → null.
+function matchKill(q: string): string | null {
+  const m = /^(?:kill|结束)\s+(.+)$/i.exec(q.trim());
+  return m ? m[1].trim() : null;
+}
 
 interface FolderInfo {
   id: number;
@@ -211,7 +258,35 @@ const LOCAL_KEYS = [
 /// macOS gets ⌘ in the key hints. The handlers themselves accept Ctrl or Cmd
 /// on every platform, so this only changes what the footer says.
 const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+const IS_WIN = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
 const MOD = IS_MAC ? "⌘" : "ctrl";
+
+/// Display names of the system commands, by the backend's ids.
+const COMMAND_LABELS: Record<string, string> = {
+  lock: "Lock Screen",
+  sleep: "Sleep",
+  restart: "Restart",
+  shutdown: "Shut Down",
+  empty_trash: IS_WIN ? "Empty Recycle Bin" : "Empty Trash",
+  dark_mode: "Toggle Dark Mode",
+};
+const COMMAND_GLYPHS: Record<string, string> = {
+  lock: "🔒",
+  sleep: "🌙",
+  restart: "🔄",
+  shutdown: "⏻",
+  empty_trash: "🗑️",
+  dark_mode: "🌓",
+};
+
+/// One entry of a row's action menu (Ctrl/Cmd+K). `risky` actions go
+/// through the same "press Enter again" confirmation as their rows.
+interface RowAction {
+  key: string;
+  label: string;
+  risky?: boolean;
+  run: () => Promise<unknown> | void;
+}
 
 /// Hide the palette when it loses focus. Stored "1"/"0"; nothing stored
 /// means the platform default: on for macOS, where a Spotlight-style panel
@@ -532,6 +607,15 @@ export default function App() {
   // bumped when the backend re-reads app icons; keys the icon components so
   // rows already on screen fetch the fresh ones
   const [iconEpoch, setIconEpoch] = useState(0);
+  // the row (hitKey) whose risky action is waiting for a second Enter
+  const [armed, setArmed] = useState<string | null>(null);
+  const armedRef = useRef(armed);
+  armedRef.current = armed;
+  // the action menu (Ctrl/Cmd+K) of the selected row, and its cursor
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionSel, setActionSel] = useState(0);
+  const actionsOpenRef = useRef(actionsOpen);
+  actionsOpenRef.current = actionsOpen;
 
   // language: update the module-level dictionary BEFORE the re-render, then
   // tell the backend so the tray menu follows
@@ -693,6 +777,21 @@ export default function App() {
     // Clipboard is the exception — its whole point is "what did I just copy",
     // so an empty query lists the most recent clips.
     const srcId = (sourcesRef.current[srcIdx] ?? sourcesRef.current[0]).id;
+    // `kill <name>` lists running processes, from any tab
+    const killQ = matchKill(q);
+    if (killQ) {
+      try {
+        const ps = await invoke<Omit<ProcessHit, "kind">[]>("list_processes", { query: killQ });
+        if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
+          setResults(ps.map((p) => ({ ...p, kind: "process" as const })));
+          setSelected(0);
+          setSelAnchor(null);
+        }
+      } catch {
+        /* listing failed: keep what is on screen */
+      }
+      return;
+    }
     if (q.trim() === "" && srcId !== "clips") {
       // opt-in: the empty box lists what you opened most recently from this
       // tab, so "back to that file from a minute ago" is two keystrokes
@@ -733,7 +832,7 @@ export default function App() {
       } else {
         // local: matching apps surface as top hits, then files (+ videos in
         // the images scope — the backend tags each hit's kind)
-        const [apps, fs] = await Promise.all([
+        const [apps, fs, cmds] = await Promise.all([
           invoke<Omit<AppHit, "kind">[]>("search_apps", {
             query: q,
             pinyin: pinyinRef.current,
@@ -742,8 +841,14 @@ export default function App() {
             query: q,
             scope: localScopeRef.current,
           }),
+          invoke<Omit<CommandHit, "kind">[]>("search_commands", { query: q }).catch(() => []),
         ]);
-        hits = [...apps.map((a) => ({ ...a, kind: "app" as const })), ...fs];
+        // system commands and apps share one scale; the better match leads
+        const top: Hit[] = [
+          ...cmds.map((c) => ({ ...c, kind: "command" as const })),
+          ...apps.map((a) => ({ ...a, kind: "app" as const })),
+        ].sort((a, b) => b.score - a.score);
+        hits = [...top, ...fs];
       }
       if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
         setResults(hits);
@@ -888,7 +993,9 @@ export default function App() {
         // under the list): the panel handler can't hear this Esc, so run
         // its whole ladder here, down to hiding the palette
         e.preventDefault();
-        if (imageQueryRef.current) {
+        if (actionsOpenRef.current) {
+          setActionsOpen(false);
+        } else if (imageQueryRef.current) {
           setImageQuery(null);
         } else if (showSettingsRef.current) {
           setShowSettings(false);
@@ -1089,8 +1196,53 @@ export default function App() {
     setImageQuery(null);
   }, []);
 
+  // a pending confirmation lapses when the list or the selection moves on,
+  // or after a few seconds
+  useEffect(() => {
+    setArmed(null);
+  }, [results, selected]);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(null), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  /// Run a system command or end a process. Ending a process, and the
+  /// commands that lose something (restart, shut down, empty the trash),
+  /// take a second Enter: the first one only arms the row.
+  const runRisky = useCallback(
+    async (hit: CommandHit | ProcessHit): Promise<boolean> => {
+      const key = hitKey(hit);
+      const needsConfirm = hit.kind === "process" || hit.destructive;
+      if (needsConfirm && armedRef.current !== key) {
+        setArmed(key);
+        return false;
+      }
+      setArmed(null);
+      try {
+        if (hit.kind === "command") {
+          await invoke("run_system_command", { id: hit.id, confirmed: true });
+          await finishAction();
+        } else {
+          await invoke("end_process", { pid: hit.pid, name: hit.name });
+          setLastError(null);
+          // the list without it; the palette stays for the next one
+          void runSearch(queryRef.current, sourceRef.current);
+        }
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return true;
+    },
+    [finishAction, runSearch],
+  );
+
   const openHit = useCallback(async (hit: Hit | undefined) => {
     if (!hit) return;
+    if (hit.kind === "command" || hit.kind === "process") {
+      await runRisky(hit);
+      return;
+    }
     // frecency: remember what actually gets opened (stable identity per kind)
     const frecencyKey =
       hit.kind === "app"
@@ -1136,7 +1288,142 @@ export default function App() {
         setLastError(msg);
       }
     }
-  }, [finishAction, runSearch]);
+  }, [finishAction, runSearch, runRisky]);
+
+  /// What the action menu (Ctrl/Cmd+K) offers for a row. The first entry is
+  /// what Enter does on the row itself.
+  const rowActions = useCallback(
+    (hit: Hit): RowAction[] => {
+      const act = (p: Promise<unknown>) => p.catch((e) => setLastError(String(e)));
+      const copy = (text: string) => act(invoke("copy_clip", { text }));
+      const refresh = () => void runSearch(queryRef.current, sourceRef.current);
+      switch (hit.kind) {
+        case "file":
+          return [
+            { key: "reveal", label: t("Show in folder"), run: () => openHit(hit) },
+            {
+              key: "open",
+              label: t("Open with default app"),
+              run: () => act(invoke("open_path_default", { path: hit.path }).then(finishAction)),
+            },
+            { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
+            { key: "copy-file", label: t("Copy file"), run: () => act(invoke("copy_file_clip", { path: hit.path })) },
+          ];
+        case "video":
+          return [
+            { key: "play", label: t("Play"), run: () => openHit(hit) },
+            {
+              key: "reveal",
+              label: t("Show in folder"),
+              run: () => act(invoke("open_file", { path: hit.path }).then(finishAction)),
+            },
+            { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
+          ];
+        case "app":
+          return [
+            { key: "open", label: t("Open"), run: () => openHit(hit) },
+            {
+              key: "reveal",
+              label: t("Show in folder"),
+              run: () => act(invoke("reveal_app", { target: hit.target }).then(finishAction)),
+            },
+            ...(IS_WIN
+              ? [
+                  {
+                    key: "admin",
+                    label: t("Run as administrator"),
+                    run: () => act(invoke("run_app_as_admin", { target: hit.target }).then(finishAction)),
+                  },
+                ]
+              : []),
+            { key: "copy-path", label: t("Copy path"), run: () => copy(hit.target) },
+          ];
+        case "repo":
+          return [
+            { key: "open", label: t("Open in browser"), run: () => openHit(hit) },
+            { key: "copy-url", label: t("Copy URL"), run: () => copy(hit.html_url) },
+            { key: "copy-clone", label: t("Copy clone command"), run: () => copy(`git clone ${hit.html_url}.git`) },
+          ];
+        case "bookmark":
+        case "history":
+          return [
+            { key: "open", label: t("Open in browser"), run: () => openHit(hit) },
+            { key: "copy-url", label: t("Copy URL"), run: () => copy(hit.url) },
+            {
+              key: "copy-md",
+              label: t("Copy as Markdown link"),
+              run: () => copy(`[${(hit.title || hit.url).replace(/[[\]]/g, "")}](${hit.url})`),
+            },
+          ];
+        case "clip":
+          return [
+            { key: "copy", label: t("Copy"), run: () => openHit(hit) },
+            ...(hit.clip_kind === "text"
+              ? [
+                  {
+                    key: "paste",
+                    label: t("Paste into the previous app"),
+                    run: () =>
+                      act(
+                        invoke("paste_clip", { text: hit.content }).then(() => {
+                          setQuery("");
+                          setImageQuery(null);
+                        }),
+                      ),
+                  },
+                ]
+              : []),
+            {
+              key: "pin",
+              label: hit.pinned ? t("Unpin") : t("Pin"),
+              run: () => act(invoke("toggle_pin_clip", { clipId: hit.id }).then(refresh)),
+            },
+            {
+              key: "delete",
+              label: t("Delete from history"),
+              run: () => act(invoke("delete_clip", { clipId: hit.id }).then(refresh)),
+            },
+          ];
+        case "command":
+          return [{ key: "run", label: t("Run"), risky: hit.destructive, run: () => runRisky(hit) }];
+        case "process":
+          return [
+            { key: "end", label: t("End process"), risky: true, run: () => runRisky(hit) },
+            { key: "copy-pid", label: t("Copy PID"), run: () => copy(String(hit.pid)) },
+            ...(hit.exe ? [{ key: "copy-path", label: t("Copy path"), run: () => copy(hit.exe ?? "") }] : []),
+          ];
+      }
+    },
+    [openHit, runRisky, finishAction, runSearch],
+  );
+
+  const menuActions = useMemo(
+    () => (actionsOpen && results[selected] ? rowActions(results[selected]) : []),
+    [actionsOpen, results, selected, rowActions],
+  );
+
+  // the menu belongs to one row: it closes when the list or selection moves
+  useEffect(() => {
+    setActionsOpen(false);
+  }, [results, selected]);
+
+  /// Run the menu's highlighted action. A risky one arms on the first
+  /// Enter (the menu stays, showing the confirmation) and runs on the second.
+  const runMenuAction = useCallback(
+    async (i: number) => {
+      const a = menuActions[i];
+      if (!a) return;
+      const hit = results[selected];
+      if (a.risky && hit && armedRef.current !== hitKey(hit)) {
+        await a.run(); // arms
+        return;
+      }
+      setActionsOpen(false);
+      await a.run();
+      inputRef.current?.focus();
+    },
+    [menuActions, results, selected],
+  );
 
   // `note …` → one line into the notes file, then the palette goes away
   const saveNote = useCallback(async () => {
@@ -1299,6 +1586,39 @@ export default function App() {
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Ctrl/Cmd+K: the selected row's action menu (physical key, so any
+      // layout works)
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === "KeyK" || e.key.toLowerCase() === "k")) {
+        e.preventDefault();
+        if (actionsOpen) {
+          setActionsOpen(false);
+        } else if (!showSettings && results[selected] && !(topRowActive && (calcHit || bangHit))) {
+          setActionSel(0);
+          setActionsOpen(true);
+        }
+        return;
+      }
+      if (actionsOpen) {
+        // the menu has the keyboard until it closes
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const n = menuActions.length;
+          setActionSel((s) => (e.key === "ArrowDown" ? (s + 1) % n : (s - 1 + n) % n));
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void runMenuAction(actionSel);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setActionsOpen(false);
+          return;
+        }
+        // any other key (typing) closes the menu and does what it does
+        setActionsOpen(false);
+      }
       const max = results.length - 1;
       const nav = ["ArrowDown", "ArrowUp", "PageDown", "PageUp"].includes(e.key);
       if (nav && max < 0) {
@@ -1492,7 +1812,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, runSearch, finishAction],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, runSearch, finishAction, actionsOpen, actionSel, menuActions, runMenuAction],
   );
 
   const refresh = useCallback(async () => {
@@ -3407,7 +3727,32 @@ export default function App() {
         </div>
       ) : (
         (results.length > 0 || calcHit != null || bangHit != null || noteHit != null) && (
-          <div className="body-row">
+          <div
+            className="body-row"
+            // the menu floats over the list; a short list grows to hold it
+            style={actionsOpen ? { minHeight: menuActions.length * 34 + 28 } : undefined}
+          >
+          {actionsOpen && menuActions.length > 0 && (
+            <div className="action-menu" role="menu">
+              {menuActions.map((a, i) => (
+                <div
+                  key={a.key}
+                  role="menuitem"
+                  className={`action-item ${i === actionSel ? "on" : ""} ${a.risky ? "risky" : ""}`}
+                  onMouseMove={() => setActionSel(i)}
+                  onMouseDown={(ev) => ev.preventDefault() /* keep focus in the box */}
+                  onClick={() => void runMenuAction(i)}
+                >
+                  <span>
+                    {a.risky && results[selected] && armed === hitKey(results[selected])
+                      ? t("Press Enter again to confirm")
+                      : a.label}
+                  </span>
+                  {i === 0 && <kbd>⏎</kbd>}
+                </div>
+              ))}
+            </div>
+          )}
           <div className="results" ref={listRef}>
             {bangHit && (
               <div
@@ -3461,15 +3806,44 @@ export default function App() {
             )}
             {results.map((r, i) => (
               <div
-                key={`${r.kind}-${r.kind === "app" ? r.target : r.id}`}
+                key={hitKey(r)}
                 data-idx={i}
-                className={`row ${i >= selLo && i <= selHi && !(topRowActive && (calcHit || bangHit)) ? "selected" : ""}`}
+                className={`row ${i >= selLo && i <= selHi && !(topRowActive && (calcHit || bangHit)) ? "selected" : ""} ${armed === hitKey(r) ? "armed" : ""}`}
                 onMouseMove={() => {
                   if (selAnchor == null) setSelected(i);
                 }}
                 onClick={() => openHit(r)}
               >
-                {r.kind === "clip" && r.clip_kind === "image" ? (
+                {r.kind === "command" ? (
+                  <>
+                    <div className="row-lead">
+                      <span className="app-icon cmd-glyph">{COMMAND_GLYPHS[r.id] ?? "⚙️"}</span>
+                      <div className="row-main">
+                        <span className="row-title">{t(COMMAND_LABELS[r.id] ?? r.id)}</span>
+                        <span className="row-sub">
+                          {armed === hitKey(r) ? t("Press Enter again to confirm") : t("System command")}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="row-meta">
+                      <span className="app-badge">{t("Command")}</span>
+                    </div>
+                  </>
+                ) : r.kind === "process" ? (
+                  <>
+                    <div className="row-main">
+                      <span className="row-title">{r.name}</span>
+                      <span className="row-sub">
+                        {armed === hitKey(r)
+                          ? t("Press Enter again to end this process")
+                          : `PID ${r.pid} · ${formatSize(r.memory)}${r.exe ? ` · ${r.exe}` : ""}`}
+                      </span>
+                    </div>
+                    <div className="row-meta">
+                      <span className="web-badge">{t("Process")}</span>
+                    </div>
+                  </>
+                ) : r.kind === "clip" && r.clip_kind === "image" ? (
                   <>
                     <div className="row-main">
                       <span className="row-title">{t("Image")}</span>
@@ -3682,8 +4056,10 @@ export default function App() {
       {/* footer */}
       <div className="footer">
         <span className="hints">
+          {/* ↑↓ needs no hint; the action menu does, and the footer has
+              room for one key only (see the note on the 1–9 chord below) */}
           <span>
-            <kbd>↑↓</kbd> {t("navigate")}
+            <kbd>{MOD}K</kbd> {t("actions")}
           </span>
           <span>
             <kbd>⏎</kbd> {source === "clips" ? t("copy") : t("open")}
@@ -3726,9 +4102,8 @@ export default function App() {
           <span>
             <kbd>{MOD}⏎</kbd> {t("web")}
           </span>
-          <span>
-            <kbd>esc</kbd> {t("hide")}
-          </span>
+          {/* no "esc hide": every launcher's Esc closes it, and the room
+              went to the action menu's hint without squeezing the status */}
         </span>
         <span className="status">{footerStatus}</span>
       </div>

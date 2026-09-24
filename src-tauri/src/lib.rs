@@ -1249,6 +1249,118 @@ fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
     Ok(())
 }
 
+// ---------- system commands, processes, row actions ----------
+
+/// System commands matching the query (lock, sleep, restart, …).
+#[tauri::command(async)]
+fn search_commands(query: String) -> Vec<magpie_core::syscmd::CommandHit> {
+    magpie_core::syscmd::match_commands(&query)
+}
+
+/// Run a system command. A destructive one (restart, shut down, empty the
+/// trash) must come with `confirmed`, which the palette sets only after a
+/// second Enter; the check lives here too, so no caller can skip it.
+#[tauri::command(async)]
+fn run_system_command(app: AppHandle, id: String, confirmed: bool) -> Result<String, String> {
+    let destructive = magpie_core::syscmd::is_destructive(&id).ok_or_else(|| format!("unknown command {id:?}"))?;
+    if destructive && !confirmed {
+        return Err("confirm first".into());
+    }
+    // out of the way before the screen locks or the machine sleeps
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    log::info!("system command: {id}");
+    magpie_core::syscmd::run(&id).map_err(err_str)
+}
+
+/// Running processes whose name contains the query, for `kill <name>`.
+#[tauri::command]
+async fn list_processes(query: String) -> Result<Vec<magpie_core::procs::ProcHit>, String> {
+    tokio::task::spawn_blocking(move || magpie_core::procs::find(&query, 20))
+        .await
+        .map_err(err_str)
+}
+
+/// End a process the palette listed; refused if the PID now belongs to
+/// another program, or to magpie or the system.
+#[tauri::command]
+async fn end_process(pid: u32, name: String) -> Result<(), String> {
+    log::info!("ending process {pid} ({name})");
+    tokio::task::spawn_blocking(move || magpie_core::procs::end(pid, &name))
+        .await
+        .map_err(err_str)?
+        .map_err(err_str)
+}
+
+/// Extensions never opened from a row action: they would run a program
+/// rather than show a document.
+const RUNNABLE_EXTS: &[&str] = &[
+    "exe", "com", "bat", "cmd", "msi", "ps1", "vbs", "vbe", "js", "jse", "wsf", "scr", "lnk", "reg",
+    "app", "command", "sh", "run", "appimage", "desktop",
+];
+
+/// Open an indexed file with its default app (the row's Enter reveals it in
+/// the folder instead). Only paths inside indexed folders, never programs.
+#[tauri::command]
+async fn open_path_default(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let allowed = {
+        let conn = state.db.lock().await;
+        files::path_is_allowed(&conn, &path).map_err(err_str)?
+    };
+    if !allowed {
+        return Err("path is outside indexed folders".into());
+    }
+    let ext = Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    if RUNNABLE_EXTS.contains(&ext.as_str()) {
+        return Err("programs are not opened from here; use Enter to show it in its folder".into());
+    }
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)
+}
+
+/// Is `target` an app the scan found? Row actions on apps take only those.
+fn known_app(state: &AppState, target: &str) -> bool {
+    state.apps.lock().unwrap().iter().any(|a| a.target == target)
+}
+
+/// Show an app's bundle or shortcut in Finder / Explorer.
+#[tauri::command(async)]
+fn reveal_app(state: State<'_, AppState>, target: String) -> Result<(), String> {
+    if !known_app(&state, &target) {
+        return Err("not an installed app".into());
+    }
+    tauri_plugin_opener::reveal_item_in_dir(&target).map_err(err_str)
+}
+
+/// Windows: start an app elevated (the UAC prompt appears). Elsewhere there
+/// is no such thing for a GUI app.
+#[tauri::command(async)]
+fn run_app_as_admin(app: AppHandle, state: State<'_, AppState>, target: String) -> Result<(), String> {
+    if !known_app(&state, &target) {
+        return Err("not an installed app".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // single quotes are doubled for PowerShell's literal string
+        let literal = target.replace('\'', "''");
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &format!("Start-Process -Verb RunAs -FilePath '{literal}'")])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(err_str)?;
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.hide();
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("running as administrator is a Windows feature".into())
+    }
+}
+
 /// Unix seconds of the last app scan, so a summon rescans at most once a
 /// minute.
 static LAST_APP_SCAN: AtomicU64 = AtomicU64::new(0);
@@ -4269,7 +4381,14 @@ pub fn run() {
             set_rescan_minutes,
             get_autostart,
             set_autostart,
-            app_icon
+            app_icon,
+            search_commands,
+            run_system_command,
+            list_processes,
+            end_process,
+            open_path_default,
+            reveal_app,
+            run_app_as_admin
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
