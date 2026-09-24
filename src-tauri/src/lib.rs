@@ -1215,7 +1215,8 @@ fn search_apps(
 ) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
     let apps = state.apps.lock().unwrap();
     let mut hits =
-        magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(4), pinyin.unwrap_or(true));
+        // six: issue #4 had four apps starting with "mac" fill a cap of four
+        magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(6), pinyin.unwrap_or(true));
     // frecency: the app you launch daily wins ties within its match tier
     // (cap 0.08 < the 0.1 tier gaps, so exact matches stay on top)
     if let Ok(conn) = db::open(&state.db_path) {
@@ -1235,6 +1236,12 @@ fn search_apps(
 
 #[tauri::command]
 fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
+    // moved or uninstalled since the last scan (issue #4: an app moved into
+    // a folder still listed and would not open): rescan now and say so
+    if !std::path::Path::new(&target).exists() {
+        spawn_app_scan(app);
+        return Err("this app has moved or been removed; the app list is refreshed now".into());
+    }
     magpie_core::apps::launch_app(&target).map_err(err_str)?;
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
@@ -1242,20 +1249,42 @@ fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Unix seconds of the last app scan, so a summon rescans at most once a
+/// minute.
+static LAST_APP_SCAN: AtomicU64 = AtomicU64::new(0);
+
+/// Rescan apps when the palette comes up, if the last scan is over a minute
+/// old: an app installed or moved a moment ago is then found on the next
+/// summon, not at the next half-hourly refresh. Costs nothing visible: the
+/// scan runs on its own thread and only changed icons are read.
+fn rescan_apps_if_stale(app: &AppHandle) {
+    let now = unix_now().max(0) as u64;
+    if now.saturating_sub(LAST_APP_SCAN.load(Ordering::SeqCst)) >= 60 {
+        spawn_app_scan(app.clone());
+    }
+}
+
 /// Re-enumerate installed apps (e.g. after installing something new).
 fn spawn_app_scan(app: AppHandle) {
+    LAST_APP_SCAN.store(unix_now().max(0) as u64, Ordering::SeqCst);
     let state = app.state::<AppState>();
     let apps = state.apps.clone();
     let db_path = state.db_path.clone();
     std::thread::spawn(move || {
         let mut list = magpie_core::apps::list_apps();
-        // user alias rules ("proxy = clash") ride on top of the built-ins
+        // user alias rules ("proxy = clash") ride on top of the built-ins;
+        // applied before localizing, since rules name apps as installed
+        let mut ui_lang = String::from("en");
         if let Ok(conn) = db::open(&db_path) {
             if let Ok(Some(text)) = db::meta_get(&conn, "app_aliases") {
                 let rules = magpie_core::apps::parse_alias_rules(&text);
                 magpie_core::apps::apply_user_aliases(&mut list, &rules);
             }
+            if let Ok(Some(lang)) = db::meta_get(&conn, "ui_lang") {
+                ui_lang = lang;
+            }
         }
+        magpie_core::apps::localize(&mut list, &ui_lang);
         *apps.lock().unwrap() = list;
         tauri::async_runtime::spawn(prefetch_app_icons(app));
     });
@@ -3414,8 +3443,15 @@ fn set_update_badge(
 fn set_ui_lang(app: AppHandle, state: State<'_, AppState>, lang: String) -> Result<(), String> {
     let lang = if lang == "zh" { "zh" } else { "en" };
     let conn = db::open(&state.db_path).map_err(err_str)?;
+    let before = db::meta_get(&conn, "ui_lang").map_err(err_str)?;
     db::meta_set(&conn, "ui_lang", lang).map_err(err_str)?;
     refresh_tray_menu(&app, lang).map_err(err_str)?;
+    // apps show their name in the interface language (活动监视器 in
+    // Chinese); the frontend reports the language on every launch, so only
+    // an actual change rescans
+    if before.as_deref() != Some(lang) {
+        spawn_app_scan(app);
+    }
     Ok(())
 }
 
@@ -3900,6 +3936,7 @@ fn show_window(app: &AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("palette-shown", ());
+        rescan_apps_if_stale(app);
     }
 }
 

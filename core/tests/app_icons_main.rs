@@ -39,6 +39,23 @@ fn macos() {
         return;
     }
 
+    // issue #4: apps inside folders (Utilities) are listed, under their
+    // localized names too, whatever language the runner speaks
+    let t = std::time::Instant::now();
+    let apps = magpie_core::apps::list_apps();
+    let scan_ms = t.elapsed().as_millis();
+    let am = apps
+        .iter()
+        .find(|a| a.target.ends_with("/Utilities/Activity Monitor.app"))
+        .expect("Activity Monitor in Utilities is listed");
+    assert!(am.aliases.iter().any(|a| a == "活动监视器"), "aliases: {:?}", am.aliases);
+    let hits = magpie_core::apps::match_apps(&apps, "活动", 6, true);
+    assert!(hits.iter().any(|h| h.target == am.target), "活动 finds it");
+    let hits = magpie_core::apps::match_apps(&apps, "huodong", 6, true);
+    assert!(hits.iter().any(|h| h.target == am.target), "huodong finds it");
+    let nested = apps.iter().filter(|a| a.target.matches(".app").count() == 1 && a.target.contains("/Utilities/")).count();
+    println!("list_apps: {} apps ({nested} in Utilities) in {scan_ms} ms; Activity Monitor aliases: {:?}", apps.len(), am.aliases);
+
     // bundles every macOS install ships, plus whatever list_apps finds
     let mut targets: Vec<String> = [
         "/System/Applications/Calculator.app",

@@ -6,16 +6,54 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct AppEntry {
     pub name: String,
     /// Path launched when chosen (a .lnk, .app bundle, or executable/desktop).
     pub target: String,
     /// Alternate names this app also answers to: the built-in zh↔en table,
-    /// user-defined aliases, and (Linux) .desktop Keywords/GenericName.
+    /// user-defined aliases, the app's own localized names (macOS bundles,
+    /// Linux .desktop Name[xx]), and .desktop Keywords/GenericName.
     /// Matched like second names (pinyin included), scored slightly below.
     pub aliases: Vec<String>,
     pub score: f32,
+    /// The app's names by language tag ("zh_CN", "en", …), for picking the
+    /// one the interface language shows (see [`localize`]).
+    #[serde(skip)]
+    pub names: Vec<(String, String)>,
+}
+
+/// Language tags whose names are worth keeping: the interface speaks
+/// English and Chinese, and names in other scripts only add noise to
+/// matching.
+fn wanted_lang(tag: &str) -> bool {
+    let t = tag.to_ascii_lowercase();
+    t.is_empty() || t.starts_with("en") || t.starts_with("zh")
+}
+
+/// Show each app under its name in the interface language when it has one
+/// ("zh": 活动监视器 for Activity Monitor); the name it had joins the
+/// aliases, so it still matches.
+pub fn localize(apps: &mut [AppEntry], ui_lang: &str) {
+    if ui_lang != "zh" {
+        return;
+    }
+    const ORDER: [&str; 8] = ["zh_CN", "zh-Hans", "zh_Hans", "zh-CN", "zh", "zh_TW", "zh-Hant", "zh_HK"];
+    for a in apps.iter_mut() {
+        let pick = ORDER
+            .iter()
+            .find_map(|want| a.names.iter().find(|(tag, _)| tag.eq_ignore_ascii_case(want)))
+            .map(|(_, n)| n.clone());
+        if let Some(local) = pick {
+            if local != a.name {
+                let old = std::mem::replace(&mut a.name, local);
+                a.aliases.retain(|x| x != &a.name);
+                if !a.aliases.contains(&old) {
+                    a.aliases.push(old);
+                }
+            }
+        }
+    }
 }
 
 /// Built-in bilingual name groups for apps whose Start-Menu/bundle name is in
@@ -107,12 +145,13 @@ pub fn parse_alias_rules(text: &str) -> Vec<(String, String)> {
 pub fn list_apps() -> Vec<AppEntry> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut push = |name: String, target: PathBuf, extra: Vec<String>| {
+    let mut push = |name: String, target: PathBuf, extra: Vec<String>, names: Vec<(String, String)>| {
         let key = name.to_lowercase();
         if !name.is_empty() && seen.insert(key) {
             let mut aliases = builtin_aliases(&name);
-            for k in extra {
-                if !k.is_empty() && !aliases.iter().any(|x| x.eq_ignore_ascii_case(&k)) {
+            let localized = names.iter().map(|(_, n)| n.clone());
+            for k in extra.into_iter().chain(localized) {
+                if !k.is_empty() && !k.eq_ignore_ascii_case(&name) && !aliases.iter().any(|x| x.eq_ignore_ascii_case(&k)) {
                     aliases.push(k);
                 }
             }
@@ -121,6 +160,7 @@ pub fn list_apps() -> Vec<AppEntry> {
                 target: target.to_string_lossy().into_owned(),
                 aliases,
                 score: 0.0,
+                names,
             });
         }
     };
@@ -132,7 +172,7 @@ pub fn list_apps() -> Vec<AppEntry> {
             let start = PathBuf::from(root).join("Microsoft/Windows/Start Menu/Programs");
             for entry in walk(&start, "lnk") {
                 if let Some(stem) = entry.file_stem().and_then(|s| s.to_str()) {
-                    push(stem.to_string(), entry.clone(), Vec::new());
+                    push(stem.to_string(), entry.clone(), Vec::new(), Vec::new());
                 }
             }
         }
@@ -146,14 +186,10 @@ pub fn list_apps() -> Vec<AppEntry> {
             home.join("Applications"),
         ];
         for dir in dirs {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if p.extension().and_then(|x| x.to_str()) == Some("app") {
-                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                            push(stem.to_string(), p.clone(), Vec::new());
-                        }
-                    }
+            for p in find_bundles(&dir, APP_DIR_DEPTH) {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    let names = bundle_names(&p);
+                    push(stem.to_string(), p.clone(), Vec::new(), names);
                 }
             }
         }
@@ -169,12 +205,130 @@ pub fn list_apps() -> Vec<AppEntry> {
         for dir in dirs {
             for entry in walk(&dir, "desktop") {
                 if let Some(d) = parse_desktop(&entry) {
-                    push(d.name, entry.clone(), d.keywords);
+                    push(d.name, entry.clone(), d.keywords, d.names);
                 }
             }
         }
     }
     out
+}
+
+/// How deep below an applications folder bundles are looked for. Two covers
+/// `/System/Applications/Utilities/Activity Monitor.app` and a vendor folder
+/// such as `/Applications/Adobe Photoshop/…`; three leaves room for a folder
+/// the user made inside one of those.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+const APP_DIR_DEPTH: usize = 3;
+
+/// Every `.app` bundle under `dir`, looking into plain folders up to `depth`
+/// levels down but never into a bundle (apps nest helpers inside themselves).
+/// issue #4: only the top level was read, so everything in Utilities was
+/// missing, Activity Monitor included.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn find_bundles(dir: &std::path::Path, depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort(); // stable order, so the first of two same-named apps wins every time
+    for p in entries {
+        if p.extension().and_then(|x| x.to_str()) == Some("app") {
+            out.push(p);
+        } else if depth > 1 && p.is_dir() && !is_symlink(&p) {
+            out.extend(find_bundles(&p, depth - 1));
+        }
+    }
+    out
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn is_symlink(p: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(p).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+}
+
+/// A macOS bundle's own names by language: `CFBundleDisplayName` (else
+/// `CFBundleName`) from `Info.plist` (tag ""), from `InfoPlist.loctable`
+/// (one file with every language, what current system apps ship) and from
+/// each `<lang>.lproj/InfoPlist.strings`. Only English and Chinese are kept.
+/// This is how "活动监视器" finds `Activity Monitor.app`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn bundle_names(bundle: &std::path::Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut add = |tag: &str, dict: &plist::Dictionary| {
+        let name = ["CFBundleDisplayName", "CFBundleName"]
+            .iter()
+            .find_map(|k| dict.get(k).and_then(|v| v.as_string()))
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
+        if let Some(n) = name {
+            if wanted_lang(tag) && !out.iter().any(|(t, x)| t == tag && x == n) {
+                out.push((tag.to_string(), n.to_string()));
+            }
+        }
+    };
+    let contents = bundle.join("Contents");
+    if let Ok(v) = plist::Value::from_file(contents.join("Info.plist")) {
+        if let Some(d) = v.as_dictionary() {
+            add("", d);
+        }
+    }
+    let resources = contents.join("Resources");
+    if let Ok(v) = plist::Value::from_file(resources.join("InfoPlist.loctable")) {
+        if let Some(langs) = v.as_dictionary() {
+            for (tag, v) in langs {
+                if let Some(d) = v.as_dictionary() {
+                    add(tag, d);
+                }
+            }
+        }
+    }
+    if let Ok(dirs) = std::fs::read_dir(&resources) {
+        for e in dirs.flatten() {
+            let p = e.path();
+            let Some(tag) = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".lproj")) else {
+                continue;
+            };
+            if !wanted_lang(tag) {
+                continue;
+            }
+            if let Some(d) = read_strings(&p.join("InfoPlist.strings")) {
+                add(tag, &d);
+            }
+        }
+    }
+    out
+}
+
+/// A `.strings` file as a dictionary: compiled (binary plist) or the text
+/// form (`"key" = "value";`, UTF-8 or UTF-16 with a byte-order mark).
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn read_strings(path: &std::path::Path) -> Option<plist::Dictionary> {
+    let bytes = std::fs::read(path).ok()?;
+    if let Ok(plist::Value::Dictionary(d)) = plist::Value::from_reader(std::io::Cursor::new(&bytes)) {
+        return Some(d);
+    }
+    let text = match bytes.as_slice() {
+        [0xFF, 0xFE, rest @ ..] => String::from_utf16_lossy(
+            &rest.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect::<Vec<_>>(),
+        ),
+        [0xFE, 0xFF, rest @ ..] => String::from_utf16_lossy(
+            &rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect::<Vec<_>>(),
+        ),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        all => String::from_utf8_lossy(all).into_owned(),
+    };
+    let mut d = plist::Dictionary::new();
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let key = k.trim().trim_matches('"');
+        let v = v.trim();
+        let (Some(start), Some(end)) = (v.find('"'), v.rfind('"')) else { continue };
+        if end <= start || key.is_empty() || key.starts_with("//") || key.starts_with("/*") {
+            continue;
+        }
+        let value = v[start + 1..end].replace("\\\"", "\"").replace("\\\\", "\\");
+        d.insert(key.to_string(), plist::Value::String(value));
+    }
+    (!d.is_empty()).then_some(d)
 }
 
 /// Rank apps against a query. Prefix match beats substring beats subsequence.
@@ -192,10 +346,12 @@ pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize, use_pinyin: bool
             Some(1.0)
         } else if name.starts_with(&q) {
             Some(0.9 - 0.001 * name.len() as f32) // shorter prefix match ranks higher
+        } else if matches_word_start(&q, raw) {
+            Some(0.75) // "mac" -> "MyMacCleaner", "code" -> "Visual Studio Code"
         } else if name.contains(&q) {
             Some(0.6)
-        } else if matches_initials(&q, &name) {
-            Some(0.5) // "vsc" -> "Visual Studio Code"
+        } else if matches_initials(&q, raw) {
+            Some(0.5) // "vsc" -> "Visual Studio Code", "mt" -> "MacTap"
         } else if use_pinyin {
             match_pinyin(&q, raw)
         } else {
@@ -293,22 +449,53 @@ fn pinyin_walk(q: &[u8], qi: usize, opts: &[Vec<String>], ci: usize) -> bool {
     false
 }
 
+/// Where the words of a name start, char by char: the first letter or digit,
+/// any one after a separator, and a capital that follows a lowercase letter
+/// (camelCase: My|Mac|Cleaner, Mac|Tap). A run of capitals stays one word,
+/// so "OBS" or "VLC" never splits into letters. Works on the name as
+/// written: lowercasing first would erase the humps.
+fn word_starts(raw: &str) -> Vec<bool> {
+    let chars: Vec<char> = raw.chars().collect();
+    (0..chars.len())
+        .map(|i| {
+            let c = chars[i];
+            c.is_alphanumeric()
+                && match i.checked_sub(1).map(|j| chars[j]) {
+                    None => true,
+                    Some(p) if !p.is_alphanumeric() => true,
+                    Some(p) => p.is_lowercase() && c.is_uppercase(),
+                }
+        })
+        .collect()
+}
+
+/// One lowercase char per char of `raw`, so indices line up with
+/// [`word_starts`] (a char whose lowercase is several chars keeps its first).
+fn lower_chars(raw: &str) -> Vec<char> {
+    raw.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
+}
+
+/// Does `q` (lowercase) start at a word inside the name, past its first
+/// word? "mac" in "MyMacCleaner", "code" in "Visual Studio Code". The
+/// start of the name itself is the plain prefix match, scored above this.
+fn matches_word_start(q: &str, raw: &str) -> bool {
+    let qc: Vec<char> = q.chars().collect();
+    let lc = lower_chars(raw);
+    let starts = word_starts(raw);
+    (1..lc.len()).any(|i| starts[i] && lc[i..].starts_with(&qc))
+}
+
 /// Acronym match: does `q` spell out the initials of the words in `name`?
-/// "vsc" matches "Visual Studio Code"; "code" does NOT match "RecoveryDrive".
-/// Word initials are letters starting a word or following a space/-/_/. .
-fn matches_initials(q: &str, name: &str) -> bool {
-    let initials: String = {
-        let mut prev_boundary = true;
-        let mut acc = String::new();
-        for c in name.chars() {
-            if prev_boundary && c.is_alphanumeric() {
-                acc.push(c);
-            }
-            prev_boundary = matches!(c, ' ' | '-' | '_' | '.' | '/');
-        }
-        acc
-    };
-    initials.starts_with(q) && q.len() >= 2
+/// "vsc" matches "Visual Studio Code", "mt" matches "MacTap"; "code" does
+/// NOT match "RecoveryDrive". Words as [`word_starts`] sees them.
+fn matches_initials(q: &str, raw: &str) -> bool {
+    let lc = lower_chars(raw);
+    let initials: String = word_starts(raw)
+        .into_iter()
+        .zip(lc)
+        .filter_map(|(start, c)| start.then_some(c))
+        .collect();
+    q.chars().count() >= 2 && initials.starts_with(q)
 }
 
 /// Launch an application by the target recorded in [`AppEntry`].
@@ -689,6 +876,8 @@ struct DesktopEntry {
     exec: String,
     /// Keywords= and GenericName= — free aliases the desktop file ships with.
     keywords: Vec<String>,
+    /// Name[xx]= by language tag (English and Chinese only).
+    names: Vec<(String, String)>,
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -697,9 +886,22 @@ fn parse_desktop(path: &std::path::Path) -> Option<DesktopEntry> {
     let mut name = None;
     let mut exec = None;
     let mut keywords: Vec<String> = Vec::new();
+    let mut names: Vec<(String, String)> = Vec::new();
     let mut no_display = false;
     for line in text.lines() {
-        if let Some(v) = line.strip_prefix("Name=") {
+        // the main entry ends where the first action section begins
+        if line.starts_with('[') && line.trim() != "[Desktop Entry]" {
+            break;
+        }
+        if let Some((tag, v)) = line
+            .strip_prefix("Name[")
+            .and_then(|r| r.split_once("]="))
+        {
+            let v = v.trim();
+            if wanted_lang(tag) && !v.is_empty() {
+                names.push((tag.to_string(), v.to_string()));
+            }
+        } else if let Some(v) = line.strip_prefix("Name=") {
             name.get_or_insert_with(|| v.trim().to_string());
         } else if let Some(v) = line.strip_prefix("Exec=") {
             exec.get_or_insert_with(|| v.trim().to_string());
@@ -717,7 +919,7 @@ fn parse_desktop(path: &std::path::Path) -> Option<DesktopEntry> {
     if no_display {
         return None;
     }
-    Some(DesktopEntry { name: name?, exec: exec?, keywords })
+    Some(DesktopEntry { name: name?, exec: exec?, keywords, names })
 }
 
 #[cfg(test)]
@@ -729,18 +931,127 @@ mod tests {
             name: name.into(),
             target: format!("/x/{name}"),
             aliases: builtin_aliases(name),
-            score: 0.0,
+            ..Default::default()
         }
     }
 
     #[test]
-    fn ranks_exact_then_shortest_substring() {
+    fn ranks_exact_then_word_start_then_substring() {
         let apps = vec![app("Visual Studio Code"), app("Code"), app("QR Code Reader"), app("Xcode")];
         let hits = match_apps(&apps, "code", 10, true);
-        assert_eq!(hits[0].name, "Code", "exact match wins");
-        // remaining are substring matches, shortest name first
-        assert_eq!(hits[1].name, "Xcode");
-        assert_eq!(hits.len(), 4);
+        let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+        // exact, then "code" starting a word (shorter name first), then
+        // "code" merely inside a word
+        assert_eq!(names, ["Code", "QR Code Reader", "Visual Studio Code", "Xcode"]);
+    }
+
+    /// issue #4: MacTap by "mt", MyMacCleaner by "mac", and a run of
+    /// capitals kept whole.
+    #[test]
+    fn camel_case_words_count_for_initials_and_word_starts() {
+        assert_eq!(match_apps(&[app("MacTap")], "mt", 10, true)[0].name, "MacTap");
+        assert_eq!(match_apps(&[app("OmniDiskSweeper")], "ods", 10, true)[0].name, "OmniDiskSweeper");
+        assert_eq!(match_apps(&[app("MyMacCleaner")], "mmc", 10, true)[0].name, "MyMacCleaner");
+        // the report's case: four apps start with "mac" and the cap used to
+        // cut MyMacCleaner; a word-start match now ranks it above substrings
+        let apps = vec![app("Mac Sai"), app("MacTap"), app("MacEverything"), app("MyMacCleaner"), app("Emacs")];
+        let hits = match_apps(&apps, "mac", 10, true);
+        let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names[3], "MyMacCleaner", "word start ranks after the prefixes: {names:?}");
+        assert_eq!(names[4], "Emacs", "a plain substring comes last");
+        assert!(hits[3].score > hits[4].score);
+        // capitals in a run stay one word: VLC is not V-L-C
+        assert!(!matches_initials("vl", "VLC"));
+        assert!(matches_initials("os", "OBS Studio"));
+        // no new word inside a lowercase run
+        assert!(!matches_word_start("ap", "Xcode Tapper"), "ap starts no word");
+        assert!(matches_word_start("tap", "MacTap"));
+        assert!(!matches_word_start("mac", "MacTap"), "the name start is the prefix tier, not this one");
+        assert_eq!(word_starts("iTerm"), vec![true, true, false, false, false]);
+    }
+
+    #[test]
+    fn find_bundles_descends_folders_but_never_into_a_bundle() {
+        let root = std::env::temp_dir().join(format!("magpie-bundles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in [
+            "A.app/Contents",
+            "Utilities/Activity Monitor.app/Contents",
+            "Utilities/Terminal.app/Contents/Library/Helper.app",
+            "Vendor/Suite/Tool.app",
+            "d1/d2/d3/TooDeep.app",
+            "Not An App/readme",
+        ] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let found: Vec<String> = find_bundles(&root, APP_DIR_DEPTH)
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            found,
+            ["A.app", "Utilities/Activity Monitor.app", "Utilities/Terminal.app", "Vendor/Suite/Tool.app"],
+            "top level, Utilities and a vendor folder; not the helper inside a bundle, not 4 levels down"
+        );
+        assert!(find_bundles(&root.join("missing"), 3).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A bundle laid out like current macOS system apps: every language in
+    /// one InfoPlist.loctable, plus an older .lproj strings file in UTF-16.
+    #[test]
+    fn bundle_names_read_loctable_and_lproj_strings() {
+        let b = std::env::temp_dir().join(format!("magpie-names-{}", std::process::id())).join("Activity Monitor.app");
+        let _ = std::fs::remove_dir_all(&b);
+        let res = b.join("Contents/Resources");
+        std::fs::create_dir_all(res.join("zh_TW.lproj")).unwrap();
+        std::fs::create_dir_all(res.join("fr.lproj")).unwrap();
+        let dict = |pairs: &[(&str, &str)]| {
+            let mut d = plist::Dictionary::new();
+            for (k, v) in pairs {
+                d.insert(k.to_string(), plist::Value::String(v.to_string()));
+            }
+            plist::Value::Dictionary(d)
+        };
+        dict(&[("CFBundleName", "Activity Monitor"), ("CFBundleIdentifier", "com.apple.ActivityMonitor")])
+            .to_file_xml(b.join("Contents/Info.plist"))
+            .unwrap();
+        let mut table = plist::Dictionary::new();
+        table.insert("zh_CN".into(), dict(&[("CFBundleDisplayName", "活动监视器"), ("CFBundleName", "活动监视器")]));
+        table.insert("en".into(), dict(&[("CFBundleDisplayName", "Activity Monitor")]));
+        table.insert("de".into(), dict(&[("CFBundleDisplayName", "Aktivitätsanzeige")]));
+        plist::Value::Dictionary(table).to_file_binary(res.join("InfoPlist.loctable")).unwrap();
+        let text = "/* Localized */\n\"CFBundleDisplayName\" = \"活動監視器\";\n\"NSHumanReadableCopyright\" = \"x\";\n";
+        let mut utf16 = vec![0xFF, 0xFE];
+        for u in text.encode_utf16() {
+            utf16.extend_from_slice(&u.to_le_bytes());
+        }
+        std::fs::write(res.join("zh_TW.lproj/InfoPlist.strings"), utf16).unwrap();
+        std::fs::write(res.join("fr.lproj/InfoPlist.strings"), "\"CFBundleDisplayName\" = \"Moniteur\";").unwrap();
+
+        let names = bundle_names(&b);
+        let has = |tag: &str, n: &str| names.iter().any(|(t, x)| t == tag && x == n);
+        assert!(has("", "Activity Monitor"), "{names:?}");
+        assert!(has("zh_CN", "活动监视器"), "{names:?}");
+        assert!(has("zh_TW", "活動監視器"), "{names:?}");
+        assert!(!names.iter().any(|(t, _)| t == "de" || t == "fr"), "only English and Chinese: {names:?}");
+
+        // listed as the app would be, Chinese finds it, so does pinyin
+        let mut e = app("Activity Monitor");
+        e.aliases.extend(names.iter().map(|(_, n)| n.clone()).filter(|n| n != "Activity Monitor"));
+        e.names = names;
+        let apps = vec![e.clone(), app("Mac优化大师")];
+        assert_eq!(match_apps(&apps, "活动", 10, true)[0].name, "Activity Monitor");
+        assert_eq!(match_apps(&apps, "huodong", 10, true)[0].name, "Activity Monitor");
+        // a Chinese interface shows the Chinese name; the English one still matches
+        let mut shown = vec![e];
+        localize(&mut shown, "zh");
+        assert_eq!(shown[0].name, "活动监视器");
+        assert_eq!(match_apps(&shown, "activity", 10, true)[0].name, "活动监视器");
+        let mut english = shown.clone();
+        localize(&mut english, "en");
+        assert_eq!(english[0].name, "活动监视器", "en leaves names as they are");
+        let _ = std::fs::remove_dir_all(b.parent().unwrap());
     }
 
     #[test]
@@ -939,8 +1250,7 @@ mod tests {
         let apps = vec![AppEntry {
             name: "微信".into(),
             target: "/x/wx".into(),
-            aliases: Vec::new(),
-            score: 0.0,
+            ..Default::default()
         }];
         assert!(match_apps(&apps, "wx", 10, false).is_empty(), "toggle off");
         assert!(match_apps(&apps, "w", 10, true).is_empty(), "1-letter query too broad");
