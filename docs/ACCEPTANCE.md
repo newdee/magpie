@@ -1,3 +1,66 @@
+# 验收记录 2026-09-25（系统命令、结束进程、操作菜单、时区换算，未出包）
+
+用户从推荐里选了四项：系统命令、Ctrl/Cmd+K 操作菜单、结束进程、时区换算。
+
+## 实现
+
+- `core/tz.rs`：离线时区（chrono-tz 内置 IANA 库）。`tokyo time` / `time in X` /
+  `东京时间` / `纽约现在几点`，`3pm pst to beijing` / `15:30 tokyo in london` /
+  `9am to new york`（从本地）。纯函数 `eval_at(q, now, local)` 可固定时间测试；夏令时
+  按当天；`cst`、`ist` 有歧义故意不收；单独地名不触发。接入计算器最前。
+- `core/syscmd.rs`：锁屏、睡眠、重启、关机、清空废纸篓/回收站、切换深色模式。匹配
+  复用应用匹配器（中英名 + 拼音），只收强匹配（≥0.65）；`describe(id, os)` 纯函数给出
+  三平台机制；`MAGPIE_SYSCMD_DRYRUN` 只报告不执行。Windows 用 LockWorkStation /
+  SetSuspendState / shutdown / SHEmptyRecycleBinW / 注册表 + WM_SETTINGCHANGE；macOS
+  用 login.framework SACLockScreenImmediate（运行时加载，失败退回 pmset
+  displaysleepnow）/ pmset / osascript；Linux 用 loginctl / systemctl / gio / gsettings。
+- `core/procs.rs`：sysinfo 列进程（名字包含查询、前缀优先、按内存排）；结束前核对 PID
+  仍是同名进程（防 PID 复用），先 SIGTERM；magpie 自己、PID≤4、会话关键进程
+  （csrss/winlogon/launchd/WindowServer…）永不列出也不能结束。
+- 后端：`run_system_command` 对破坏性命令要求 `confirmed`（前端之外再守一道）；
+  `open_path_default` 限已索引路径且拒绝可执行扩展名；`reveal_app` /
+  `run_app_as_admin` 只接受扫描到的应用。
+- 前端：`kill <名>` / `结束 <名>` 任意 tab 列进程；系统命令与应用同一分数混排；结束
+  进程和破坏性命令"按两次 Enter"（4 秒或换行即失效，行内红字提示）；Ctrl/Cmd+K 操作
+  菜单（每种结果各自的动作，第一项即 Enter 的动作，风险动作同样两次确认）。底栏
+  `↑↓ 移动`换成 `ctrlK 操作`，去掉 `esc 隐藏`。四条启动小贴士、README 双语、网站四条。
+
+## 发现并修复
+
+| # | 轮/视角 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 边界（T10） | 底栏新增 `ctrl K` 提示把索引状态挤到 47 px（改前 64） | 去空格 + 去掉 `esc 隐藏`：状态回到 111/111 px |
+| 2 | 视觉（截图） | 操作菜单背景半透明，下面行的徽章透出来 | 用近不透明的 `--bg-fallback`，危险色改用主题 `--error` |
+| 3 | 回归（T9） | 首启时文本模型补嵌浏览历史约 170 秒一直持锁，期间加文件夹的索引轮卡死（watcher 每 2 秒排队重试），新图片/视频进不了索引。旧版（0.2.1）同样约 1000 条/120 秒，属既有设计问题（上批第 11 项），这次历史量让它 100% 复现 | `threads::want` 等待者计数：长任务（首启补嵌、stars 同步、图片补嵌、图片剪贴条）每批检查、有人等就让出锁，`run_yielding` 在等待者拿到锁后分轮续做；索引轮用 `lock_model` 登记等待。首张图片到图片模型就绪 4.7–4.9 秒（原 45 秒 / 超时）；补嵌仍在约 180 秒内全部完成；稳定内存 1299–1305 MB 不变 |
+
+仪器（不计产品问题，照记）：T9 失焦测试原本固定等 2.5 秒；用户在用机器时 Windows
+不让后台进程抢前台，焦点根本没丢。改为轮询 10 秒并记录"何时失焦"，抢不到前台时退
+回投递 `tauri://blur`（Window 目标）检查前端逻辑，日志注明。此前同日多次真机运行的
+OS 级失焦均通过。
+
+## 连续三轮干净（第 3 项之后重新计数）
+
+- 静态：clippy 0；a1 70/70 定义=注册、a3 93 处调用 + 295 个 i18n 键、docs-parity
+  0 FAIL（新增 4 项必检）；pnpm build 过；186 测试（新增：tz 5、syscmd 5、procs 2、
+  threads 让出断言）。CI（macOS + Linux）三平台分支编译通过。
+- 机制（最终构建、隔离档案、系统命令只演练）：T15 18/18（lock/锁屏/sp；后端拒绝未
+  确认关机；两次 Enter；`kill mgt15` 列出自起探针进程、两次 Enter 真实结束；菜单列出
+  应用 4 项、方向键只动菜单、Esc 只关菜单；进程菜单首项"结束进程"、两次确认；东京时间
+  / 3pm pst to beijing）；T13 5/5；T12 5/5；T9 30/30。
+- 可复现 + 边界：套件 ×2 各 186 通过逐行一致；T10 14/14、T11 11/11；补嵌 200 秒内
+  1239/1239 历史、679/679 书签。
+
+## 未验证项
+
+- macOS / Linux 上系统命令只有编译 + 机制描述单测，没有真执行（真执行会锁屏关机）；
+  macOS 首次清空废纸篓 / 切深色会弹"允许控制 Finder / System Events"授权。
+- Windows 真执行也只做了演练模式；锁屏、睡眠、关机、清空回收站、切深色未在本机真跑。
+- 以管理员身份运行只测到菜单项出现，没有真的弹 UAC。
+- 浏览历史嵌入慢（标题 + 完整 URL，长 URL 很耗算力，约 8 条/秒）：不再挡路，但首启
+  补完仍要约 3 分钟，期间网页语义搜索退回关键词。可截短 URL 提速，另议。
+
+---
+
 # 验收记录 2026-09-24（内置常用软件简称，未出包）
 
 Tikas 在 0.3.2 上报：`ps` 找不到 "Adobe Photoshop 2026"（首字母 a-p-2，名字里也没有

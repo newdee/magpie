@@ -99,6 +99,37 @@ struct AppState {
     watched_folders: Arc<AtomicUsize>,
 }
 
+/// Take a model's lock for a pass that has to wait for it (the local index
+/// pass). While it waits, the long background passes end at their next
+/// batch and hand the model over (see `threads::want`).
+fn lock_model<T>(m: &StdMutex<T>, model: magpie_core::threads::Model) -> std::sync::MutexGuard<'_, T> {
+    let _waiting = magpie_core::threads::want(model);
+    m.lock().unwrap()
+}
+
+/// Run a long background pass in rounds: each round takes the model lock
+/// (inside `round`) and ends early when another pass waits for the model;
+/// the next round starts once that pass has the lock. Blocking. Returns the
+/// items embedded over all rounds.
+fn run_yielding(
+    model: magpie_core::threads::Model,
+    mut round: impl FnMut() -> Result<usize>,
+) -> Result<usize> {
+    use magpie_core::threads;
+    let _ = threads::take_yielded(model); // a stale flag is not ours
+    let mut total = 0;
+    loop {
+        // let a waiter take the lock before this round grabs it again
+        while threads::waited_for(model) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        total += round()?;
+        if !threads::take_yielded(model) {
+            return Ok(total);
+        }
+    }
+}
+
 /// Reload the resident vector store from the database.
 fn reload_store(db_path: &std::path::Path, store: &Arc<StdMutex<VectorStore>>) {
     if let Ok(conn) = db::open(db_path) {
@@ -2759,11 +2790,12 @@ fn start_local_index(app: AppHandle, scope: Scope) -> bool {
                 Scope::Paths(paths) => files::index_changed(&conn, paths, progress)?,
             };
             // the scan may have brought the first images or videos in: start
-            // the image model now, not after the text embedding below, which
-            // can wait a long time on a busy text model (first-run history
-            // catch-up held it 40 s); its own catch-up embeds the images
+            // the image model now; its own catch-up embeds the images
             ensure_image_model(&app2);
-            let embedded = match embedder.lock().unwrap().as_mut() {
+            // a background pass holding the model (the first launch's history
+            // catch-up, a stars sync) hands it over at its next batch
+            use magpie_core::threads::Model;
+            let embedded = match lock_model(&embedder, Model::Text).as_mut() {
                 Some(e) => files::embed_pending_files(&conn, e, |done, total| {
                     let _ = app2.emit(
                         "local-progress",
@@ -2772,7 +2804,7 @@ fn start_local_index(app: AppHandle, scope: Scope) -> bool {
                 })?,
                 None => 0,
             };
-            let images = match siglip.lock().unwrap().as_mut() {
+            let images = match lock_model(&siglip, Model::Image).as_mut() {
                 Some(s) => files::embed_pending_images(&conn, s, |done, total| {
                     let _ = app2.emit(
                         "local-progress",
@@ -2857,13 +2889,17 @@ async fn run_sync(
         let progress_app = app.clone();
         tokio::task::spawn_blocking(move || -> Result<usize> {
             let conn = db::open(&db_path)?;
-            let mut guard = embedder.lock().unwrap();
-            match guard.as_mut() {
-                Some(e) => sync::embed_pending(&conn, e, |p| {
-                    let _ = progress_app.emit("sync-progress", &p);
-                }),
-                None => Ok(0), // model not ready; embed_pending reruns after init
-            }
+            // a first sync embeds thousands of READMEs: rounds, so a local
+            // index pass waiting for the model gets it in between
+            run_yielding(magpie_core::threads::Model::Text, || {
+                let mut guard = embedder.lock().unwrap();
+                match guard.as_mut() {
+                    Some(e) => sync::embed_pending(&conn, e, |p| {
+                        let _ = progress_app.emit("sync-progress", &p);
+                    }),
+                    None => Ok(0), // model not ready; embed_pending reruns after init
+                }
+            })
         })
         .await??
     };
@@ -2926,27 +2962,27 @@ fn spawn_model_init(app: AppHandle) {
                 let catchup_path = db_path.clone();
                 let done = tokio::task::spawn_blocking(move || -> Result<usize> {
                     let conn = db::open(&catchup_path)?;
-                    let mut guard = embedder.lock().unwrap();
-                    match guard.as_mut() {
-                        Some(e) => {
-                            let repos = sync::embed_pending(&conn, e, |p| {
-                                let _ = app2.emit("sync-progress", &p);
-                            })?;
-                            let files_n = files::embed_pending_files(&conn, e, |done, total| {
-                                if total > 0 {
-                                    let _ = app2.emit(
-                                        "local-progress",
-                                        json!({ "stage": "embed", "done": done, "total": total }),
-                                    );
-                                }
-                            })?;
-                            let bm = bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?;
-                            let hi = history::embed_pending_history(&conn, e, |_, _| {})?;
-                            let cl = clips::embed_pending_clips(&conn, e, |_, _| {})?;
-                            Ok(repos + files_n + bm + hi + cl)
-                        }
-                        None => Ok(0),
-                    }
+                    // minutes of work on a first launch (browser history):
+                    // done in rounds that give the model to a waiting pass
+                    run_yielding(magpie_core::threads::Model::Text, || {
+                        let mut guard = embedder.lock().unwrap();
+                        let Some(e) = guard.as_mut() else { return Ok(0) };
+                        let repos = sync::embed_pending(&conn, e, |p| {
+                            let _ = app2.emit("sync-progress", &p);
+                        })?;
+                        let files_n = files::embed_pending_files(&conn, e, |done, total| {
+                            if total > 0 {
+                                let _ = app2.emit(
+                                    "local-progress",
+                                    json!({ "stage": "embed", "done": done, "total": total }),
+                                );
+                            }
+                        })?;
+                        let bm = bookmarks::embed_pending_bookmarks(&conn, e, |_, _| {})?;
+                        let hi = history::embed_pending_history(&conn, e, |_, _| {})?;
+                        let cl = clips::embed_pending_clips(&conn, e, |_, _| {})?;
+                        Ok(repos + files_n + bm + hi + cl)
+                    })
                 })
                 .await;
                 reload_store(&db_path, &store);
@@ -3285,17 +3321,20 @@ fn spawn_siglip_init(app: AppHandle) {
                 let catchup_path = db_path.clone();
                 let done = tokio::task::spawn_blocking(move || -> Result<usize> {
                     let conn = db::open(&catchup_path)?;
-                    match siglip.lock().unwrap().as_mut() {
-                        Some(s) => files::embed_pending_images(&conn, s, |done, total| {
-                            if total > 0 {
-                                let _ = app2.emit(
-                                    "local-progress",
-                                    json!({ "stage": "embed-images", "done": done, "total": total }),
-                                );
-                            }
-                        }),
-                        None => Ok(0),
-                    }
+                    // rounds that give the model to a waiting index pass
+                    run_yielding(magpie_core::threads::Model::Image, || {
+                        match siglip.lock().unwrap().as_mut() {
+                            Some(s) => files::embed_pending_images(&conn, s, |done, total| {
+                                if total > 0 {
+                                    let _ = app2.emit(
+                                        "local-progress",
+                                        json!({ "stage": "embed-images", "done": done, "total": total }),
+                                    );
+                                }
+                            }),
+                            None => Ok(0),
+                        }
+                    })
                 })
                 .await;
                 reload_store(&db_path, &store);
@@ -3311,10 +3350,21 @@ fn spawn_siglip_init(app: AppHandle) {
                     let path2 = db_path.clone();
                     let store2 = store.clone();
                     tokio::task::spawn_blocking(move || {
-                        if let (Ok(conn), Ok(mut guard)) = (db::open(&path2), siglip2.lock()) {
-                            if let Some(s) = guard.as_mut() {
-                                while matches!(clips::embed_pending_image_clips(&conn, s), Ok(n) if n > 0) {}
-                            }
+                        if let Ok(conn) = db::open(&path2) {
+                            // batches of 64 until none are left, in rounds
+                            // that give the model to a waiting index pass
+                            let _ = run_yielding(magpie_core::threads::Model::Image, || {
+                                let mut guard = siglip2.lock().unwrap();
+                                let Some(s) = guard.as_mut() else { return Ok(0) };
+                                let mut n = 0;
+                                loop {
+                                    let batch = clips::embed_pending_image_clips(&conn, s)?;
+                                    if batch == 0 {
+                                        return Ok(n);
+                                    }
+                                    n += batch;
+                                }
+                            });
                         }
                         reload_store(&path2, &store2);
                     });

@@ -55,9 +55,53 @@ pub fn resume(model: Model) {
     STOP[model as usize].store(false, Ordering::SeqCst);
 }
 
-/// Checked by the passes once per item.
+/// Checked by the passes once per item (per batch where they batch): a
+/// reload wants the model, or another pass is waiting for it.
 pub fn stopping(model: Model) -> bool {
-    STOP[model as usize].load(Ordering::SeqCst)
+    if STOP[model as usize].load(Ordering::SeqCst) {
+        return true;
+    }
+    if WAITING[model as usize].load(Ordering::SeqCst) > 0 {
+        YIELDED[model as usize].store(true, Ordering::SeqCst);
+        return true;
+    }
+    false
+}
+
+/// Passes blocked on a model's lock right now (see [`want`]).
+static WAITING: [std::sync::atomic::AtomicUsize; 2] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 2];
+/// Set when a long pass gave the model up for a waiter; its caller resumes.
+static YIELDED: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
+
+/// Say that this pass is about to wait for `model`. While the guard lives,
+/// the long background passes (the startup catch-up, a stars sync) end at
+/// their next batch and hand the lock over, instead of holding it for
+/// minutes: a first launch spent about three minutes embedding browser
+/// history, and a folder added meanwhile was not indexed until it finished.
+/// Drop the guard once the lock is held.
+pub fn want(model: Model) -> WantGuard {
+    WAITING[model as usize].fetch_add(1, Ordering::SeqCst);
+    WantGuard(model)
+}
+
+pub struct WantGuard(Model);
+
+impl Drop for WantGuard {
+    fn drop(&mut self) {
+        WAITING[self.0 as usize].fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Is a pass waiting for `model`?
+pub fn waited_for(model: Model) -> bool {
+    WAITING[model as usize].load(Ordering::SeqCst) > 0
+}
+
+/// Did a pass stop early for a waiter since the last call? Clears the flag.
+/// A caller that sees true runs the pass again once the waiter is served.
+pub fn take_yielded(model: Model) -> bool {
+    YIELDED[model as usize].swap(false, Ordering::SeqCst)
 }
 /// Applied when nothing is stored.
 pub const DEFAULT: usize = 4;
@@ -152,6 +196,31 @@ mod tests {
         assert!(!stopping(Model::Text) && stopping(Model::Image));
         resume(Model::Image);
         assert!(!stopping(Model::Text) && !stopping(Model::Image));
+
+        // a waiter makes the long passes let go, and says so once
+        assert!(!take_yielded(Model::Text));
+        {
+            let _w = want(Model::Text);
+            assert!(waited_for(Model::Text) && !waited_for(Model::Image));
+            assert!(stopping(Model::Text), "the running pass ends its batch");
+            assert!(!stopping(Model::Image), "the image passes are unaffected");
+        }
+        assert!(!waited_for(Model::Text), "the guard is gone once the lock is held");
+        assert!(!stopping(Model::Text), "the waiter's own pass runs undisturbed");
+        assert!(take_yielded(Model::Text), "the background pass learns it gave way");
+        assert!(!take_yielded(Model::Text), "and only once");
+        // a reload stop is not a yield: the caller must not loop on it
+        stop(Model::Text);
+        assert!(stopping(Model::Text));
+        assert!(!take_yielded(Model::Text));
+        resume(Model::Text);
+        // two waiters: the flag holds until both have their lock
+        let a = want(Model::Image);
+        let b = want(Model::Image);
+        drop(a);
+        assert!(waited_for(Model::Image));
+        drop(b);
+        assert!(!waited_for(Model::Image));
     }
 
     #[test]
