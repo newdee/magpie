@@ -289,10 +289,17 @@ claude mcp add --transport http magpie http://127.0.0.1:端口/mcp --header "Aut
 从 [Releases](https://github.com/newdee/magpie/releases) 下载：Windows NSIS
 安装包、macOS dmg（Apple Silicon）、Linux AppImage/deb/rpm。
 
+Mac 上也可以用 Homebrew：
+
+```sh
+brew install --cask newdee/tap/magpie
+```
+
 macOS 构建自 v0.1.24 起已 Developer ID 签名并公证，像普通应用一样直接
 打开，升级后文件夹授权保持不失效。
 
-首次启动自动下载嵌入模型（共约 700MB）；预热期间关键词搜索立即可用。
+首次启动自动下载文本嵌入模型（约 500MB）；预热期间关键词搜索立即可用。
+图片模型（约 200MB）在索引到图片、视频或剪贴板图片后才下载。
 
 ## 从源码构建
 

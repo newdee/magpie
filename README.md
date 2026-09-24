@@ -359,11 +359,18 @@ client reaches the server directly.
 Grab the latest build from [Releases](https://github.com/newdee/magpie/releases):
 Windows NSIS installer, macOS dmg (Apple Silicon), Linux AppImage/deb/rpm.
 
+On a Mac, Homebrew works too:
+
+```sh
+brew install --cask newdee/tap/magpie
+```
+
 macOS builds are Developer ID signed and notarized (since v0.1.24), so they
 open like any other app and folder-permission grants survive updates.
 
-First launch downloads the embedding models (~700 MB total); keyword search
-works immediately while they warm up.
+First launch downloads the text embedding model (~500 MB); keyword search
+works immediately while it warms up. The image model (~200 MB) follows once
+an image, a video or an image clip is indexed.
 
 ## Build from source
 
