@@ -127,6 +127,10 @@ vaguely remember (or drop in an image), hit Enter.
   copy the path or the file, run an app as administrator (Windows), copy a
   repo's clone command or a page as a Markdown link, pin or delete a clip,
   end a process.
+- **PDF to Markdown**: on a PDF, `Ctrl+K` offers *Copy as Markdown* and
+  *Save as Markdown…* (next to the PDF by default). Every page is converted
+  in order, headings, lists and tables included; scanned pages are read by
+  OCR when it is on, and marked when it is not.
 - **Text verbs work on your clipboard**: `json` alone pretty-prints whatever
   you just copied; `upper`, `lower`, `trim`, `slug`, `lines` (dedupe and
   sort) and `count` (chars, words, lines) likewise. Give them an argument

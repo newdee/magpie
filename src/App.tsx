@@ -607,6 +607,13 @@ export default function App() {
   // bumped when the backend re-reads app icons; keys the icon components so
   // rows already on screen fetch the fresh ones
   const [iconEpoch, setIconEpoch] = useState(0);
+  // a short-lived line in the footer: an action's progress or outcome
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
   // the row (hitKey) whose risky action is waiting for a second Enter
   const [armed, setArmed] = useState<string | null>(null);
   const armedRef = useRef(armed);
@@ -1306,6 +1313,46 @@ export default function App() {
               label: t("Open with default app"),
               run: () => act(invoke("open_path_default", { path: hit.path }).then(finishAction)),
             },
+            ...(/\.pdf$/i.test(hit.path)
+              ? [
+                  {
+                    key: "pdf-md-copy",
+                    label: t("Copy as Markdown"),
+                    run: async () => {
+                      setNotice(t("Converting the PDF…"));
+                      try {
+                        const md = await invoke<string>("pdf_markdown", { path: hit.path });
+                        await invoke("copy_clip", { text: md });
+                        setNotice(tf("Copied {n} characters of Markdown", { n: md.length }));
+                      } catch (e) {
+                        setNotice(null);
+                        setLastError(String(e));
+                      }
+                    },
+                  },
+                  {
+                    key: "pdf-md-save",
+                    label: t("Save as Markdown…"),
+                    run: async () => {
+                      const dest = await holdOpen(() =>
+                        saveDialog({
+                          defaultPath: hit.path.replace(/\.pdf$/i, ".md"),
+                          filters: [{ name: "Markdown", extensions: ["md"] }],
+                        }),
+                      );
+                      if (!dest) return;
+                      setNotice(t("Converting the PDF…"));
+                      try {
+                        await invoke("save_pdf_markdown", { path: hit.path, dest });
+                        setNotice(tf("Saved {name}", { name: dest.split(/[\\/]/).pop() ?? dest }));
+                      } catch (e) {
+                        setNotice(null);
+                        setLastError(String(e));
+                      }
+                    },
+                  },
+                ]
+              : []),
             { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
             { key: "copy-file", label: t("Copy file"), run: () => act(invoke("copy_file_clip", { path: hit.path })) },
           ];
@@ -2085,7 +2132,9 @@ export default function App() {
   const modelWarming = status !== null && status.model === "loading";
   const modelFailed = status !== null && status.model.startsWith("failed");
 
-  const footerStatus = lastError
+  const footerStatus = notice
+    ? notice
+    : lastError
     ? tf("error: {e}", { e: lastError })
     : modelFailed
       ? t("model download failed, keyword search only (set a mirror in settings)")

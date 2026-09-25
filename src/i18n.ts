@@ -232,6 +232,13 @@ const ZH: Record<string, string> = {
   "Ctrl+1 to Ctrl+9 jump straight to a tab (⌘ on a Mac)": "Ctrl+1 到 Ctrl+9 直接切到对应 tab（Mac 上用 ⌘）",
   "Ctrl+K on a result lists everything you can do with it (⌘K on a Mac)":
     "在结果上按 Ctrl+K 列出能对它做的所有操作（Mac 上用 ⌘K）",
+  "Ctrl+K on a PDF copies or saves it as Markdown, every page in order":
+    "在 PDF 上按 Ctrl+K，可以把它复制或另存为 Markdown，所有页按顺序保留",
+  "Copy as Markdown": "复制为 Markdown",
+  "Save as Markdown…": "另存为 Markdown…",
+  "Converting the PDF…": "正在转换 PDF…",
+  "Copied {n} characters of Markdown": "已复制 {n} 个字符的 Markdown",
+  "Saved {name}": "已保存 {name}",
   "kill chrome lists running Chrome processes; Enter twice ends one":
     "输入 kill chrome 列出运行中的 Chrome 进程；按两次 Enter 结束",
   "lock, sleep or dark mode run straight from the box": "锁屏、睡眠、深色模式，直接在搜索框里执行",

@@ -102,6 +102,9 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
   应用打开或在文件夹中显示、复制路径或文件本体、以管理员身份运行应用
   （Windows）、复制仓库的 clone 命令或把网页复制为 Markdown 链接、钉住或删除
   剪贴条、结束进程。
+- **PDF 转 Markdown**：在 PDF 上按 `Ctrl+K`，可以*复制为 Markdown*或*另存为
+  Markdown…*（默认存在 PDF 旁边）。所有页按顺序转换，标题、列表、表格都保留；
+  扫描页在开启 OCR 时会被识别，没开时会标注出来。
 - **文本动词直接处理剪贴板**：单独输 `json` 就把刚复制的 JSON 格式化；
   `upper`、`lower`、`trim`、`slug`、`lines`（去重排序）、`count`（字数/
   词数/行数）同理。带参数（`slug Hello World`）就处理参数。`Enter` 把结果

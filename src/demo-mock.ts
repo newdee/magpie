@@ -483,6 +483,10 @@ mockIPC((cmd, args) => {
     }
     case "run_system_command":
       return "dry run";
+    case "pdf_markdown":
+      return "# Vector search notes\n\nbrute-force dot product over normalized vectors…\n";
+    case "save_pdf_markdown":
+      return 52;
     case "end_process":
     case "open_path_default":
     case "reveal_app":

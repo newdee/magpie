@@ -1051,6 +1051,56 @@ fn substring_snippet(content: Option<&str>, query: &str) -> String {
 /// dylib (~20MB) plus pdfium (~5MB) per platform to save re-using an OCR
 /// engine we already have is a bad trade; embedded-image extraction covers
 /// the typical scanner output instead.
+/// A whole PDF as one Markdown document, for the "Copy / Save as Markdown"
+/// row actions. Unlike the index (which may cap the text) every page is
+/// converted, in order. Pages with a text layer come from pdf-inspector's
+/// own Markdown (headings, lists, tables); scanned pages go through `ocr`
+/// when it can read them (the OCR engine, if the user switched it on), and
+/// are otherwise marked with a visible note instead of silently dropped.
+/// Blank pages are skipped. An error when nothing at all could be read.
+pub fn pdf_to_markdown(
+    path: &Path,
+    ocr: &mut dyn FnMut(&image::DynamicImage) -> Option<String>,
+) -> Result<String> {
+    let doc = pdf_inspector::extract_pages_markdown(path, None)
+        .map_err(|e| anyhow::anyhow!("not a readable PDF: {e}"))?;
+    let mut parts: Vec<String> = Vec::new();
+    let mut read_any = false;
+    for page in &doc.pages {
+        let n = page.page + 1; // pdf-inspector counts pages from 0
+        let text = page.markdown.trim();
+        if !page.needs_ocr && !text.is_empty() {
+            parts.push(text.to_string());
+            read_any = true;
+            continue;
+        }
+        // no usable text. Whether the page is a scan is decided by what is
+        // on it, not by pdf-inspector's flag: that flag is set for blank
+        // pages too, and not always for an image-only one
+        match pdf_page_images(path, &[n], 1).first() {
+            Some(img) => {
+                let recognized = ocr(img).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                match recognized {
+                    Some(t) => {
+                        parts.push(t);
+                        read_any = true;
+                    }
+                    None => parts.push(format!("> Page {n} is a scanned image with no text layer.")),
+                }
+            }
+            // text there, but in a font encoding that does not decode
+            None if !text.is_empty() => parts.push(format!("> The text on page {n} could not be read reliably.")),
+            None => {} // a blank page
+        }
+    }
+    if !read_any {
+        return Err(anyhow::anyhow!(
+            "no text in this PDF: its pages are scanned images (turn on OCR for scanned PDFs in settings to read them)"
+        ));
+    }
+    Ok(parts.join("\n\n") + "\n")
+}
+
 pub fn pdf_ocr_plan(path: &Path) -> Option<(Vec<u32>, String)> {
     let result = pdf_inspector::process_pdf(path).ok()?;
     let text = result.markdown.unwrap_or_default();
@@ -1320,6 +1370,103 @@ mod tests {
         crate::clips::record_image_clip(&conn2, &hash, &jpeg, &thumb, iw, ih, 2).unwrap();
         assert!(needs_image_model(&conn2).unwrap(), "an image clip needs it");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Three pages: text, blank, and one that is only a JPEG (a scan).
+    fn three_page_pdf(path: &Path) {
+        use lopdf::content::{Content, Operation};
+        use lopdf::{dictionary, Document, Object, Stream};
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica",
+        });
+        let text = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 24.into()]),
+                Operation::new("Td", vec![72.into(), 720.into()]),
+                Operation::new("Tj", vec![Object::string_literal("Quarterly Report")]),
+                Operation::new("Tf", vec!["F1".into(), 11.into()]),
+                Operation::new("Td", vec![0.into(), (-40).into()]),
+                Operation::new("Tj", vec![Object::string_literal("Revenue grew in every region this quarter.")]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let text_stream = doc.add_object(Stream::new(dictionary! {}, text.encode().unwrap()));
+        let blank_stream = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+        // a 64x64 grey JPEG drawn over the whole page, as a scanner writes it
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([200, 200, 200])))
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        let img_id = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject", "Subtype" => "Image", "Width" => 64, "Height" => 64,
+                "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode",
+            },
+            jpeg.into_inner(),
+        ));
+        let draw = Content {
+            operations: vec![
+                Operation::new("q", vec![]),
+                Operation::new("cm", vec![612.into(), 0.into(), 0.into(), 792.into(), 0.into(), 0.into()]),
+                Operation::new("Do", vec!["Im1".into()]),
+                Operation::new("Q", vec![]),
+            ],
+        };
+        let scan_stream = doc.add_object(Stream::new(dictionary! {}, draw.encode().unwrap()));
+        let mut kids = Vec::new();
+        for (contents, resources) in [
+            (text_stream, dictionary! { "Font" => dictionary! { "F1" => font_id } }),
+            (blank_stream, dictionary! {}),
+            (scan_stream, dictionary! { "XObject" => dictionary! { "Im1" => img_id } }),
+        ] {
+            kids.push(Object::Reference(doc.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "Contents" => contents,
+                "Resources" => resources, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+            })));
+        }
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 3 }),
+        );
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        doc.save(path).unwrap();
+    }
+
+    #[test]
+    fn pdf_to_markdown_keeps_every_page_in_order() {
+        let dir = std::env::temp_dir().join(format!("magpie-pdfmd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf = dir.join("report.pdf");
+        three_page_pdf(&pdf);
+
+        // no OCR engine: the scan is marked, not dropped
+        let md = pdf_to_markdown(&pdf, &mut |_| None).unwrap();
+        assert!(md.contains("Quarterly Report"), "{md}");
+        assert!(md.contains("Revenue grew in every region"), "{md}");
+        assert!(md.contains("> Page 3 is a scanned image with no text layer."), "{md}");
+        assert!(!md.contains("Page 2"), "a blank page is skipped: {md}");
+        assert!(md.find("Quarterly").unwrap() < md.find("Page 3").unwrap(), "page order");
+
+        // with OCR: the scan's text takes the note's place, and OCR saw the page image
+        let mut seen = 0;
+        let md = pdf_to_markdown(&pdf, &mut |img| {
+            seen += 1;
+            assert_eq!((img.width(), img.height()), (64, 64));
+            Some("Signed by the board".into())
+        })
+        .unwrap();
+        assert_eq!(seen, 1, "only the scanned page goes to OCR");
+        assert!(md.contains("Signed by the board") && !md.contains("no text layer"), "{md}");
+
+        // not a PDF at all
+        let fake = dir.join("fake.pdf");
+        std::fs::write(&fake, "hello").unwrap();
+        assert!(pdf_to_markdown(&fake, &mut |_| None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn write(dir: &Path, rel: &str, content: &str) {

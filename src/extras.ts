@@ -115,6 +115,7 @@ export const TIPS: string[] = [
   "Ctrl+Enter hands your query to the browser — URLs open directly",
   "Ctrl+1 to Ctrl+9 jump straight to a tab (⌘ on a Mac)",
   "Ctrl+K on a result lists everything you can do with it (⌘K on a Mac)",
+  "Ctrl+K on a PDF copies or saves it as Markdown, every page in order",
   "kill chrome lists running Chrome processes; Enter twice ends one",
   "lock, sleep or dark mode run straight from the box",
   "tokyo time, or 3pm pst to beijing: time zones work offline",

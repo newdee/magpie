@@ -1349,6 +1349,52 @@ async fn open_path_default(state: State<'_, AppState>, path: String) -> Result<(
     tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)
 }
 
+/// Convert an indexed PDF to Markdown (every page, in order). Scanned pages
+/// are read by the OCR engine when the user has it on; otherwise they are
+/// marked. Blocking work, off the main thread.
+async fn pdf_markdown_of(state: &AppState, path: &str) -> Result<String, String> {
+    let allowed = {
+        let conn = state.db.lock().await;
+        files::path_is_allowed(&conn, path).map_err(err_str)?
+    };
+    if !allowed {
+        return Err("path is outside indexed folders".into());
+    }
+    if !path.to_lowercase().ends_with(".pdf") {
+        return Err("not a PDF".into());
+    }
+    let ocr = state.ocr.clone();
+    let path = path.to_string();
+    tokio::task::spawn_blocking(move || {
+        files::pdf_to_markdown(Path::new(&path), &mut |img| {
+            ocr.lock().unwrap().as_mut().and_then(|e| e.extract_text(img).ok())
+        })
+    })
+    .await
+    .map_err(err_str)?
+    .map_err(err_str)
+}
+
+/// "Copy as Markdown" on a PDF row: the converted text.
+#[tauri::command]
+async fn pdf_markdown(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    pdf_markdown_of(&state, &path).await
+}
+
+/// "Save as Markdown…" on a PDF row: convert and write to `dest`, a path the
+/// user picked in the save dialog. Only `.md` files are written. Returns the
+/// number of characters written.
+#[tauri::command]
+async fn save_pdf_markdown(state: State<'_, AppState>, path: String, dest: String) -> Result<usize, String> {
+    let lower = dest.to_lowercase();
+    if !(lower.ends_with(".md") || lower.ends_with(".markdown")) {
+        return Err("save as a .md file".into());
+    }
+    let md = pdf_markdown_of(&state, &path).await?;
+    std::fs::write(&dest, &md).map_err(err_str)?;
+    Ok(md.chars().count())
+}
+
 /// Is `target` an app the scan found? Row actions on apps take only those.
 fn known_app(state: &AppState, target: &str) -> bool {
     state.apps.lock().unwrap().iter().any(|a| a.target == target)
@@ -4438,7 +4484,9 @@ pub fn run() {
             end_process,
             open_path_default,
             reveal_app,
-            run_app_as_admin
+            run_app_as_admin,
+            pdf_markdown,
+            save_pdf_markdown
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
