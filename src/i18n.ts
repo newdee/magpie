@@ -44,6 +44,17 @@ const ZH: Record<string, string> = {
     "空搜索框可以列出最近打开——设置 → 外观与行为 里开启",
   "json alone pretty-prints your clipboard — upper, lower, slug, lines, count too":
     "单独输 json 就能格式化剪贴板里的 JSON——还有 upper、lower、slug、lines、count",
+  "json min squeezes JSON onto one line, json sort orders its keys; bad JSON shows where it breaks":
+    "json min 把 JSON 压成一行，json sort 按键名排序；JSON 有错会指出错在哪",
+  "md5, sha1 or sha256 hash your clipboard, or the text you type after them":
+    "md5、sha1、sha256 计算剪贴板或后面所跟文字的哈希",
+  "jwt decodes the token on your clipboard and tells you when it expires — nothing leaves your machine":
+    "jwt 解码剪贴板里的 token 并告诉你何时过期——全程不出本机",
+  "snake, kebab, camel, pascal, title: snake MyMacCleaner gives my_mac_cleaner":
+    "snake、kebab、camel、pascal、title：snake MyMacCleaner 得到 my_mac_cleaner",
+  "qr turns your clipboard into a QR code; Enter copies it as an image":
+    "qr 把剪贴板变成二维码，按 Enter 复制成图片",
+  "Enter copies the image": "Enter 复制图片",
   "Date math lives in the box: today + 30d, until 2026-10-01, 2026-10-01 - today":
     "输入框会算日期：today + 30d、until 2026-10-01、2026-10-01 - today",
   "Narrow file searches: ext:pdf, >10mb, 7d, in:projects":

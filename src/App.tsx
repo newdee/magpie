@@ -109,6 +109,17 @@ interface VideoHit {
   score: number;
 }
 
+/// The calculator / transform row above the results.
+interface CalcHit {
+  value: string;
+  alt: string | null;
+  swatch?: string | null;
+  /// the value explains why the input did not work; Enter copies nothing
+  error?: boolean;
+  /// a PNG (base64) to show and copy instead of text, e.g. a QR code
+  image?: string | null;
+}
+
 /// A system command (lock, sleep, restart, …) offered next to apps.
 interface CommandHit {
   kind: "command";
@@ -669,11 +680,7 @@ export default function App() {
   // query-box extras: inline calculator, bang web shortcuts, emoji lookup.
   // topRowActive = Enter targets the calc/bang row until the user arrows
   // down into the normal result list (reset on every query change).
-  const [calcHit, setCalcHit] = useState<{
-    value: string;
-    alt: string | null;
-    swatch?: string | null;
-  } | null>(null);
+  const [calcHit, setCalcHit] = useState<CalcHit | null>(null);
   const [bangHit, setBangHit] = useState<BangMatch | null>(null);
   // `note …`: Enter appends the text to the notes file instead of searching
   const [noteHit, setNoteHit] = useState<NoteMatch | null>(null);
@@ -912,7 +919,7 @@ export default function App() {
     setNoteHit(matchNote(q));
     setBangHit(matchBang(q, loadBangs()));
     if (q.length >= 2) {
-      invoke<{ value: string; alt: string | null } | null>("calc_query", { query: q })
+      invoke<CalcHit | null>("calc_query", { query: q })
         .then((r) => setCalcHit(r ?? null))
         .catch(() => setCalcHit(null));
     } else {
@@ -1202,6 +1209,25 @@ export default function App() {
     setQuery("");
     setImageQuery(null);
   }, []);
+
+  /// Enter (or a click) on the calculator / transform row: copy the image
+  /// (a QR code) or the value (a color's hex); an error copies nothing.
+  const takeCalc = useCallback(
+    async (c: CalcHit) => {
+      if (c.error) return;
+      try {
+        if (c.image) {
+          await invoke("copy_png", { pngB64: c.image });
+        } else {
+          await invoke("copy_clip", { text: c.swatch ?? c.value });
+        }
+        await finishAction();
+      } catch (e) {
+        setLastError(String(e));
+      }
+    },
+    [finishAction],
+  );
 
   // a pending confirmation lapses when the list or the selection moves on,
   // or after a few seconds
@@ -1740,7 +1766,7 @@ export default function App() {
             void invoke("open_repo", { url: bangHit.url }).then(finishAction);
           } else if (topRowActive && calcHit && !e.ctrlKey && !e.metaKey) {
             // color results copy the hex, not the whole display string
-            void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(finishAction);
+            void takeCalc(calcHit);
           } else if (e.ctrlKey || e.metaKey) {
             openWeb();
           } else if (e.shiftKey && source === "clips" && max >= 0) {
@@ -3835,20 +3861,32 @@ export default function App() {
               <div
                 className={`row extra-row ${topRowActive ? "selected" : ""}`}
                 onClick={() =>
-                  void invoke("copy_clip", { text: calcHit.swatch ?? calcHit.value }).then(finishAction)
+                  void takeCalc(calcHit)
                 }
               >
+                <div className="row-lead">
+                {calcHit.image && (
+                  <img className="calc-image" src={`data:image/png;base64,${calcHit.image}`} alt="" />
+                )}
                 <div className="row-main">
-                  <span className="row-title calc-value">
+                  <span className={`row-title calc-value ${calcHit.error ? "calc-error" : ""}`}>
                     {calcHit.swatch && (
                       <i className="color-swatch" style={{ background: calcHit.swatch }} />
                     )}
-                    {calcHit.swatch ? calcHit.value : `= ${firstLine(calcHit.value)}`}
+                    {calcHit.swatch || calcHit.error || calcHit.image
+                      ? calcHit.value
+                      : // a multi-line result (pretty JSON) previews as one line
+                        `= ${oneLine(calcHit.value)}`}
                   </span>
                   <span className="row-sub">
-                    {calcHit.alt ? `${calcHit.alt} · ` : ""}
-                    {t("Enter copies the result")}
+                    {calcHit.alt ? `${calcHit.alt}${calcHit.error ? "" : " · "}` : ""}
+                    {calcHit.error
+                      ? ""
+                      : calcHit.image
+                        ? t("Enter copies the image")
+                        : t("Enter copies the result")}
                   </span>
+                </div>
                 </div>
                 <span className="badge">{t("calc")}</span>
               </div>
@@ -4194,10 +4232,14 @@ function chordFromEvent(e: React.KeyboardEvent): {
 /// One-line rendering of a possibly multi-line value (pretty JSON, sorted
 /// lines): the first line, clipped, plus a line count. Enter still copies
 /// the whole thing.
-function firstLine(value: string): string {
-  const lines = value.split("\n");
-  const head = lines[0].length > 160 ? `${lines[0].slice(0, 160)}…` : lines[0];
-  return lines.length > 1 ? `${head}  … (${lines.length} lines)` : head;
+/// A result as one line for the top row: whitespace runs collapsed (so
+/// pretty JSON reads `{ "a": 1, … }` instead of a lone `{`), cut at 160
+/// chars, and a line count when it had several.
+function oneLine(value: string): string {
+  const lines = value.split("\n").length;
+  const flat = value.replace(/\s+/g, " ").trim();
+  const head = flat.length > 160 ? `${flat.slice(0, 160)}…` : flat;
+  return lines > 1 ? `${head}  (${lines} lines)` : head;
 }
 
 /// Highlight every occurrence of the query's words in a text run.

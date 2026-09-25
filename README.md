@@ -136,6 +136,14 @@ vaguely remember (or drop in an image), hit Enter.
   sort) and `count` (chars, words, lines) likewise. Give them an argument
   instead (`slug Hello World`) and they work on that. `Enter` puts the result
   back on the clipboard.
+- **JSON, hashes, tokens, names, QR**: `json` keeps keys in their order,
+  `json min` squeezes it onto one line, `json sort` orders the keys, and JSON
+  that does not parse says where it breaks (escaped JSON from a log is
+  unwrapped first). `md5` / `sha1` / `sha256` hash the text. `jwt` decodes a
+  token's header and payload and says when it expires, all on your machine.
+  `snake` / `kebab` / `camel` / `pascal` / `title` restyle a name
+  (`snake MyMacCleaner` → `my_mac_cleaner`). `qr` draws a QR code; `Enter`
+  copies it as an image.
 - **Narrow a file search inline**: `ext:pdf` or `.md`, `>10mb` / `<500kb`,
   `7d` (modified this week; `2w`, `3m`, `1y`), `in:projects`. Filters mix
   with words: `invoice ext:pdf 30d`.

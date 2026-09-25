@@ -1282,6 +1282,21 @@ kbd {
   color: var(--error);
 }
 
+/* the transform row: a QR code beside its text, an error in red */
+.calc-image {
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: #fff;
+  image-rendering: pixelated;
+}
+
+.row-title.calc-error {
+  color: var(--error);
+  font-weight: 500;
+}
+
 /* a row waiting for its confirming Enter */
 .row.armed .row-sub {
   color: var(--error);

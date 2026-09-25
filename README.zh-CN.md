@@ -109,6 +109,12 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
   `upper`、`lower`、`trim`、`slug`、`lines`（去重排序）、`count`（字数/
   词数/行数）同理。带参数（`slug Hello World`）就处理参数。`Enter` 把结果
   放回剪贴板。
+- **JSON、哈希、token、命名、二维码**：`json` 保持键的原有顺序，`json min`
+  压成一行，`json sort` 按键名排序，解析不了会指出错在哪一行哪一列（日志里被转义
+  的 JSON 会先还原）。`md5` / `sha1` / `sha256` 计算哈希。`jwt` 解码 token 的
+  header 和 payload 并说明何时过期，全程在本机完成。`snake` / `kebab` /
+  `camel` / `pascal` / `title` 转换命名风格（`snake MyMacCleaner` →
+  `my_mac_cleaner`）。`qr` 生成二维码，`Enter` 复制成图片。
 - **搜文件时顺手缩范围**：`ext:pdf` 或 `.md`、`>10mb` / `<500kb`、`7d`
   （一周内改过；`2w`、`3m`、`1y`）、`in:projects`。可以和关键词混用：
   `发票 ext:pdf 30d`。

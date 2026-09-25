@@ -407,6 +407,14 @@ mockIPC((cmd, args) => {
         return { value: `${q.toLowerCase()}  ·  rgb(${r}, ${g}, ${b})`, alt: "color", swatch: q.toLowerCase() };
       }
       if (q === "uuid") return { value: "3f2c9a1e-8b4d-4e7a-9c21-d5f0a6b83e14", alt: "UUID v4", swatch: null };
+      if (q.startsWith("qr ")) {
+        // a stand-in picture (a 2x2 checker PNG), shown pixelated like a real code
+        const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAAAAABX3VL4AAAADklEQVR4nGNgYGBgAAAABQABXvMqGgAAAABJRU5ErkJggg==";
+        return { value: q.slice(3), alt: `QR code · ${q.length - 3} chars`, swatch: null, image: png };
+      }
+      if (q.startsWith("json {") && !q.endsWith("}")) {
+        return { value: "line 1 column 9: EOF while parsing an object", alt: "not valid JSON", swatch: null, error: true };
+      }
       if (!/^[\d\s.+\-*/%^()]+$/.test(q) || !/[+*/%^]/.test(q)) return null;
       try {
         const v = Function(`"use strict";return (${q.replace(/\^/g, "**")})`)();

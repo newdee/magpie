@@ -44,6 +44,11 @@ ffmpeg-sidecar = "2"
 chrono-tz = "0.10.4"
 # running processes for `kill <name>` (procs.rs)
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+serde-transcode = "1.1.1"
+md-5 = "0.11.0"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["image"] }
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]

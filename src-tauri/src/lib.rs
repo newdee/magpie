@@ -3523,8 +3523,20 @@ fn calc_query(query: String) -> Option<serde_json::Value> {
     if let Some(r) = magpie_core::calc::eval(&query) {
         return Some(json!({ "value": r.value, "alt": r.alt }));
     }
-    magpie_core::transform::transform(&query)
-        .map(|t| json!({ "value": t.value, "alt": t.label, "swatch": t.swatch }))
+    magpie_core::transform::transform(&query).map(|t| {
+        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image })
+    })
+}
+
+/// Put a PNG (base64, e.g. a `qr` code) on the clipboard as an image.
+#[tauri::command]
+async fn copy_png(png_b64: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(png_b64.as_bytes()).map_err(err_str)?;
+    tokio::task::spawn_blocking(move || clips::set_clipboard_image(&bytes))
+        .await
+        .map_err(err_str)?
+        .map_err(err_str)
 }
 
 /// Pin/unpin a clipboard entry; pinned clips sort first and are exempt from
@@ -4486,7 +4498,8 @@ pub fn run() {
             reveal_app,
             run_app_as_admin,
             pdf_markdown,
-            save_pdf_markdown
+            save_pdf_markdown,
+            copy_png
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

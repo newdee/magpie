@@ -1,3 +1,52 @@
+# 验收记录 2026-09-25（JSON 完整化、哈希、JWT、命名风格、二维码，未出包）
+
+用户问加 JSON formatter：已有 `json`，按建议补 1–4 + 二维码。窗口切换评估后建议单独
+一批（三平台差异大、macOS 要两项授权、无 Mac 实测），用户未要求本批做。
+
+## 实现（`core/transform.rs`）
+
+- `json`：pretty 改用 `serde_transcode` 直接从解析器转到序列化器，**保持原键序**；
+  `json min` 一行；`json sort` 按键排序；日志里转义过的 JSON（`"{\"a\":1}"` 与无外层
+  引号的 `{\"a\":1}`）先还原；解析失败返回"第 L 行第 C 列：原因"（`error` 标记，回车
+  不复制）。
+- `md5` / `sha1` / `sha256`（RustCrypto）：UTF-8 字节，小写十六进制，标签带字节数。
+- `jwt`：接受裸 token 或 `Bearer …`，base64url 解码 header/payload，payload 保持原
+  键序；标签给算法与"何时过期 / 已过期 / 无过期"。不校验签名（本地无密钥），不联网。
+- `camel` / `pascal` / `snake` / `kebab` / `title`：`split_words` 按分隔符、小写接大写、
+  连续大写末字母（HTTPServer → HTTP|Server）、字母数字交界拆词。
+- `qr`：qrcode 渲染 ≥240px PNG；超长（>~2900 字节）给错误；回车 `copy_png` 复制为
+  图片。
+- 结果类型加 `error`、`image`；前端顶行显示图片、错误红字不复制；多行结果（pretty
+  JSON）预览压成一行而不是只显示 `{`。小贴士 5 条、README 双语、网站一条。
+
+## 发现并修复
+
+| # | 阶段 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 开发（既有） | 原 `json` 格式化会**静默把键按字母重排**（serde_json 未开 preserve_order，Map 是 BTreeMap） | 改 transcode 保序；全局不开 preserve_order，避免改变应用其余 JSON 输出 |
+| 2 | 开发单测 | JWT payload 经 Value 往返同样被排序 | 用原始 payload 文本 transcode |
+| 3 | 契约变化 | 旧测试断言 `json 非JSON` 返回空 | 按新契约改为断言错误与位置 |
+| 4 | 开发（既有） | 顶行多行结果只显示首行（pretty JSON 显示成孤零零的 `{`） | `oneLine` 折叠空白 + 行数 |
+
+## 连续三轮干净
+
+- 静态：clippy 0；a1 73/73、a3 96 处调用 + 307 个 i18n 键、docs-parity 0 FAIL（新增
+  4 项必检）；192 测试（新增 json/hash/jwt/case/qr 5 组）。
+- 机制（最终构建、隔离档案，从不碰剪贴板）：T19 14/14（保序、min、sort、转义还原、
+  错误位置、sha256/md5 已知值、jwt 已过期、HTTPServerConfig → http_server_config、
+  qr PNG；界面：二维码 120px 显示、错误红字且回车不关窗、pretty JSON 单行预览）；
+  回归 T15 18/18、T18 8/8。截图目测二维码行布局正确。
+- 可复现：套件 ×2 各 192 通过逐行一致；T19 ×2 逐行一致；T10 14/14、T11 11/11。
+
+## 未验证项
+
+- 回车复制二维码图片 / 复制结果：会改剪贴板，未自动点；`copy_png` 走现有
+  `set_clipboard_image`。
+- 顶行标签（"QR code · N chars"、"JSON, pretty-printed"）是英文，中文界面也不翻译，
+  与既有 transform 一致，未改。
+
+---
+
 # 验收记录 2026-09-25（PDF 转 Markdown，随 v0.4.0）
 
 用户提议借 pdf-inspector 加 PDF 转换；讨论 JSON 后只做 Markdown（pdf-inspector 无
