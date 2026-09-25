@@ -367,6 +367,8 @@ const ZH: Record<string, string> = {
   App: "应用",
   Bookmark: "书签",
   History: "历史",
+  "Maybe related": "可能相关",
+  "Found by meaning; no word in common with what you typed": "按意思找到的，和你输入的词没有重合",
   "{n} lines": "{n} 行",
   archived: "已归档",
   "added {d}": "添加于 {d}",

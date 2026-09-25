@@ -106,7 +106,7 @@ const appHits = [
 ];
 
 const webHits = [
-  { kind: "bookmark", id: 1, url: "https://tauri.app/v2/guides/", title: "Tauri v2 Guides", folder: "Dev/Tauri", browser: "chrome", added_at: now - 30 * day, score: 0.12 },
+  { kind: "bookmark", id: 1, url: "https://tauri.app/v2/guides/", title: "Tauri v2 Guides", folder: "Dev/Tauri", browser: "chrome", browsers: ["chrome", "edge", "librewolf"], added_at: now - 30 * day, score: 0.12 },
   { kind: "history", id: 11, url: "https://docs.rs/rusqlite/latest/rusqlite/", title: "rusqlite - Rust", browser: "chrome", visit_count: 37, last_visit: now - 2 * 3600, score: 0.1 },
   { kind: "bookmark", id: 2, url: "https://sqlite.org/fts5.html", title: "SQLite FTS5 Extension", folder: "Dev/DB", browser: "edge", added_at: now - 90 * day, score: 0.09 },
   { kind: "history", id: 12, url: "https://github.com/newdee/magpie", title: "newdee/magpie: Spotlight-style local search", browser: "chrome", visit_count: 24, last_visit: now - 20 * 60, score: 0.09 },
@@ -381,6 +381,10 @@ mockIPC((cmd, args) => {
     case "preview_thumb":
       return queryImageB64;
     case "search_web":
+      // ?fuzzy=1: nothing shares a word, so a few hits come by meaning alone
+      if (q && new URLSearchParams(location.search).has("fuzzy")) {
+        return webHits.slice(0, 3).map((h) => ({ ...h, fuzzy: true }));
+      }
       return q ? webHits : [];
     case "search_clips":
       return clipHits; // recent list on empty query, matches on typed ones
@@ -500,6 +504,9 @@ mockIPC((cmd, args) => {
     case "reveal_app":
     case "run_app_as_admin":
       return null;
+    case "browser_icon":
+      // installed browsers get the stand-in icon; LibreWolf shows its letter
+      return (args as { browser?: string })?.browser === "librewolf" ? null : appIconSvg;
     case "app_icon":
       // a stand-in app icon: the demo has no OS to ask. ?noicons=1 shows
       // what an app looks like before its icon is read (the monogram)

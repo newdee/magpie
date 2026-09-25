@@ -21,9 +21,13 @@ pub struct HistoryHit {
     pub url: String,
     pub title: String,
     pub browser: String,
+    /// Every browser that visited this URL (search results only).
+    pub browsers: Vec<String>,
     pub visit_count: i64,
     pub last_visit: Option<i64>,
     pub score: f32,
+    /// Found by meaning alone, with no keyword in common (search results).
+    pub fuzzy: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -286,9 +290,11 @@ pub fn history_by_url(conn: &Connection, url: &str) -> Result<Option<HistoryHit>
                 url: r.get(1)?,
                 title: r.get(2)?,
                 browser: r.get(3)?,
+                browsers: Vec::new(),
                 visit_count: r.get(4)?,
                 last_visit: r.get(5)?,
                 score: 0.0,
+                fuzzy: false,
             })
         })
         .optional()?)
@@ -311,9 +317,11 @@ pub fn history_by_ids(
                     url: r.get(1)?,
                     title: r.get(2)?,
                     browser: r.get(3)?,
+                    browsers: Vec::new(),
                     visit_count: r.get(4)?,
                     last_visit: r.get(5)?,
                     score: 0.0,
+                    fuzzy: false,
                 })
             })
             .optional()?;

@@ -308,6 +308,7 @@ pub fn search_bookmarks(
         return Ok(Vec::new());
     }
     let fts = bookmarks::bookmarks_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let keyword: std::collections::HashSet<i64> = fts.iter().copied().collect();
     let vecs = match qvec {
         Some(qvec) => vec![top_similar(&store.bookmarks, qvec, CANDIDATES_PER_LIST)],
         None => vec![],
@@ -318,9 +319,17 @@ pub fn search_bookmarks(
     // (Edge + Edge SxS…) into its best-ranked row
     let ids: Vec<i64> = fused.iter().take(limit * 2).map(|(id, _)| *id).collect();
     let mut hits = bookmarks::bookmarks_by_ids(conn, &ids, &scores)?;
+    let keyword_urls: std::collections::HashSet<String> =
+        hits.iter().filter(|h| keyword.contains(&h.id)).map(|h| h.url.clone()).collect();
     let mut seen = std::collections::HashSet::new();
     hits.retain(|h| seen.insert(h.url.clone()));
     hits.truncate(limit);
+    let urls: Vec<String> = hits.iter().map(|h| h.url.clone()).collect();
+    let mut by_url = browsers_by_url(conn, "bookmarks", &urls)?;
+    for h in &mut hits {
+        h.fuzzy = !keyword_urls.contains(&h.url);
+        h.browsers = by_url.remove(&h.url).unwrap_or_else(|| vec![h.browser.clone()]);
+    }
     Ok(hits)
 }
 
@@ -338,6 +347,7 @@ pub fn search_history(
         return Ok(Vec::new());
     }
     let fts = history::history_fts_search(conn, query, CANDIDATES_PER_LIST)?;
+    let keyword: std::collections::HashSet<i64> = fts.iter().copied().collect();
     let vecs = match qvec {
         Some(qvec) => vec![top_similar(&store.history, qvec, CANDIDATES_PER_LIST)],
         None => vec![],
@@ -353,12 +363,46 @@ pub fn search_history(
         h.score += 0.001 * ((h.visit_count.max(1) as f32).ln());
     }
     hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let keyword_urls: std::collections::HashSet<String> =
+        hits.iter().filter(|h| keyword.contains(&h.id)).map(|h| h.url.clone()).collect();
     // the same page visited in several browsers (Edge + Edge SxS…) collapses
     // into its best-scoring row
     let mut seen = std::collections::HashSet::new();
     hits.retain(|h| seen.insert(h.url.clone()));
     hits.truncate(limit);
+    let urls: Vec<String> = hits.iter().map(|h| h.url.clone()).collect();
+    let mut by_url = browsers_by_url(conn, "history", &urls)?;
+    for h in &mut hits {
+        h.fuzzy = !keyword_urls.contains(&h.url);
+        h.browsers = by_url.remove(&h.url).unwrap_or_else(|| vec![h.browser.clone()]);
+    }
     Ok(hits)
+}
+
+/// Every browser holding each of `urls` in `table` ("bookmarks" or
+/// "history"), sorted, for the rows that collapse one URL kept in several.
+fn browsers_by_url(
+    conn: &Connection,
+    table: &str,
+    urls: &[String],
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    debug_assert!(table == "bookmarks" || table == "history");
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    if urls.is_empty() {
+        return Ok(out);
+    }
+    let marks = vec!["?"; urls.len()].join(",");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT url, browser FROM {table} WHERE url IN ({marks}) ORDER BY browser"
+    ))?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(urls.iter()), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (url, browser) = row?;
+        out.entry(url).or_default().push(browser);
+    }
+    Ok(out)
 }
 
 /// Hybrid search over clipboard history; empty query shows most recent clips.
@@ -550,6 +594,49 @@ mod tests {
 
         // LIKE wildcards in user input stay literal
         assert!(search_bookmarks(&conn, &store, "%", None, 10).unwrap().is_empty());
+    }
+
+    /// issue #5: one row per URL lists every browser holding it, and a hit
+    /// found only by its vector is marked fuzzy.
+    #[test]
+    fn web_hits_list_all_browsers_and_mark_meaning_only_matches() {
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO bookmarks (id, url, title, folder, browser, added_at) VALUES
+               (1, 'https://www.bilibili.com/', '哔哩哔哩', 'fun', 'librewolf', 1),
+               (2, 'https://www.bilibili.com/', 'bilibili', 'video', 'helium', 1),
+               (3, 'https://techcrunch.com/', 'TechCrunch', 'news', 'helium', 1);
+             INSERT INTO history (id, url, title, browser, visit_count, last_visit) VALUES
+               (1, 'https://www.bilibili.com/', 'bilibili', 'librewolf', 9, 1),
+               (2, 'https://www.bilibili.com/', 'bilibili', 'chrome', 2, 1),
+               (3, 'https://techcrunch.com/', 'TechCrunch', 'helium', 1, 1);",
+        )
+        .unwrap();
+        // every vector points the same way: each bookmark is a "semantic" hit
+        let mut store = VectorStore::empty();
+        store.bookmarks = (1..=3).map(|id| (id, vec![1.0, 0.0])).collect();
+        store.history = (1..=3).map(|id| (id, vec![1.0, 0.0])).collect();
+        let q = [1.0, 0.0];
+
+        let hits = search_bookmarks(&conn, &store, "bili", Some(&q), 10).unwrap();
+        let bili = hits.iter().find(|h| h.url.contains("bilibili")).unwrap();
+        assert_eq!(bili.browsers, vec!["helium", "librewolf"], "one row, both browsers, sorted");
+        assert!(!bili.fuzzy, "matched by keyword");
+        let tc = hits.iter().find(|h| h.url.contains("techcrunch")).unwrap();
+        assert!(tc.fuzzy, "only the vector matched");
+        assert_eq!(tc.browsers, vec!["helium"]);
+        assert_eq!(hits.len(), 2);
+
+        let hits = search_history(&conn, &store, "bili", Some(&q), 10).unwrap();
+        let bili = hits.iter().find(|h| h.url.contains("bilibili")).unwrap();
+        assert_eq!(bili.browsers, vec!["chrome", "librewolf"]);
+        assert!(!bili.fuzzy);
+        assert!(hits.iter().find(|h| h.url.contains("techcrunch")).unwrap().fuzzy);
+
+        // no vector: only keyword hits, none fuzzy
+        let hits = search_bookmarks(&conn, &store, "bili", None, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(!hits[0].fuzzy);
     }
 
     #[test]

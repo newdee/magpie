@@ -58,8 +58,12 @@ interface BookmarkHit {
   title: string;
   folder: string;
   browser: string;
+  /** every browser holding this URL (search results) */
+  browsers?: string[];
   added_at: number | null;
   score: number;
+  /** found by meaning alone, no word in common with the query */
+  fuzzy?: boolean;
 }
 
 interface HistoryHit {
@@ -68,9 +72,11 @@ interface HistoryHit {
   url: string;
   title: string;
   browser: string;
+  browsers?: string[];
   visit_count: number;
   last_visit: number | null;
   score: number;
+  fuzzy?: boolean;
 }
 
 interface AppHit {
@@ -4048,6 +4054,7 @@ export default function App() {
                       </span>
                     </div>
                     <div className="row-meta">
+                      {r.fuzzy && <FuzzyBadge />}
                       {webScope === "all" && (
                         <span className="web-badge bookmark">{t("Bookmark")}</span>
                       )}
@@ -4061,7 +4068,7 @@ export default function App() {
                           {relTimeUnix(r.added_at)}
                         </span>
                       )}
-                      <span>{r.browser}</span>
+                      <BrowserIcons names={hitBrowsers(r)} />
                     </div>
                   </>
                 ) : r.kind === "history" ? (
@@ -4071,6 +4078,7 @@ export default function App() {
                       <span className="row-sub">{r.url}</span>
                     </div>
                     <div className="row-meta">
+                      {r.fuzzy && <FuzzyBadge />}
                       {webScope === "all" && (
                         <span className="web-badge history">{t("History")}</span>
                       )}
@@ -4078,6 +4086,7 @@ export default function App() {
                         <span className="mono">{relTimeUnix(r.last_visit)}</span>
                       )}
                       <span>{r.visit_count}×</span>
+                      <BrowserIcons names={hitBrowsers(r)} />
                     </div>
                   </>
                 ) : r.kind === "video" ? (
@@ -4335,6 +4344,74 @@ function highlightQuery(text: string, query: string): React.ReactNode[] {
 /// too, this just saves the round trip on every re-render and keystroke.
 const appIconCache = new Map<string, string | null>();
 
+/// The browsers a web hit is in: all of them when the search collapsed one
+/// URL kept in several, else the one it came from.
+function hitBrowsers(h: BookmarkHit | HistoryHit): string[] {
+  return h.browsers && h.browsers.length > 0 ? h.browsers : [h.browser];
+}
+
+function FuzzyBadge() {
+  return (
+    <span className="web-badge fuzzy" title={t("Found by meaning; no word in common with what you typed")}>
+      {t("Maybe related")}
+    </span>
+  );
+}
+
+const browserIconCache = new Map<string, string | null>();
+const browserIconLoads = new Map<string, Promise<string | null>>();
+
+/// One request per browser name, shared: a row that mounts while it is in
+/// flight (or remounts, as React's strict mode does) waits on the same one.
+function loadBrowserIcon(name: string): Promise<string | null> {
+  let p = browserIconLoads.get(name);
+  if (!p) {
+    p = invoke<string | null>("browser_icon", { browser: name })
+      .then((src) => src ?? null)
+      .catch(() => null)
+      .then((src) => {
+        browserIconCache.set(name, src);
+        return src;
+      });
+    browserIconLoads.set(name, p);
+  }
+  return p;
+}
+
+/// Small, half-grey icons of the browsers a web hit is in, so a bookmark
+/// kept in three browsers shows three. A browser that is not installed as
+/// an app (or has no icon) shows its first letter.
+function BrowserIcons({ names }: { names: string[] }) {
+  const [, setTick] = useState(0);
+  const key = names.join("\u0000");
+  useEffect(() => {
+    let live = true;
+    for (const n of key.split("\u0000")) {
+      if (browserIconCache.has(n)) continue;
+      void loadBrowserIcon(n).then((src) => {
+        if (live && src) setTick((x) => x + 1);
+      });
+    }
+    return () => {
+      live = false;
+    };
+  }, [key]);
+  return (
+    <span className="browser-icons">
+      {names.map((n) => {
+        const src = browserIconCache.get(n);
+        return src ? (
+          <img key={n} className="browser-icon" src={src} alt={n} title={n} />
+        ) : (
+          <span key={n} className="browser-icon browser-mono" title={n}>
+            {[...n][0]?.toUpperCase() ?? "?"}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 /// The OS icon for an app row. Until it arrives (or when there is none) the
 /// name's first letter, in a box of the same size, holds its place, so rows
 /// never shift.
@@ -4400,8 +4477,8 @@ function PreviewPane({
           <p className="pv-link">{hit.url}</p>
           <p className="pv-meta">
             {hit.kind === "bookmark"
-              ? `${t("Bookmark")} · ${hit.folder || "—"} · ${hit.browser}`
-              : `${t("History")} · ${hit.visit_count}× · ${hit.browser}`}
+              ? `${t("Bookmark")} · ${hit.folder || "—"} · ${hitBrowsers(hit).join(", ")}`
+              : `${t("History")} · ${hit.visit_count}× · ${hitBrowsers(hit).join(", ")}`}
           </p>
         </>
       ) : hit.kind === "app" ? (

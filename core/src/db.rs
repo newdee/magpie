@@ -219,6 +219,11 @@ fn migrate(conn: &Connection) -> Result<()> {
             UNIQUE(browser, url)
         );
 
+        -- search results list every browser holding a URL (and frecency
+        -- looks hits up by URL)
+        CREATE INDEX IF NOT EXISTS bookmarks_url ON bookmarks(url);
+        CREATE INDEX IF NOT EXISTS history_url ON history(url);
+
         CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
             title, url,
             content='history', content_rowid='id', tokenize='unicode61'

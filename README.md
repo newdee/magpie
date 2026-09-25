@@ -284,8 +284,10 @@ Arc, Opera, Helium, ...) and any Firefox-based one (Firefox, LibreWolf, Zen,
 Floorp, Waterfox, ...); forks are found by their on-disk profile layout, not
 a fixed list. Safari isn't read. Read directly from local stores (all
 profiles; new bookmarks and visits show up while the browser is still open),
-searchable by title, URL, and folder path, with semantic matching on top.
-`Enter` opens the bookmark in your default browser.
+searchable by title, URL, and folder path. When nothing matches the words
+you typed, up to three pages close in meaning are shown, marked "maybe
+related". A page kept in several browsers is one row with each browser's
+icon. `Enter` opens the bookmark in your default browser.
 
 ### Quick web launcher
 

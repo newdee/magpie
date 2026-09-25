@@ -408,6 +408,32 @@ input.query:active {
   object-fit: contain;
 }
 
+/* the browsers a web hit is in: small and half grey, so they don't pull the
+   eye from the title (issue #5) */
+.browser-icons {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+.browser-icon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  filter: grayscale(50%);
+  opacity: 0.9;
+}
+.browser-mono {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 600;
+  filter: none;
+}
 /* stand-in until the app's icon is read (or when the OS has none) */
 .app-monogram {
   display: inline-flex;
@@ -1041,6 +1067,11 @@ input.query:active {
 
 .web-badge.bookmark {
   color: var(--text-dim);
+}
+
+/* found by meaning alone: dashed, as the match itself is a guess */
+.web-badge.fuzzy {
+  border-style: dashed;
 }
 
 .clip-text {

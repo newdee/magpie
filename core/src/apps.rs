@@ -390,6 +390,44 @@ fn read_strings(path: &std::path::Path) -> Option<plist::Dictionary> {
     (!d.is_empty()).then_some(d)
 }
 
+/// The installed app a browser's hits came from, by the name bookmark and
+/// history indexing gave it ("chrome", "librewolf", "opera gx"): the app
+/// named exactly that (or "<name> Browser"), else one ending in it ("Google
+/// Chrome", "Microsoft Edge"), else one starting with it ("Brave Browser");
+/// the shortest name wins a tie, so "Firefox" beats "Firefox Developer
+/// Edition" and "Google Chrome" beats "Chrome Remote Desktop".
+pub fn browser_app<'a>(apps: &'a [AppEntry], browser: &str) -> Option<&'a AppEntry> {
+    let norm = |s: &str| {
+        s.to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let b = norm(browser);
+    if b.is_empty() {
+        return None;
+    }
+    let rank = |name: &str| {
+        let n = norm(name);
+        if n == b || n == format!("{b} browser") {
+            Some(0)
+        } else if n.ends_with(&format!(" {b}")) {
+            Some(1)
+        } else if n.starts_with(&format!("{b} ")) {
+            Some(2)
+        } else {
+            None
+        }
+    };
+    apps.iter()
+        .filter_map(|a| rank(&a.name).map(|r| (r, a.name.chars().count(), a)))
+        .min_by_key(|(r, len, _)| (*r, *len))
+        .map(|(_, _, a)| a)
+}
+
 /// Rank apps against a query. Prefix match beats substring beats subsequence.
 /// With `use_pinyin`, a latin query also matches Chinese names by full pinyin
 /// or initials ("wx" / "weixin" -> 微信), ranked below same-script matches.
@@ -998,6 +1036,34 @@ mod tests {
             aliases: builtin_aliases(name),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn browser_names_find_their_apps() {
+        let apps = vec![
+            app("Google Chrome"),
+            app("Chrome Remote Desktop"),
+            app("Microsoft Edge"),
+            app("Brave Browser"),
+            app("Firefox Developer Edition"),
+            app("Firefox"),
+            app("LibreWolf"),
+            app("Opera GX"),
+            app("Arc"),
+            app("Archive Utility"),
+            app("Helium"),
+        ];
+        let got = |b: &str| browser_app(&apps, b).map(|a| a.name.as_str());
+        assert_eq!(got("chrome"), Some("Google Chrome"));
+        assert_eq!(got("edge"), Some("Microsoft Edge"));
+        assert_eq!(got("brave"), Some("Brave Browser"));
+        assert_eq!(got("firefox"), Some("Firefox"));
+        assert_eq!(got("librewolf"), Some("LibreWolf"));
+        assert_eq!(got("opera gx"), Some("Opera GX"));
+        assert_eq!(got("arc"), Some("Arc"), "not Archive Utility");
+        assert_eq!(got("helium"), Some("Helium"));
+        assert_eq!(got("zen"), None, "not installed");
+        assert_eq!(got(""), None);
     }
 
     #[test]

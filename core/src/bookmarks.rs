@@ -18,8 +18,13 @@ pub struct BookmarkHit {
     pub title: String,
     pub folder: String,
     pub browser: String,
+    /// Every browser holding this URL (search results only; it collapses
+    /// the same bookmark kept in several browsers into one row).
+    pub browsers: Vec<String>,
     pub added_at: Option<i64>,
     pub score: f32,
+    /// Found by meaning alone, with no keyword in common (search results).
+    pub fuzzy: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -378,8 +383,10 @@ pub fn bookmark_by_url(conn: &Connection, url: &str) -> Result<Option<BookmarkHi
                 title: r.get(2)?,
                 folder: r.get(3)?,
                 browser: r.get(4)?,
+                browsers: Vec::new(),
                 added_at: r.get(5)?,
                 score: 0.0,
+                fuzzy: false,
             })
         })
         .optional()?)
@@ -402,8 +409,10 @@ pub fn bookmarks_by_ids(
                     title: r.get(2)?,
                     folder: r.get(3)?,
                     browser: r.get(4)?,
+                    browsers: Vec::new(),
                     added_at: r.get(5)?,
                     score: 0.0,
+                    fuzzy: false,
                 })
             })
             .optional()?;

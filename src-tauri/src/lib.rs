@@ -2215,6 +2215,25 @@ async fn app_icon(
     Ok(url)
 }
 
+/// The icon of an installed browser, by the name web hits carry ("chrome",
+/// "librewolf"): that browser's app icon, from the same cache as app rows.
+/// None when no installed app matches the name.
+#[tauri::command]
+async fn browser_icon(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    browser: String,
+) -> Result<Option<String>, String> {
+    let target = {
+        let apps = state.apps.lock().unwrap();
+        magpie_core::apps::browser_app(&apps, &browser).map(|a| a.target.clone())
+    };
+    match target {
+        Some(target) => app_icon(app, state, target).await,
+        None => Ok(None),
+    }
+}
+
 /// After a search shows apps: re-read the icons of those that changed since
 /// their icon was cached (an update installed a new one), in the
 /// background. Returns at once; a stat per app when nothing changed. The
@@ -2759,6 +2778,13 @@ async fn search_web(
     rank_web(&conn, &store, &query, qvec.as_deref(), &scope, limit).map_err(err_str)
 }
 
+/// At most this many web hits found by meaning alone, and only when no hit
+/// shares a word with the query. e5-small cannot tell a related bookmark
+/// from an unrelated one by similarity on short titles (measured with
+/// `examples/verify_web_floor.rs`: related median 0.844, unrelated up to
+/// 0.854), so these are few, last, and labelled "maybe related".
+const WEB_FUZZY_MAX: usize = 3;
+
 /// Bookmark and history hits as the palette ranks them (`scope`: "all",
 /// "bookmarks" or "history"). Shared with the MCP server.
 fn rank_web(
@@ -2771,7 +2797,7 @@ fn rank_web(
 ) -> Result<Vec<serde_json::Value>> {
     let fb = magpie_core::frecency::factors(conn, "bookmark", unix_now()).unwrap_or_default();
     let fh = magpie_core::frecency::factors(conn, "history", unix_now()).unwrap_or_default();
-    let mut out: Vec<(f32, serde_json::Value)> = Vec::new();
+    let mut out: Vec<(f32, bool, serde_json::Value)> = Vec::new(); // (score, fuzzy, hit)
     if scope != "history" {
         for b in search::search_bookmarks(conn, store, query, qvec, limit)? {
             // curated bookmarks get a small edge over raw history at a tie;
@@ -2779,7 +2805,7 @@ fn rank_web(
             let bonus = 0.01 * fb.get(&b.url).copied().unwrap_or(0.0);
             let mut v = serde_json::to_value(&b)?;
             v["kind"] = json!("bookmark");
-            out.push((b.score + 0.05 + bonus, v));
+            out.push((b.score + 0.05 + bonus, b.fuzzy, v));
         }
     }
     if scope != "bookmarks" {
@@ -2787,11 +2813,17 @@ fn rank_web(
             let bonus = 0.01 * fh.get(&h.url).copied().unwrap_or(0.0);
             let mut v = serde_json::to_value(&h)?;
             v["kind"] = json!("history");
-            out.push((h.score + bonus, v));
+            out.push((h.score + bonus, h.fuzzy, v));
         }
     }
     out.sort_by(|a, b| b.0.total_cmp(&a.0));
-    Ok(out.into_iter().take(limit).map(|(_, v)| v).collect())
+    let cap = if out.iter().any(|(_, fuzzy, _)| !fuzzy) {
+        out.retain(|(_, fuzzy, _)| !fuzzy);
+        limit
+    } else {
+        limit.min(WEB_FUZZY_MAX)
+    };
+    Ok(out.into_iter().take(cap).map(|(_, _, v)| v).collect())
 }
 
 /// Re-read every browser's bookmark and history store and refresh vectors.
@@ -3995,6 +4027,49 @@ mod search_cancel_tests {
 }
 
 #[cfg(test)]
+mod web_rank_tests {
+    use super::*;
+
+    /// issue #5: with three unrelated bookmarks every query used to list all
+    /// three. Meaning-only hits now show only when nothing shares a word
+    /// with the query, at most WEB_FUZZY_MAX of them.
+    #[test]
+    fn web_shows_meaning_only_hits_only_without_keyword_hits() {
+        let conn = db::open_in_memory().expect("in-memory db");
+        let mut values = Vec::new();
+        for i in 1..=5 {
+            values.push(format!("({i}, 'https://site{i}.example/', 'Page number {i}', '', 'chrome', 1)"));
+        }
+        values.push("(6, 'https://www.bilibili.com/', 'bilibili', '', 'chrome', 1)".into());
+        conn.execute_batch(&format!(
+            "INSERT INTO bookmarks (id, url, title, folder, browser, added_at) VALUES {};",
+            values.join(",")
+        ))
+        .unwrap();
+        let mut store = VectorStore::empty();
+        store.bookmarks = (1..=6).map(|id| (id, vec![1.0, 0.0])).collect();
+        let q = [1.0f32, 0.0];
+        let urls = |hits: &[serde_json::Value]| -> Vec<String> {
+            hits.iter().map(|h| h["url"].as_str().unwrap().to_string()).collect()
+        };
+
+        // a keyword hit exists: it is the whole list
+        let hits = rank_web(&conn, &store, "bili", Some(&q), "all", 40).unwrap();
+        assert_eq!(urls(&hits), vec!["https://www.bilibili.com/"]);
+        assert_eq!(hits[0]["fuzzy"], false);
+        assert_eq!(hits[0]["browsers"], json!(["chrome"]));
+
+        // nothing shares a word: a few meaning-only hits, marked
+        let hits = rank_web(&conn, &store, "zzqx", Some(&q), "all", 40).unwrap();
+        assert_eq!(hits.len(), WEB_FUZZY_MAX);
+        assert!(hits.iter().all(|h| h["fuzzy"] == true));
+
+        // and without the model, nothing at all
+        assert!(rank_web(&conn, &store, "zzqx", None, "all", 40).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
 mod reload_tests {
     use super::{reload_loaded, StdMutex};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -4575,7 +4650,8 @@ pub fn run() {
             pdf_markdown,
             save_pdf_markdown,
             copy_png,
-            refresh_app_icons
+            refresh_app_icons,
+            browser_icon
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
