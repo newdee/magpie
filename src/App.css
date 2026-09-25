@@ -408,6 +408,19 @@ input.query:active {
   object-fit: contain;
 }
 
+/* stand-in until the app's icon is read (or when the OS has none) */
+.app-monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .row-main {
   min-width: 0;
   display: flex;

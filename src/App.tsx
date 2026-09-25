@@ -526,6 +526,12 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Hit[]>([]);
   const [selected, setSelected] = useState(0);
+  // read by the search while its parts arrive (see runSearch): which row is
+  // selected, and whether it is still the first one
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const resultsRef = useRef<Hit[]>([]);
+  resultsRef.current = results;
   // shift+arrows extend a range from this anchor (clips only); null = single
   const [selAnchor, setSelAnchor] = useState<number | null>(null);
   // user-customizable tab order, visibility, and which tab opens on launch.
@@ -844,25 +850,71 @@ export default function App() {
         const cs = await invoke<Omit<ClipHit, "kind">[]>("search_clips", { query: q });
         hits = cs.map((c) => ({ ...c, kind: "clip" as const }));
       } else {
-        // local: matching apps surface as top hits, then files (+ videos in
-        // the images scope — the backend tags each hit's kind)
-        const [apps, fs, cmds] = await Promise.all([
-          invoke<Omit<AppHit, "kind">[]>("search_apps", {
-            query: q,
-            pinyin: pinyinRef.current,
-          }),
-          invoke<Hit[]>("search_local", {
-            query: q,
-            scope: localScopeRef.current,
-          }),
-          invoke<Omit<CommandHit, "kind">[]>("search_commands", { query: q }).catch(() => []),
+        // local: apps, system commands and files are asked for at once and
+        // each is shown the moment it answers. Apps and commands are matched
+        // in memory; the file search embeds the query (two models when the
+        // image model is loaded) and can take a while on a busy machine, so
+        // it must never hold the others back.
+        const live = () => seq === searchSeqRef.current && sourceRef.current === srcIdx;
+        let apps: Hit[] | null = null;
+        let cmds: Hit[] | null = null;
+        let files: Hit[] | null = null;
+        let painted = false;
+        const paint = () => {
+          if (!live()) return;
+          // system commands and apps share one scale; the better match leads
+          const top = [...(cmds ?? []), ...(apps ?? [])].sort(
+            (a, b) => (b as { score: number }).score - (a as { score: number }).score,
+          );
+          const list = [...top, ...(files ?? [])];
+          const allIn = apps !== null && cmds !== null && files !== null;
+          // nothing to show yet: keep the previous list rather than blank it
+          if (list.length === 0 && !allIn) return;
+          if (!painted) {
+            painted = true;
+            setResults(list);
+            setSelected(0);
+            setSelAnchor(null);
+            return;
+          }
+          // later parts: the first row stays selected unless the user moved;
+          // a row they picked stays picked wherever it lands
+          const was = selectedRef.current;
+          const key = was > 0 && resultsRef.current[was] ? hitKey(resultsRef.current[was]) : null;
+          setResults(list);
+          if (key) {
+            const i = list.findIndex((h) => hitKey(h) === key);
+            setSelected(i >= 0 ? i : 0);
+          } else {
+            setSelected(0);
+          }
+        };
+        await Promise.all([
+          invoke<Omit<AppHit, "kind">[]>("search_apps", { query: q, pinyin: pinyinRef.current })
+            .catch(() => [] as Omit<AppHit, "kind">[])
+            .then((a) => {
+              apps = a.map((x) => ({ ...x, kind: "app" as const }));
+              paint();
+              // icons of the apps on screen: re-read in the background if an
+              // app changed since its icon was cached; never waited on
+              if (a.length > 0 && live()) {
+                void invoke("refresh_app_icons", { targets: a.map((x) => x.target) }).catch(() => {});
+              }
+            }),
+          invoke<Omit<CommandHit, "kind">[]>("search_commands", { query: q })
+            .catch(() => [] as Omit<CommandHit, "kind">[])
+            .then((c) => {
+              cmds = c.map((x) => ({ ...x, kind: "command" as const }));
+              paint();
+            }),
+          invoke<Hit[]>("search_local", { query: q, scope: localScopeRef.current })
+            .catch(() => [] as Hit[])
+            .then((f) => {
+              files = f;
+              paint();
+            }),
         ]);
-        // system commands and apps share one scale; the better match leads
-        const top: Hit[] = [
-          ...cmds.map((c) => ({ ...c, kind: "command" as const })),
-          ...apps.map((a) => ({ ...a, kind: "app" as const })),
-        ].sort((a, b) => b.score - a.score);
-        hits = [...top, ...fs];
+        return;
       }
       if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
         setResults(hits);
@@ -1229,11 +1281,14 @@ export default function App() {
     [finishAction],
   );
 
-  // a pending confirmation lapses when the list or the selection moves on,
+  // the selected row's identity: a list that only grows (file results
+  // arriving after the apps) keeps it, so nothing in progress is dropped
+  const selectedKey = results[selected] ? hitKey(results[selected]) : null;
+  // a pending confirmation lapses when the selection moves to another row,
   // or after a few seconds
   useEffect(() => {
     setArmed(null);
-  }, [results, selected]);
+  }, [selectedKey]);
   useEffect(() => {
     if (!armed) return;
     const t = setTimeout(() => setArmed(null), 4000);
@@ -1475,10 +1530,10 @@ export default function App() {
     [actionsOpen, results, selected, rowActions],
   );
 
-  // the menu belongs to one row: it closes when the list or selection moves
+  // the menu belongs to one row: it closes when the selection moves to another
   useEffect(() => {
     setActionsOpen(false);
-  }, [results, selected]);
+  }, [selectedKey]);
 
   /// Run the menu's highlighted action. A risky one arms on the first
   /// Enter (the menu stays, showing the confirmation) and runs on the second.
@@ -3973,7 +4028,7 @@ export default function App() {
                 ) : r.kind === "app" ? (
                   <>
                     <div className="row-lead">
-                      <AppIcon key={iconEpoch} target={r.target} />
+                      <AppIcon key={iconEpoch} target={r.target} name={r.name} />
                       <div className="row-main">
                         <span className="row-title">{r.name}</span>
                         <span className="row-sub">{t("Application")}</span>
@@ -4280,9 +4335,10 @@ function highlightQuery(text: string, query: string): React.ReactNode[] {
 /// too, this just saves the round trip on every re-render and keystroke.
 const appIconCache = new Map<string, string | null>();
 
-/// The OS icon for an app row. Until it arrives (or when there is none) an
-/// empty box of the same size holds the title's place, so rows never shift.
-function AppIcon({ target }: { target: string }) {
+/// The OS icon for an app row. Until it arrives (or when there is none) the
+/// name's first letter, in a box of the same size, holds its place, so rows
+/// never shift.
+function AppIcon({ target, name }: { target: string; name: string }) {
   const [src, setSrc] = useState<string | null | undefined>(() => appIconCache.get(target));
   useEffect(() => {
     if (appIconCache.has(target)) {
@@ -4302,7 +4358,9 @@ function AppIcon({ target }: { target: string }) {
       live = false;
     };
   }, [target]);
-  return src ? <img className="app-icon" src={src} alt="" /> : <span className="app-icon" />;
+  if (src) return <img className="app-icon" src={src} alt="" />;
+  const first = [...name.trim()][0]?.toUpperCase() ?? "?";
+  return <span className="app-icon app-monogram">{first}</span>;
 }
 
 function PreviewPane({

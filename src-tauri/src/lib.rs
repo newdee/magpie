@@ -69,6 +69,9 @@ struct AppState {
     /// App icons as data URLs, by launch target; None = the OS had none.
     /// Filled on first display and kept for the session.
     app_icons: Arc<StdMutex<std::collections::HashMap<String, Option<String>>>>,
+    /// The stamp (`apps::icon_stamp`) each cached icon was read at, so a
+    /// search can tell cheaply whether an app on screen changed since.
+    icon_stamps: Arc<StdMutex<std::collections::HashMap<String, i64>>>,
     /// Version string of a pending update ("" = none) — drives the tray
     /// badge and the extra tray menu item.
     update_badge: Arc<StdMutex<String>>,
@@ -507,12 +510,17 @@ async fn search_local(
 ) -> Result<Vec<serde_json::Value>, String> {
     let scope = scope.unwrap_or(search::LocalScope::All);
     let limit = limit.unwrap_or(30).min(100);
+    let started = std::time::Instant::now();
+    // test hook: a slow file search, to check the palette shows apps first
+    if let Some(ms) = std::env::var("MAGPIE_TEST_SLOW_LOCAL_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
     // embed the words, not the filter tokens: "ext:pdf invoice" should land
     // near "invoice" in vector space, and search_files strips the same
     // tokens again for the keyword side
     let (_, text) = magpie_core::filters::parse(&query);
-    let (qvec, image_qvec) = if text.trim().is_empty() {
-        (None, None)
+    let (qvec, image_qvec, text_ms, image_ms) = if text.trim().is_empty() {
+        (None, None, 0, 0)
     } else {
         let emb = state.embedder.clone();
         let sig = state.siglip.clone();
@@ -520,28 +528,43 @@ async fn search_local(
         // try_lock: while a bulk embed pass holds a model, degrade that vector
         // list instead of stalling every keystroke behind the lock
         tokio::task::spawn_blocking(move || -> Result<_> {
+            let t0 = std::time::Instant::now();
             let text = emb
                 .try_lock()
                 .ok()
                 .and_then(|mut g| g.as_mut().map(|e| e.embed_query(&q)))
                 .transpose()?;
+            let t1 = std::time::Instant::now();
             let image = sig
                 .try_lock()
                 .ok()
                 .and_then(|mut g| g.as_mut().map(|s| s.embed_query(&q)))
                 .transpose()?;
-            Ok((text, image))
+            Ok((text, image, (t1 - t0).as_millis(), t1.elapsed().as_millis()))
         })
         .await
         .map_err(err_str)?
         .map_err(err_str)?
     };
+    let embedded_at = std::time::Instant::now();
     let Some(conn) = take_state_search_conn(&state).await else {
         return Ok(Vec::new()); // superseded; the frontend drops stale answers
     };
+    let ranked_at = std::time::Instant::now();
     let store = state.store.lock().unwrap();
-    rank_local(&conn, &store, &query, qvec.as_deref(), image_qvec.as_deref(), scope, limit)
-        .map_err(err_str)
+    let hits = rank_local(&conn, &store, &query, qvec.as_deref(), image_qvec.as_deref(), scope, limit)
+        .map_err(err_str);
+    // a slow file search is logged with where the time went, so a report
+    // from a machine we cannot test on shows it (queries themselves are not)
+    let total = started.elapsed().as_millis();
+    if total > 150 {
+        log::info!(
+            "slow file search: {total} ms (text model {text_ms} ms, image model {image_ms} ms, waiting {} ms, ranking {} ms)",
+            (ranked_at - embedded_at).as_millis(),
+            ranked_at.elapsed().as_millis()
+        );
+    }
+    hits
 }
 
 /// Local hits as the palette ranks them. The videos scope is its own
@@ -1244,10 +1267,14 @@ fn search_apps(
     limit: Option<usize>,
     pinyin: Option<bool>,
 ) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
-    let apps = state.apps.lock().unwrap();
-    let mut hits =
+    let started = std::time::Instant::now();
+    // matched under the lock, which is released before the database is
+    // opened: an app rescan must not wait on it
+    let mut hits = {
+        let apps = state.apps.lock().unwrap();
         // six: issue #4 had four apps starting with "mac" fill a cap of four
-        magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(6), pinyin.unwrap_or(true));
+        magpie_core::apps::match_apps(&apps, &query, limit.unwrap_or(6), pinyin.unwrap_or(true))
+    };
     // frecency: the app you launch daily wins ties within its match tier
     // (cap 0.08 < the 0.1 tier gaps, so exact matches stay on top)
     if let Ok(conn) = db::open(&state.db_path) {
@@ -1261,6 +1288,10 @@ fn search_apps(
                 |h, s| h.score = s,
             );
         }
+    }
+    let ms = started.elapsed().as_millis();
+    if ms > 50 {
+        log::info!("slow app search: {ms} ms");
     }
     Ok(hits)
 }
@@ -2184,6 +2215,46 @@ async fn app_icon(
     Ok(url)
 }
 
+/// After a search shows apps: re-read the icons of those that changed since
+/// their icon was cached (an update installed a new one), in the
+/// background. Returns at once; a stat per app when nothing changed. The
+/// palette hears `app-icons-changed` if any icon was replaced.
+#[tauri::command]
+fn refresh_app_icons(app: AppHandle, targets: Vec<String>) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let mut replaced = 0usize;
+        for target in targets.into_iter().take(12) {
+            if !known_app(&state, &target) {
+                continue;
+            }
+            let t = target.clone();
+            let stamp = tokio::task::spawn_blocking(move || magpie_core::apps::icon_stamp(&t))
+                .await
+                .unwrap_or(0);
+            {
+                // unknown (never read yet: the row asks for it itself) or
+                // unchanged. A change is claimed here, under the lock, so the
+                // next keystroke's refresh does not read the same icon again.
+                let mut stamps = state.icon_stamps.lock().unwrap();
+                match stamps.get(&target) {
+                    Some(&cached) if cached != stamp && stamp != 0 => {
+                        stamps.insert(target.clone(), stamp);
+                    }
+                    _ => continue,
+                }
+            }
+            let (url, _) = read_and_remember_icon(&app, target.clone()).await;
+            state.app_icons.lock().unwrap().insert(target, url);
+            replaced += 1;
+        }
+        if replaced > 0 {
+            log::info!("app icons: {replaced} refreshed after a search");
+            let _ = app.emit("app-icons-changed", ());
+        }
+    });
+}
+
 /// Read one icon from the OS and keep it in the database with the app's
 /// stamp, so the next launch finds it there. Returns the data URL and
 /// whether the OS had an icon.
@@ -2192,6 +2263,7 @@ async fn read_and_remember_icon(app: &AppHandle, target: String) -> (Option<Stri
     let icon = read_app_icon(target.clone()).await;
     let url = icon.as_ref().map(|i| icon_data_url(i.clone()));
     let found = icon.is_some();
+    app.state::<AppState>().icon_stamps.lock().unwrap().insert(target.clone(), stamp);
     let db_path = app.state::<AppState>().db_path.clone();
     let _ = tokio::task::spawn_blocking(move || -> Result<()> {
         let conn = db::open(&db_path)?;
@@ -2242,9 +2314,11 @@ async fn prefetch_app_icons(app: AppHandle) {
     let mut stale = Vec::new();
     {
         let mut mem = state.app_icons.lock().unwrap();
+        let mut known_stamps = state.icon_stamps.lock().unwrap();
         for (target, stamp) in targets.into_iter().zip(stamps) {
             match cached.remove(&target) {
                 Some((s, icon)) if s == stamp && stamp != 0 => {
+                    known_stamps.insert(target.clone(), stamp);
                     mem.insert(target, icon.map(icon_data_url));
                     from_cache += 1;
                 }
@@ -4266,6 +4340,7 @@ pub fn run() {
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
                 apps: Arc::new(StdMutex::new(Vec::new())),
                 app_icons: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+                icon_stamps: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 update_badge: Arc::new(StdMutex::new(String::new())),
                 ocr: Arc::new(StdMutex::new(None)),
                 ocr_status: Arc::new(StdMutex::new(String::new())),
@@ -4499,7 +4574,8 @@ pub fn run() {
             run_app_as_admin,
             pdf_markdown,
             save_pdf_markdown,
-            copy_png
+            copy_png,
+            refresh_app_icons
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

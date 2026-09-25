@@ -501,8 +501,9 @@ mockIPC((cmd, args) => {
     case "run_app_as_admin":
       return null;
     case "app_icon":
-      // a stand-in app icon: the demo has no OS to ask
-      return appIconSvg;
+      // a stand-in app icon: the demo has no OS to ask. ?noicons=1 shows
+      // what an app looks like before its icon is read (the monogram)
+      return new URLSearchParams(location.search).has("noicons") ? null : appIconSvg;
     case "plugin:event|listen":
       return 1;
     case "plugin:updater|check":
