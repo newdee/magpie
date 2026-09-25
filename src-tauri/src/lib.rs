@@ -2870,6 +2870,32 @@ fn spawn_bookmark_sync(app: AppHandle) {
     });
 }
 
+/// The browsers the Web tab reads, with how many bookmarks and history pages
+/// each contributed, most first (Settings › Web).
+#[tauri::command(async)]
+fn web_sources(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT browser, SUM(b), SUM(h) FROM (
+                 SELECT browser, COUNT(*) AS b, 0 AS h FROM bookmarks GROUP BY browser
+                 UNION ALL
+                 SELECT browser, 0, COUNT(*) FROM history GROUP BY browser)
+             GROUP BY browser ORDER BY SUM(b) + SUM(h) DESC, browser",
+        )
+        .map_err(err_str)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(json!({
+                "browser": r.get::<_, String>(0)?,
+                "bookmarks": r.get::<_, i64>(1)?,
+                "history": r.get::<_, i64>(2)?,
+            }))
+        })
+        .map_err(err_str)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(err_str)
+}
+
 #[tauri::command]
 fn sync_bookmarks_now(app: AppHandle) -> Result<(), String> {
     spawn_bookmark_sync(app);
@@ -4651,7 +4677,8 @@ pub fn run() {
             save_pdf_markdown,
             copy_png,
             refresh_app_icons,
-            browser_icon
+            browser_icon,
+            web_sources
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

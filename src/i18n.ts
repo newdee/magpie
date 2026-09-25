@@ -40,8 +40,8 @@ const ZH: Record<string, string> = {
   Open: "打开",
   "Ctrl+C copies whatever identifies a row — a path, a URL, a clip's text":
     "Ctrl+C 复制这一行的标识——路径、网址或剪贴条文本",
-  "Recent opens on the empty box — switch it on in Settings → Appearance & behavior":
-    "空搜索框可以列出最近打开——设置 → 外观与行为 里开启",
+  "Recent opens on the empty box — switch it on in Settings → General":
+    "空搜索框可以列出最近打开——设置 → 通用 里开启",
   "json alone pretty-prints your clipboard — upper, lower, slug, lines, count too":
     "单独输 json 就能格式化剪贴板里的 JSON——还有 upper、lower、slug、lines、count",
   "json min squeezes JSON onto one line, json sort orders its keys; bad JSON shows where it breaks":
@@ -131,8 +131,22 @@ const ZH: Record<string, string> = {
   Settings: "设置",
   "Back to search (Esc)": "返回搜索 (Esc)",
   Connection: "连接",
-  Indexing: "索引",
   "Appearance & behavior": "外观与行为",
+  // settings pages
+  General: "通用",
+  About: "关于",
+  "Shortcuts & tabs": "快捷键与标签页",
+  "Quick actions": "快捷功能",
+  "Models & integrations": "模型与集成",
+  Folders: "文件夹",
+  "Images, videos & PDFs": "图片、视频与 PDF",
+  Apps: "应用",
+  Browsers: "浏览器",
+  "Browsers found": "已发现的浏览器",
+  "Bookmarks and history are read from every Chromium- and Firefox-based browser on this computer, all profiles. Safari isn't read yet.":
+    "读取本机所有 Chromium 内核和 Firefox 内核浏览器的书签与历史（全部 profile）。暂不读取 Safari。",
+  "Sync now": "立即同步",
+  "No browser data found yet.": "还没有找到浏览器数据。",
   Privacy: "隐私",
   System: "系统",
   // settings: github
@@ -292,8 +306,8 @@ const ZH: Record<string, string> = {
     "设置里给应用起别名：proxy = clash",
   "Shift+Tab cycles the local scope: all / text / images / videos":
     "Shift+Tab 循环本地范围：全部 / 文本 / 图片 / 视频",
-  "Export your whole setup from Settings → System — the GitHub token stays out":
-    "设置 → 系统可一键导出全部配置——GitHub token 除外",
+  "Export your whole setup from Settings → About — the GitHub token stays out":
+    "设置 → 关于 可一键导出全部配置——GitHub token 除外",
   "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).":
     "拉丁输入按全拼或首字母匹配中文应用名（wx → 微信）。",
   "App aliases": "应用别名",
@@ -368,6 +382,7 @@ const ZH: Record<string, string> = {
   Bookmark: "书签",
   History: "历史",
   "Maybe related": "可能相关",
+  "search in browser": "在浏览器中搜索",
   "Found by meaning; no word in common with what you typed": "按意思找到的，和你输入的词没有重合",
   "{n} lines": "{n} 行",
   archived: "已归档",

@@ -504,6 +504,12 @@ mockIPC((cmd, args) => {
     case "reveal_app":
     case "run_app_as_admin":
       return null;
+    case "web_sources":
+      return [
+        { browser: "chrome", bookmarks: 86, history: 1204 },
+        { browser: "edge", bookmarks: 30, history: 311 },
+        { browser: "librewolf", bookmarks: 12, history: 0 },
+      ];
     case "browser_icon":
       // installed browsers get the stand-in icon; LibreWolf shows its letter
       return (args as { browser?: string })?.browser === "librewolf" ? null : appIconSvg;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -276,7 +276,31 @@ const LOCAL_KEYS = [
 /// on every platform, so this only changes what the footer says.
 const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
 const IS_WIN = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
-const MOD = IS_MAC ? "⌘" : "ctrl";
+const MOD = IS_MAC ? "⌘" : "Ctrl";
+
+/// Settings pages, one per part of the app (#6).
+type SettingsSection = "general" | "local" | "web" | "stars" | "clips" | "about";
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "local", label: "Local Files" },
+  { id: "web", label: "Web" },
+  { id: "stars", label: "GitHub Stars" },
+  { id: "clips", label: "Clipboard" },
+  { id: "about", label: "About" },
+];
+/// Settings open on the page of the tab you were on.
+const SECTION_FOR_SOURCE: Record<string, SettingsSection> = {
+  local: "local",
+  web: "web",
+  "github-stars": "stars",
+  clips: "clips",
+};
+
+interface WebSource {
+  browser: string;
+  bookmarks: number;
+  history: number;
+}
 
 /// Display names of the system commands, by the backend's ids.
 const COMMAND_LABELS: Record<string, string> = {
@@ -538,6 +562,28 @@ export default function App() {
   selectedRef.current = selected;
   const resultsRef = useRef<Hit[]>([]);
   resultsRef.current = results;
+  // whether the latest mousemove really moved the pointer (see the row's
+  // onMouseMove): the last screen position, and the verdict for the event
+  // being dispatched now
+  const pointerAtRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerMovedRef = useRef(false);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const p = pointerAtRef.current;
+      pointerMovedRef.current = p !== null && (p.x !== e.screenX || p.y !== e.screenY);
+      pointerAtRef.current = { x: e.screenX, y: e.screenY };
+    };
+    // summoned under a resting pointer: its first event is not a move
+    const onFocus = () => {
+      pointerAtRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove, true);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("mousemove", onMove, true);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
   // shift+arrows extend a range from this anchor (clips only); null = single
   const [selAnchor, setSelAnchor] = useState<number | null>(null);
   // user-customizable tab order, visibility, and which tab opens on launch.
@@ -728,6 +774,58 @@ export default function App() {
   showSettingsRef.current = showSettings;
 
   const source = (sources[sourceIdx] ?? sources[0]).id;
+  // Web: a faint "⌘⏎ search in browser" right after the typed text (#5),
+  // placed by measuring the text in the input's own font; hidden when it
+  // would not fit before the input's end
+  const showWebHint = source === "web" && !imageQuery && query.trim() !== "";
+  const queryHintRef = useRef<HTMLSpanElement>(null);
+  const [settingsTab, setSettingsTab] = useState<SettingsSection>("general");
+  const settingsPageRef = useRef<HTMLDivElement>(null);
+  // opening settings lands on the current tab's page (only on opening: a
+  // tab switch behind the open settings must not move its page)
+  useEffect(() => {
+    if (showSettings) setSettingsTab(SECTION_FOR_SOURCE[source] ?? "general");
+  }, [showSettings]);
+  // a new page starts at its top
+  useEffect(() => {
+    settingsPageRef.current?.scrollTo({ top: 0 });
+  }, [settingsTab]);
+  // Settings › Web: the browsers found and what each contributed
+  const [webSources, setWebSources] = useState<WebSource[] | null>(null);
+  const loadWebSources = useCallback(() => {
+    invoke<WebSource[]>("web_sources")
+      .then(setWebSources)
+      .catch(() => setWebSources([]));
+  }, []);
+  useEffect(() => {
+    if (showSettings && settingsTab === "web") loadWebSources();
+  }, [showSettings, settingsTab, loadWebSources]);
+  useEffect(() => {
+    const un = listen("bookmarks-done", () => loadWebSources());
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [loadWebSources]);
+  // how many footer hints gave way so the status fits (see footerHints)
+  const [hintsDropped, setHintsDropped] = useState(0);
+  const [, setFontsTick] = useState(0);
+  const footerStatusRef = useRef<HTMLSpanElement>(null);
+  const [queryHintLeft, setQueryHintLeft] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    const hint = queryHintRef.current;
+    if (!showWebHint || !input || !hint) {
+      setQueryHintLeft(null);
+      return;
+    }
+    const cs = getComputedStyle(input);
+    const ctx = measureCanvas().getContext("2d");
+    if (!ctx) return;
+    ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    const left = input.offsetLeft + parseFloat(cs.paddingLeft || "0") + ctx.measureText(query).width - input.scrollLeft + 14;
+    const fits = left + hint.offsetWidth <= input.offsetLeft + input.clientWidth;
+    setQueryHintLeft(fits ? left : null);
+  }, [query, showWebHint]);
   const needsToken = source === "github-stars" && status !== null && !status.has_token;
   needsTokenRef.current = status !== null && !status.has_token;
 
@@ -866,6 +964,7 @@ export default function App() {
         let cmds: Hit[] | null = null;
         let files: Hit[] | null = null;
         let painted = false;
+        let shown: Hit[] | null = null; // the list this search last handed to React
         const paint = () => {
           if (!live()) return;
           // system commands and apps share one scale; the better match leads
@@ -878,15 +977,20 @@ export default function App() {
           if (list.length === 0 && !allIn) return;
           if (!painted) {
             painted = true;
+            shown = list;
             setResults(list);
             setSelected(0);
             setSelAnchor(null);
             return;
           }
           // later parts: the first row stays selected unless the user moved;
-          // a row they picked stays picked wherever it lands
-          const was = selectedRef.current;
+          // a row they picked stays picked wherever it lands. Until our last
+          // list is on screen the selection still belongs to the one before
+          // it (another query's), so it is not carried over.
+          const onScreen = resultsRef.current === shown;
+          const was = onScreen ? selectedRef.current : 0;
           const key = was > 0 && resultsRef.current[was] ? hitKey(resultsRef.current[was]) : null;
+          shown = list;
           setResults(list);
           if (key) {
             const i = list.findIndex((h) => hitKey(h) === key);
@@ -2255,6 +2359,70 @@ export default function App() {
         ? localProgressLabel(localProgress)
         : null;
 
+  // footer key hints, each with how early it gives way (higher first, 0
+  // never) when the status on the right would be cut off: English labels,
+  // a long notice or a narrow window used to push the status out of view
+  const footerHints: { key: string; drop: number; node: ReactNode }[] = [
+    { key: "actions", drop: 0, node: <><Keys keys={[MOD, "K"]} /> {t("actions")}</> },
+    { key: "open", drop: 7, node: <><kbd>⏎</kbd> {source === "clips" ? t("copy") : t("open")}</> },
+    { key: "source", drop: 4, node: <><kbd>tab</kbd> {t("source")}</> },
+    ...(source === "clips"
+      ? [
+          { key: "paste", drop: 2, node: <><Keys keys={["⇧", "⏎"]} /> {t("paste")}</> },
+          { key: "select", drop: 6, node: <><Keys keys={["⇧", "↑↓"]} /> {t("select")}</> },
+          { key: "delete", drop: 3, node: <><Keys keys={[MOD, "⌦"]} /> {t("delete")}</> },
+        ]
+      : []),
+    ...(source === "local" || source === "web" || source === "github-stars"
+      ? [{ key: "scope", drop: 3, node: <><Keys keys={["⇧", "tab"]} /> {source === "github-stars" ? t("sort") : t("scope")}</> }]
+      : []),
+    ...(results.length > 0 && !showSettings
+      ? [{ key: "preview", drop: 5, node: <><kbd>{previewOpen ? "←" : "→"}</kbd> {previewOpen ? t("close preview") : t("preview")}</> }]
+      : []),
+    {
+      key: "settings",
+      drop: 0,
+      node: (
+        <>
+          <Keys keys={[IS_MAC ? "⌘" : "Alt", ","]} /> {t("settings")}
+          {(updPhase === "available" || updPhase === "downloading") && (
+            <i className="upd-dot" title={tf("Version {v} is available.", { v: updVersion ?? "" })} />
+          )}
+        </>
+      ),
+    },
+    { key: "web", drop: 2, node: <><Keys keys={[MOD, "⏎"]} /> {t("web")}</> },
+  ];
+  const dropOrder = footerHints
+    .map((h, i) => ({ key: h.key, drop: h.drop, i }))
+    .filter((h) => h.drop > 0)
+    .sort((a, b) => b.drop - a.drop || b.i - a.i)
+    .map((h) => h.key);
+  const droppedHints = new Set(dropOrder.slice(0, hintsDropped));
+  const hintsSignature = `${footerHints.map((h) => h.key).join()}|${footerStatus}|${t("actions")}`;
+  // anything that changes what the footer holds starts from all hints again
+  useLayoutEffect(() => {
+    setHintsDropped(0);
+  }, [hintsSignature]);
+  // then, before paint, give way one hint at a time until the status fits.
+  // Checked after every render: widths also move when a font finishes
+  // loading, which no dependency list sees, and the browser lays the page
+  // out before painting anyway, so reading it here costs no extra layout
+  useLayoutEffect(() => {
+    const st = footerStatusRef.current;
+    if (st && st.scrollWidth > st.clientWidth && hintsDropped < dropOrder.length) {
+      setHintsDropped((n) => n + 1);
+    }
+  });
+  // and once the fonts are in, measure again from all hints (the tick makes
+  // sure that re-render happens even when nothing had given way yet)
+  useEffect(() => {
+    void document.fonts?.ready.then(() => {
+      setHintsDropped(0);
+      setFontsTick((n) => n + 1);
+    });
+  }, []);
+
   return (
     <div
       className={`panel ${showSettings ? "settings-mode" : ""} ${
@@ -2386,6 +2554,16 @@ export default function App() {
           autoCorrect="off"
           autoCapitalize="off"
         />
+        {showWebHint && (
+          <span
+            ref={queryHintRef}
+            className="query-hint"
+            style={{ left: queryHintLeft ?? 0, visibility: queryHintLeft == null ? "hidden" : "visible" }}
+            aria-hidden="true"
+          >
+            <Keys keys={[MOD, "⏎"]} /> {t("search in browser")}
+          </span>
+        )}
         {source === "local" && !imageQuery && (
           <button
             className="icon-btn"
@@ -2457,1390 +2635,1482 @@ export default function App() {
             </button>
           </div>
 
-          {/* CONNECTION */}
-          <p className="set-eyebrow">{t("Connection")}</p>
-          <div className="set-group">
-            <div className="set-row stack">
-              <div className="set-head">
-                <div className="set-label">
-                  <span className="set-name">GitHub</span>
-                  <span className="set-desc">
-                    {status?.has_token
-                      ? t("Paste a new token to replace the current one.")
-                      : t(
-                          "A personal access token, no scopes needed — it only reads your public stars.",
-                        )}
-                  </span>
-                </div>
-                {status?.has_token && status.username ? (
-                  <span className="conn-badge ok">
-                    <span className="conn-dot" aria-hidden="true" /> {status.username}
-                  </span>
-                ) : (
-                  <span className="conn-badge">{t("not connected")}</span>
-                )}
-              </div>
-              <div className="token-row">
-                <input
-                  className="token-input"
-                  type="password"
-                  value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.stopPropagation();
-                      submitToken();
-                    }
-                  }}
-                  placeholder="ghp_…"
-                  spellCheck={false}
-                />
-                <button className="primary-btn" onClick={submitToken} disabled={tokenBusy}>
-                  {tokenBusy ? t("Checking") : t("Connect")}
-                </button>
-              </div>
-              {tokenError && <p className="error-line">{tokenError}</p>}
-              <div className="set-links">
-                <button
-                  className="link-btn"
-                  onClick={() =>
-                    invoke("open_repo", {
-                      url: "https://github.com/settings/tokens/new?description=magpie",
-                    })
-                  }
-                >
-                  {t("Create one on github.com")}
-                </button>
-                {status?.has_token && (
-                  <button
-                    className="link-btn"
-                    onClick={rebuildStars}
-                    title={t("Wipe the star index and sync everything from scratch")}
-                  >
-                    {t("Rebuild star index")}
-                  </button>
-                )}
-              </div>
-            </div>
+          {/* section tabs (#6): each part of the app has its own page */}
+          <div className="settings-nav" role="tablist">
+            {SETTINGS_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                role="tab"
+                aria-selected={settingsTab === s.id}
+                className={`source ${settingsTab === s.id ? "active" : ""}`}
+                onClick={() => setSettingsTab(s.id)}
+              >
+                {t(s.label)}
+              </button>
+            ))}
           </div>
 
-          {/* INDEXING */}
-          <p className="set-eyebrow">{t("Indexing")}</p>
-          <div className="set-group">
-            <div className="set-row stack">
-              <div className="set-head">
-                <div className="set-label">
-                  <span className="set-name">
-                    {t("Indexed folders")}
-                    {status != null && status.folder_count > 0 && (
-                      <span className="count-pill">{status.folder_count}</span>
-                    )}
-                  </span>
-                  <span className="set-desc">
-                    {t("Scanned recursively; hidden and gitignored paths are skipped.")}
-                  </span>
-                </div>
-                <button className="primary-btn" onClick={addFolder}>
-                  {t("Add folder")}
-                </button>
-              </div>
-              {folders.length === 0 &&
-                // "failed to load" only when the load actually failed. It used
-                // to be inferred from status.folder_count, which lags behind
-                // the list after the last folder is removed and showed this
-                // as an error every time.
-                (foldersFailed ? (
-                  <p className="error-line">
-                    {t("The folder list failed to load — please report this with the error below.")}
-                  </p>
-                ) : (
-                  <p className="set-empty">{t("No folders yet.")}</p>
-                ))}
-              {folders.length > 0 && (
-                <div className="folder-list">
-                  {folders.map((f) => (
-                    <div key={f.id} className="folder-row">
-                      <span className="folder-path" title={f.path}>
-                        {f.path}
+          {/* only the page scrolls; the title and the section tabs stay */}
+          <div className="settings-body" ref={settingsPageRef}>
+            {settingsTab === "general" && (
+              <>
+                <p className="set-eyebrow">{t("Appearance & behavior")}</p>
+                <div className="set-group">
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Theme")}</span>
+                    </div>
+                    <div className="pill-row">
+                      {THEMES.map((th) => (
+                        <button
+                          key={th}
+                          className={`source ${theme === th ? "active" : ""}`}
+                          onClick={() => setTheme(th)}
+                        >
+                          {t(th)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Language")}</span>
+                      <span className="set-desc">
+                        {t("Palette and settings text; the tray menu follows.")}
                       </span>
-                      <span className="folder-count">{f.file_count}</span>
-                      <button
-                        className="folder-remove"
-                        onClick={() => rebuildFolder(f.id)}
-                        title={t("Rebuild this folder's index from scratch")}
-                        aria-label={`Rebuild index for ${f.path}`}
-                      >
-                        ↻
-                      </button>
-                      <button
-                        className="folder-remove"
-                        onClick={() => removeFolder(f.id)}
-                        title={t("Remove from index")}
-                        aria-label={`Remove ${f.path}`}
-                      >
-                        ✕
+                    </div>
+                    <div className="pill-row">
+                      {(
+                        [
+                          { id: "auto", label: t("auto") },
+                          { id: "en", label: "English" },
+                          { id: "zh", label: "中文" },
+                        ] as { id: LangPref; label: string }[]
+                      ).map((o) => (
+                        <button
+                          key={o.id}
+                          className={`source ${langPref === o.id ? "active" : ""}`}
+                          onClick={() => chooseLang(o.id)}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Launch at login")}</span>
+                      <span className="set-desc">
+                        {t("Start magpie in the tray when you log in.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${autostart === o.on ? "active" : ""}`}
+                          disabled={autostart == null}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_autostart", { on: o.on });
+                              setAutostart(await invoke<boolean>("get_autostart"));
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Hide on click-out")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "The palette goes away when another window takes focus. Turn off to drag files in from other windows.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${hideOnBlur === o.on ? "active" : ""}`}
+                          onClick={() => {
+                            setHideOnBlur(o.on);
+                            try {
+                              localStorage.setItem("magpie.hideonblur", o.on ? "1" : "0");
+                            } catch {
+                              /* preference just won't persist */
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Launch tips")}</span>
+                      <span className="set-desc">
+                        {t("A one-line tip below the empty search box, fresh on every summon.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${showTips === o.on ? "active" : ""}`}
+                          onClick={() => {
+                            setShowTips(o.on);
+                            try {
+                              localStorage.setItem(TIPS_KEY, o.on ? "1" : "0");
+                            } catch {
+                              /* preference just won't persist */
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Recent opens on the empty box")}</span>
+                      <span className="set-desc">
+                        {t("With nothing typed, each tab lists what you opened from it most recently.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${recentsOn === o.on ? "active" : ""}`}
+                          onClick={() => {
+                            setRecentsOn(o.on);
+                            setRecentsEnabled(o.on);
+                            // the list behind the settings page was built under the
+                            // old setting; rebuild it now, or it lingers until the
+                            // next keystroke or tab switch
+                            void runSearch(queryRef.current, sourceRef.current);
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="set-eyebrow">{t("Shortcuts & tabs")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("Summon shortcut")}</span>
+                      <span className="set-desc">
+                        {t("Currently")} <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>.{" "}
+                        {t(
+                          "Click and press a new combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="token-row">
+                      <input
+                        className="token-input"
+                        value={hotkeyDraft}
+                        onChange={() => {}}
+                        onKeyDown={captureHotkey}
+                        placeholder={t("press keys…")}
+                        spellCheck={false}
+                      />
+                      {hotkeyDraft && (
+                        <button
+                          className="icon-btn"
+                          onClick={() => {
+                            setHotkeyDraft("");
+                            setHotkeyMsg(null);
+                          }}
+                          title={t("Clear")}
+                          aria-label="Clear recorded shortcut"
+                        >
+                          ✕
+                        </button>
+                      )}
+                      <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
+                        {t("Apply")}
                       </button>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Max file size")}</span>
-                <span className="set-desc">
-                  {t("Larger files index by name only. Changing rebuilds.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                {FILE_CAPS.map((c) => (
-                  <button
-                    key={c.mb}
-                    className={`source ${status?.max_file_mb === c.mb ? "active" : ""}`}
-                    onClick={() => applyFileCap(c.mb)}
-                  >
-                    {t(c.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Skip git worktrees")}</span>
-                <span className="set-desc">
-                  {t(
-                    "A linked worktree is a second copy of a checkout that is usually indexed already. Skipped when its main checkout is inside an indexed folder; a worktree that is the only copy is still indexed.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${(status?.skip_worktrees ?? true) === o.on ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_skip_worktrees", { enabled: o.on });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Indexing threads")}</span>
-                <span className="set-desc">
-                  {t(
-                    "CPU threads each model (text, image, OCR) may use while indexing. Fewer keeps the machine responsive; all cores finishes a first index sooner. Applies right away.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[1, 2, 4, 8]
-                  .filter((n) => n <= (status?.cpu_cores ?? 8))
-                  .map((n) => ({ label: String(n), threads: n }))
-                  .concat([{ label: "all", threads: 0 }])
-                  .map((o) => (
-                    <button
-                      key={o.label}
-                      className={`source ${(status?.index_threads ?? 4) === o.threads ? "active" : ""}`}
-                      onClick={async () => {
-                        try {
-                          await invoke("set_index_threads", { threads: o.threads });
-                          await refreshStatus();
-                        } catch (e) {
-                          setLastError(String(e));
-                        }
-                      }}
-                    >
-                      {o.threads === 0 ? `${t("all cores")} (${status?.cpu_cores ?? "?"})` : o.label}
-                    </button>
-                  ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("File changes")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Changes inside indexed folders reach the index within seconds, without waiting for the next full walk.",
-                  )}
-                  {status?.watch_enabled && status.watch_status === "watching" && (
-                    <>
-                      {" "}
-                      {t("Watching")} {status.watched_folders} {t("folders")}
-                    </>
-                  )}
-                  {status?.watch_enabled && status.watch_status.startsWith("failed") && (
-                    <>
-                      {" "}
-                      <span className="error-line">{status.watch_status}</span>
-                    </>
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${(status?.watch_enabled ?? true) === o.on ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_watch", { enabled: o.on });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Full rescan")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Every so often all folders are walked again, so anything the watcher missed still lands. Off leaves it to the watcher and to startup.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[5, 15, 30, 60]
-                  .map((n) => ({ label: `${n} ${t("min")}`, minutes: n }))
-                  .concat([{ label: t("off"), minutes: 0 }])
-                  .map((o) => (
-                    <button
-                      key={o.minutes}
-                      className={`source ${(status?.rescan_minutes ?? 30) === o.minutes ? "active" : ""}`}
-                      onClick={async () => {
-                        try {
-                          await invoke("set_rescan_minutes", { minutes: o.minutes });
-                          await refreshStatus();
-                        } catch (e) {
-                          setLastError(String(e));
-                        }
-                      }}
-                    >
-                      {o.label}
-                    </button>
-                  ))}
-                <button
-                  className="ghost-btn"
-                  disabled={status?.local_indexing ?? false}
-                  onClick={async () => {
-                    try {
-                      await invoke("index_local");
-                      await refreshStatus();
-                    } catch (e) {
-                      setLastError(String(e));
-                    }
-                  }}
-                >
-                  {status?.local_indexing ? t("rescanning") : t("Rescan now")}
-                </button>
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">
-                  {t("Video shot search")}
-                  {status != null && status.video_shot_count > 0 && (
-                    <span className="count-pill">{status.video_shot_count}</span>
-                  )}
-                </span>
-                <span className="set-desc">
-                  {status?.video_note
-                    ? status.video_note
-                    : t(
-                        "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).",
-                      )}
-                  {status?.ffmpeg_status ? (
-                    <>
-                      {" · ffmpeg: "}
-                      {status.ffmpeg_status === "system"
-                        ? t("system install")
-                        : status.ffmpeg_status === "bundled"
-                          ? t("downloaded")
-                          : status.ffmpeg_status}
-                    </>
-                  ) : null}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${status?.video_indexing_enabled === o.on ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_video_indexing", { enabled: o.on });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Image text (OCR)")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Reads the text inside indexed images and video frames (screenshots, scans, subtitles) so you can search it — video hits jump to the moment the text appears. Off by default; enabling downloads a small model (~15 MB).",
-                  )}
-                  {status?.ocr_enabled && status.ocr_status ? (
-                    <>
-                      {" · "}
-                      {status.ocr_status === "ready" ? t("ready") : status.ocr_status}
-                    </>
-                  ) : null}
-                </span>
-              </div>
-              <div className="pill-row">
-                <select
-                  className="set-select"
-                  value={status?.ocr_model ?? "pp-ocr-v4"}
-                  onChange={async (e) => {
-                    try {
-                      // ids/labels mirror core::ocr::OCR_MODELS
-                      await invoke("set_ocr", {
-                        enabled: status?.ocr_enabled ?? false,
-                        model: e.target.value,
-                      });
-                      await refreshStatus();
-                    } catch (err) {
-                      setLastError(String(err));
-                    }
-                  }}
-                  aria-label={t("OCR model")}
-                >
-                  <option value="pp-ocr-v4">PP-OCRv4 (15 MB)</option>
-                  <option value="pp-ocr-v6-small">PP-OCRv6 small (30 MB)</option>
-                </select>
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${(status?.ocr_enabled ?? false) === o.on ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_ocr", {
-                          enabled: o.on,
-                          model: status?.ocr_model ?? "pp-ocr-v4",
-                        });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {status?.ocr_enabled && (
-              <div className="set-row">
-                <div className="set-label">
-                  <span className="set-name">{t("Scanned PDFs")}</span>
-                  <span className="set-desc">
-                    {t(
-                      "Also read pages of PDFs that have no text layer. Large scans take a while, so this is your call.",
+                    {hotkeyMsg && (
+                      // hotkeyMsg holds internal sentinels ("saved") or raw errors;
+                      // translate known sentinels at render time only
+                      <p className={hotkeyMsg === "saved" ? "set-empty" : "error-line"}>
+                        {t(hotkeyMsg)}
+                      </p>
                     )}
-                  </span>
-                </div>
-                <div className="pill-row">
-                  {[
-                    { label: "off", on: false },
-                    { label: "on", on: true },
-                  ].map((o) => (
-                    <button
-                      key={o.label}
-                      className={`source ${(status?.ocr_pdf ?? false) === o.on ? "active" : ""}`}
-                      onClick={async () => {
-                        try {
-                          await invoke("set_ocr_pdf", { enabled: o.on });
-                          await refreshStatus();
-                        } catch (e) {
-                          setLastError(String(e));
-                        }
-                      }}
-                    >
-                      {t(o.label)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+                    {status?.hotkey !== "Alt+Space" && (
+                      <div className="set-links">
+                        <button
+                          className="link-btn"
+                          onClick={async () => {
+                            try {
+                              await invoke("set_hotkey", { hotkey: "Alt+Space" });
+                              setHotkeyDraft("");
+                              setHotkeyMsg("saved");
+                              refreshStatus();
+                            } catch (e) {
+                              setHotkeyMsg(String(e));
+                            }
+                          }}
+                        >
+                          {t("Reset to Alt+Space")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Decode limits")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "1", threads: 1 },
-                  { label: "2", threads: 2 },
-                  { label: "4", threads: 4 },
-                  { label: "auto", threads: 0 },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${status?.video_decode_threads === o.threads ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_video_decode", {
-                          threads: o.threads,
-                          hwaccel: status?.video_hwaccel ?? false,
-                        });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {o.threads === 0 ? t("auto threads") : o.label}
-                  </button>
-                ))}
-                <button
-                  className={`source ${status?.video_hwaccel ? "active" : ""}`}
-                  onClick={async () => {
-                    try {
-                      await invoke("set_video_decode", {
-                        threads: status?.video_decode_threads ?? 2,
-                        hwaccel: !(status?.video_hwaccel ?? false),
-                      });
-                      await refreshStatus();
-                    } catch (e) {
-                      setLastError(String(e));
-                    }
-                  }}
-                  title={t("Hardware decode (falls back to software on failure)")}
-                >
-                  {t("hw decode")}
-                </button>
-              </div>
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-head">
-                <div className="set-label">
-                  <span className="set-name">{t("Model download source")}</span>
-                  <span className="set-desc">
-                    {t("Pick the mirror if huggingface.co is unreachable from your network.")}
-                  </span>
-                </div>
-                <div className="pill-row">
-                  {HF_ENDPOINTS.map((e) => (
-                    <button
-                      key={e.url}
-                      className={`source ${status?.hf_endpoint === e.url ? "active" : ""}`}
-                      onClick={async () => {
-                        try {
-                          await invoke("set_hf_endpoint", { endpoint: e.url });
-                          await refreshStatus();
-                        } catch (er) {
-                          setLastError(String(er));
-                        }
-                      }}
-                    >
-                      {t(e.label)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="model-status">
-                <span>
-                  <span className={`status-dot ${status?.model === "ready" ? "ok" : ""}`} />
-                  {t("Semantic model")} —{" "}
-                  {status?.model === "ready"
-                    ? t("ready")
-                    : status?.model === "loading"
-                      ? t("downloading (~500 MB, first run)…")
-                      : (status?.model ?? "…")}
-                </span>
-                <span>
-                  <span className={`status-dot ${status?.image_model === "ready" ? "ok" : ""}`} />
-                  {t("Image model")} —{" "}
-                  {status?.image_model === "ready"
-                    ? t("ready")
-                    : status?.image_model === "loading"
-                      ? t("downloading (~200 MB, first run)…")
-                      : status?.image_model === "idle"
-                        ? t("not loaded; loads once an image, video or image clip is indexed")
-                        : (status?.image_model ?? "…")}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* APPEARANCE & BEHAVIOR */}
-          <p className="set-eyebrow">{t("Appearance & behavior")}</p>
-          <div className="set-group">
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Theme")}</span>
-              </div>
-              <div className="pill-row">
-                {THEMES.map((th) => (
-                  <button
-                    key={th}
-                    className={`source ${theme === th ? "active" : ""}`}
-                    onClick={() => setTheme(th)}
-                  >
-                    {t(th)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Language")}</span>
-                <span className="set-desc">
-                  {t("Palette and settings text; the tray menu follows.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                {(
-                  [
-                    { id: "auto", label: t("auto") },
-                    { id: "en", label: "English" },
-                    { id: "zh", label: "中文" },
-                  ] as { id: LangPref; label: string }[]
-                ).map((o) => (
-                  <button
-                    key={o.id}
-                    className={`source ${langPref === o.id ? "active" : ""}`}
-                    onClick={() => chooseLang(o.id)}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Launch at login")}</span>
-                <span className="set-desc">
-                  {t("Start magpie in the tray when you log in.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${autostart === o.on ? "active" : ""}`}
-                    disabled={autostart == null}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_autostart", { on: o.on });
-                        setAutostart(await invoke<boolean>("get_autostart"));
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Hide on click-out")}</span>
-                <span className="set-desc">
-                  {t(
-                    "The palette goes away when another window takes focus. Turn off to drag files in from other windows.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${hideOnBlur === o.on ? "active" : ""}`}
-                    onClick={() => {
-                      setHideOnBlur(o.on);
-                      try {
-                        localStorage.setItem("magpie.hideonblur", o.on ? "1" : "0");
-                      } catch {
-                        /* preference just won't persist */
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Jump to a tab")}</span>
-                <span className="set-desc">
-                  {t("A modifier plus the tab's number opens it directly, in the order the tabs are shown.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                {TAB_KEYS.map((o) => (
-                  <button
-                    key={o.id}
-                    className={`source ${tabKeys === o.id ? "active" : ""}`}
-                    onClick={() => {
-                      setTabKeys(o.id);
-                      try {
-                        localStorage.setItem("magpie.tabkeys", o.id);
-                      } catch {
-                        /* preference just won't persist */
-                      }
-                    }}
-                  >
-                    {o.id === "off" ? t("off") : o.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Pinyin app matching")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${pinyinOn === o.on ? "active" : ""}`}
-                    onClick={() => togglePinyin(o.on)}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Recent opens on the empty box")}</span>
-                <span className="set-desc">
-                  {t("With nothing typed, each tab lists what you opened from it most recently.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${recentsOn === o.on ? "active" : ""}`}
-                    onClick={() => {
-                      setRecentsOn(o.on);
-                      setRecentsEnabled(o.on);
-                      // the list behind the settings page was built under the
-                      // old setting; rebuild it now, or it lingers until the
-                      // next keystroke or tab switch
-                      void runSearch(queryRef.current, sourceRef.current);
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Launch tips")}</span>
-                <span className="set-desc">
-                  {t("A one-line tip below the empty search box, fresh on every summon.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${showTips === o.on ? "active" : ""}`}
-                    onClick={() => {
-                      setShowTips(o.on);
-                      try {
-                        localStorage.setItem(TIPS_KEY, o.on ? "1" : "0");
-                      } catch {
-                        /* preference just won't persist */
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("App aliases")}</span>
-                <span className="set-desc">
-                  {t(
-                    "One rule per line: alias = app name. The alias matches like a second name (pinyin included).",
-                  )}
-                </span>
-              </div>
-              <textarea
-                className="alias-input"
-                value={aliasDraft ?? status?.app_aliases ?? ""}
-                onChange={(e) => {
-                  setAliasDraft(e.target.value);
-                  setAliasMsg(null);
-                }}
-                onKeyDown={(e) => e.stopPropagation()}
-                placeholder={"proxy = clash\nbrowser = chrome"}
-                spellCheck={false}
-                rows={3}
-              />
-              <div className="set-links">
-                <button
-                  className="link-btn"
-                  onClick={() => saveAliases(aliasDraft ?? status?.app_aliases ?? "")}
-                  disabled={aliasDraft == null}
-                >
-                  {t("Save aliases")}
-                </button>
-                {aliasMsg && (
-                  <span className={aliasMsg === "saved" ? "set-empty" : "error-line"}>
-                    {t(aliasMsg)}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("Web shortcuts")}</span>
-                <span className="set-desc">
-                  {t(
-                    "One rule per line: prefix = URL with {q}. Type the prefix, a space, and your query — Enter opens the search.",
-                  )}
-                </span>
-              </div>
-              <textarea
-                className="alias-input"
-                value={bangsDraft ?? (localStorage.getItem(BANGS_KEY) ?? DEFAULT_BANGS)}
-                onChange={(e) => setBangsDraft(e.target.value)}
-                onKeyDown={(e) => e.stopPropagation()}
-                spellCheck={false}
-                rows={4}
-              />
-              <div className="set-links">
-                <button
-                  className="link-btn"
-                  onClick={() => {
-                    try {
-                      localStorage.setItem(BANGS_KEY, bangsDraft ?? DEFAULT_BANGS);
-                    } catch {
-                      /* storage unavailable: rules just don't persist */
-                    }
-                    setBangsDraft(null);
-                  }}
-                  disabled={bangsDraft == null}
-                >
-                  {t("Save shortcuts")}
-                </button>
-              </div>
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("Summon shortcut")}</span>
-                <span className="set-desc">
-                  {t("Currently")} <kbd>{status?.hotkey ?? "Alt+Space"}</kbd>.{" "}
-                  {t(
-                    "Click and press a new combination; Backspace clears. OS-reserved chords (like ⌘Space) can't be captured.",
-                  )}
-                </span>
-              </div>
-              <div className="token-row">
-                <input
-                  className="token-input"
-                  value={hotkeyDraft}
-                  onChange={() => {}}
-                  onKeyDown={captureHotkey}
-                  placeholder={t("press keys…")}
-                  spellCheck={false}
-                />
-                {hotkeyDraft && (
-                  <button
-                    className="icon-btn"
-                    onClick={() => {
-                      setHotkeyDraft("");
-                      setHotkeyMsg(null);
-                    }}
-                    title={t("Clear")}
-                    aria-label="Clear recorded shortcut"
-                  >
-                    ✕
-                  </button>
-                )}
-                <button className="primary-btn" onClick={applyHotkey} disabled={!hotkeyDraft}>
-                  {t("Apply")}
-                </button>
-              </div>
-              {hotkeyMsg && (
-                // hotkeyMsg holds internal sentinels ("saved") or raw errors;
-                // translate known sentinels at render time only
-                <p className={hotkeyMsg === "saved" ? "set-empty" : "error-line"}>
-                  {t(hotkeyMsg)}
-                </p>
-              )}
-              {status?.hotkey !== "Alt+Space" && (
-                <div className="set-links">
-                  <button
-                    className="link-btn"
-                    onClick={async () => {
-                      try {
-                        await invoke("set_hotkey", { hotkey: "Alt+Space" });
-                        setHotkeyDraft("");
-                        setHotkeyMsg("saved");
-                        refreshStatus();
-                      } catch (e) {
-                        setHotkeyMsg(String(e));
-                      }
-                    }}
-                  >
-                    {t("Reset to Alt+Space")}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("Search selection shortcut")}</span>
-                <span className="set-desc">
-                  {status?.hotkey_selection ? (
-                    <>
-                      {t("Currently")} <kbd>{status.hotkey_selection}</kbd>.{" "}
-                    </>
-                  ) : (
-                    <>{t("Removed.")} </>
-                  )}
-                  {t(
-                    "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.",
-                  )}
-                </span>
-              </div>
-              <div className="token-row">
-                <input
-                  className="token-input"
-                  value={selDraft}
-                  onChange={() => {}}
-                  onKeyDown={captureSelectionHotkey}
-                  placeholder={t("press keys…")}
-                  spellCheck={false}
-                />
-                <button
-                  className="primary-btn"
-                  onClick={() => void applySelectionHotkey(selDraft)}
-                  disabled={!selDraft}
-                >
-                  {t("Apply")}
-                </button>
-                {status?.hotkey_selection && (
-                  <button className="ghost-btn" onClick={() => void applySelectionHotkey("")}>
-                    {t("Remove")}
-                  </button>
-                )}
-              </div>
-              {selMsg && (
-                <p className={selMsg === "saved" ? "set-empty" : "error-line"}>{t(selMsg)}</p>
-              )}
-              {status && status.hotkey_selection !== status.hotkey_selection_default && (
-                <div className="set-links">
-                  <button
-                    className="link-btn"
-                    onClick={() => void applySelectionHotkey(status.hotkey_selection_default)}
-                  >
-                    {tf("Reset to {k}", { k: status.hotkey_selection_default })}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("Notes file")}</span>
-                <span className="set-desc">
-                  {t("note buy milk appends one timestamped line to this file.")}{" "}
-                  {t("Currently")} <code>{status?.note_path ?? "notes.md"}</code>
-                </span>
-              </div>
-              <div className="token-row">
-                <input
-                  className="token-input"
-                  value={notePathDraft}
-                  onChange={(e) => setNotePathDraft(e.target.value)}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  placeholder={t("full path, or empty for the default")}
-                  spellCheck={false}
-                />
-                <button className="primary-btn" onClick={() => void applyNotePath()}>
-                  {t("Save")}
-                </button>
-                <button
-                  className="ghost-btn"
-                  onClick={() => invoke("open_note_file").catch((e) => setNoteMsg(String(e)))}
-                >
-                  {t("Open")}
-                </button>
-              </div>
-              {noteMsg && (
-                <p className={noteMsg === "saved" ? "set-empty" : "error-line"}>{t(noteMsg)}</p>
-              )}
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("MCP server for AI assistants")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Lets Claude Code, Cursor and other MCP clients search this index and read indexed text. Loopback only, behind a token, read-only, off by default.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", on: false },
-                  { label: "on", on: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${(status?.mcp_enabled ?? false) === o.on ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        setMcpMsg(null);
-                        await invoke("set_mcp", { enabled: o.on });
-                        // the listener binds in the background; ask twice
-                        await refreshStatus();
-                        setTimeout(() => void refreshStatus(), 600);
-                      } catch (e) {
-                        setMcpMsg(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-                {status?.mcp_enabled && (
-                  <>
-                    <button
-                      className="ghost-btn"
-                      disabled={!status.mcp_command}
-                      onClick={() => void copyMcpCommand()}
-                    >
-                      {t("Copy Claude Code command")}
-                    </button>
-                    <button className="ghost-btn" onClick={() => void rotateMcpToken()}>
-                      {t("New token")}
-                    </button>
-                  </>
-                )}
-              </div>
-              {status?.mcp_enabled && (
-                <p className={status.mcp_status.startsWith("failed") ? "error-line" : "set-empty"}>
-                  {status.mcp_status.startsWith("failed") ? (
-                    t(status.mcp_status)
-                  ) : status.mcp_url ? (
-                    <>
-                      {t("Listening at")} <code>{status.mcp_url}</code>
-                    </>
-                  ) : (
-                    t("starting")
-                  )}
-                </p>
-              )}
-              {status?.mcp_enabled && status.mcp_command && (
-                <p className="set-desc">
-                  {t("Other clients take the same URL with the header from this command:")}
-                  <br />
-                  <code className="mono-wrap">{status.mcp_command}</code>
-                </p>
-              )}
-              {mcpMsg && (
-                <p className={mcpMsg === "copied" ? "set-empty" : "error-line"}>{t(mcpMsg)}</p>
-              )}
-            </div>
-
-            <div className="set-row stack">
-              <div className="set-label">
-                <span className="set-name">{t("Tabs")}</span>
-                <span className="set-desc">
-                  {t(
-                    "Tick which sources appear as tabs (at least one stays on). Drag the handle (or use the arrows) to reorder; ★ marks the tab that opens on launch.",
-                  )}
-                </span>
-              </div>
-              <div className="tab-order">
-                {orderedSources(sourceOrder).map((s, i, all) => {
-                  const hidden = hiddenTabs.includes(s.id);
-                  const lastVisible = !hidden && all.filter((x) => !hiddenTabs.includes(x.id)).length <= 1;
-                  return (
-                    <div
-                      key={s.id}
-                      className={`tab-row ${dragTab === s.id ? "dragging" : ""} ${hidden ? "hidden-tab" : ""}`}
-                      onPointerEnter={() => {
-                        // live reorder: while a drag is held, entering another
-                        // row moves the dragged tab into that slot
-                        if (dragTab && dragTab !== s.id) commitDrag(dragTab, s.id);
-                      }}
-                    >
-                      <span
-                        className="drag-handle"
-                        aria-hidden="true"
-                        onPointerDown={(e) => {
-                          e.preventDefault();
-                          setDragTab(s.id);
-                        }}
-                      >
-                        ⠿
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("Search selection shortcut")}</span>
+                      <span className="set-desc">
+                        {status?.hotkey_selection ? (
+                          <>
+                            {t("Currently")} <kbd>{status.hotkey_selection}</kbd>.{" "}
+                          </>
+                        ) : (
+                          <>{t("Removed.")} </>
+                        )}
+                        {t(
+                          "Press it in any app to look up the selected text: magpie copies the selection and opens with it as the query.",
+                        )}
                       </span>
+                    </div>
+                    <div className="token-row">
                       <input
-                        type="checkbox"
-                        className="tab-check"
-                        checked={!hidden}
-                        disabled={lastVisible}
-                        onChange={() => toggleTabVisible(s.id)}
-                        title={
-                          lastVisible
-                            ? t("At least one tab must stay visible")
-                            : hidden
-                              ? tf("Show {s}", { s: t(s.label) })
-                              : tf("Hide {s}", { s: t(s.label) })
-                        }
-                        aria-label={`Show ${s.label} as a tab`}
+                        className="token-input"
+                        value={selDraft}
+                        onChange={() => {}}
+                        onKeyDown={captureSelectionHotkey}
+                        placeholder={t("press keys…")}
+                        spellCheck={false}
                       />
                       <button
-                        className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
-                        onClick={() => chooseDefaultTab(s.id)}
-                        disabled={hidden}
-                        title={
-                          defaultTab === s.id
-                            ? t("Opens on launch")
-                            : t("Make this the launch tab")
-                        }
-                        aria-label={`Make ${s.label} the default tab`}
+                        className="primary-btn"
+                        onClick={() => void applySelectionHotkey(selDraft)}
+                        disabled={!selDraft}
                       >
-                        {defaultTab === s.id ? "★" : "☆"}
+                        {t("Apply")}
                       </button>
-                      <span className="tab-name">{t(s.label)}</span>
+                      {status?.hotkey_selection && (
+                        <button className="ghost-btn" onClick={() => void applySelectionHotkey("")}>
+                          {t("Remove")}
+                        </button>
+                      )}
+                    </div>
+                    {selMsg && (
+                      <p className={selMsg === "saved" ? "set-empty" : "error-line"}>{t(selMsg)}</p>
+                    )}
+                    {status && status.hotkey_selection !== status.hotkey_selection_default && (
+                      <div className="set-links">
+                        <button
+                          className="link-btn"
+                          onClick={() => void applySelectionHotkey(status.hotkey_selection_default)}
+                        >
+                          {tf("Reset to {k}", { k: status.hotkey_selection_default })}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Jump to a tab")}</span>
+                      <span className="set-desc">
+                        {t("A modifier plus the tab's number opens it directly, in the order the tabs are shown.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {TAB_KEYS.map((o) => (
+                        <button
+                          key={o.id}
+                          className={`source ${tabKeys === o.id ? "active" : ""}`}
+                          onClick={() => {
+                            setTabKeys(o.id);
+                            try {
+                              localStorage.setItem("magpie.tabkeys", o.id);
+                            } catch {
+                              /* preference just won't persist */
+                            }
+                          }}
+                        >
+                          {o.id === "off" ? t("off") : o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("Tabs")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Tick which sources appear as tabs (at least one stays on). Drag the handle (or use the arrows) to reorder; ★ marks the tab that opens on launch.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="tab-order">
+                      {orderedSources(sourceOrder).map((s, i, all) => {
+                        const hidden = hiddenTabs.includes(s.id);
+                        const lastVisible = !hidden && all.filter((x) => !hiddenTabs.includes(x.id)).length <= 1;
+                        return (
+                          <div
+                            key={s.id}
+                            className={`tab-row ${dragTab === s.id ? "dragging" : ""} ${hidden ? "hidden-tab" : ""}`}
+                            onPointerEnter={() => {
+                              // live reorder: while a drag is held, entering another
+                              // row moves the dragged tab into that slot
+                              if (dragTab && dragTab !== s.id) commitDrag(dragTab, s.id);
+                            }}
+                          >
+                            <span
+                              className="drag-handle"
+                              aria-hidden="true"
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                setDragTab(s.id);
+                              }}
+                            >
+                              ⠿
+                            </span>
+                            <input
+                              type="checkbox"
+                              className="tab-check"
+                              checked={!hidden}
+                              disabled={lastVisible}
+                              onChange={() => toggleTabVisible(s.id)}
+                              title={
+                                lastVisible
+                                  ? t("At least one tab must stay visible")
+                                  : hidden
+                                    ? tf("Show {s}", { s: t(s.label) })
+                                    : tf("Hide {s}", { s: t(s.label) })
+                              }
+                              aria-label={`Show ${s.label} as a tab`}
+                            />
+                            <button
+                              className={`star-btn ${defaultTab === s.id ? "on" : ""}`}
+                              onClick={() => chooseDefaultTab(s.id)}
+                              disabled={hidden}
+                              title={
+                                defaultTab === s.id
+                                  ? t("Opens on launch")
+                                  : t("Make this the launch tab")
+                              }
+                              aria-label={`Make ${s.label} the default tab`}
+                            >
+                              {defaultTab === s.id ? "★" : "☆"}
+                            </button>
+                            <span className="tab-name">{t(s.label)}</span>
+                            <button
+                              className="tab-move"
+                              onClick={() => moveTab(s.id, -1)}
+                              disabled={i === 0}
+                              aria-label={`Move ${s.label} up`}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className="tab-move"
+                              onClick={() => moveTab(s.id, 1)}
+                              disabled={i === all.length - 1}
+                              aria-label={`Move ${s.label} down`}
+                            >
+                              ↓
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="set-eyebrow">{t("Quick actions")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("Web shortcuts")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "One rule per line: prefix = URL with {q}. Type the prefix, a space, and your query — Enter opens the search.",
+                        )}
+                      </span>
+                    </div>
+                    <textarea
+                      className="alias-input"
+                      value={bangsDraft ?? (localStorage.getItem(BANGS_KEY) ?? DEFAULT_BANGS)}
+                      onChange={(e) => setBangsDraft(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      spellCheck={false}
+                      rows={4}
+                    />
+                    <div className="set-links">
                       <button
-                        className="tab-move"
-                        onClick={() => moveTab(s.id, -1)}
-                        disabled={i === 0}
-                        aria-label={`Move ${s.label} up`}
+                        className="link-btn"
+                        onClick={() => {
+                          try {
+                            localStorage.setItem(BANGS_KEY, bangsDraft ?? DEFAULT_BANGS);
+                          } catch {
+                            /* storage unavailable: rules just don't persist */
+                          }
+                          setBangsDraft(null);
+                        }}
+                        disabled={bangsDraft == null}
                       >
-                        ↑
-                      </button>
-                      <button
-                        className="tab-move"
-                        onClick={() => moveTab(s.id, 1)}
-                        disabled={i === all.length - 1}
-                        aria-label={`Move ${s.label} down`}
-                      >
-                        ↓
+                        {t("Save shortcuts")}
                       </button>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* PRIVACY */}
-          <p className="set-eyebrow">{t("Privacy")}</p>
-          <div className="set-group">
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">
-                  {t("Clipboard history")}
-                  {status?.clipboard_enabled && (
-                    <span className="count-pill">{status.clip_count}</span>
-                  )}
-                </span>
-                <span className="set-desc">
-                  {t(
-                    "Recorded locally, searchable in the Clipboard tab. Password-manager secrets are never stored.",
-                  )}
-                </span>
-              </div>
-              <div className="pill-row">
-                {[
-                  { label: "off", enabled: false },
-                  { label: "on", enabled: true },
-                ].map((o) => (
-                  <button
-                    key={o.label}
-                    className={`source ${status?.clipboard_enabled === o.enabled ? "active" : ""}`}
-                    onClick={async () => {
-                      try {
-                        await invoke("set_clipboard_enabled", { enabled: o.enabled });
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t(o.label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {status?.clipboard_enabled && (
-              <>
-                <div className="set-row">
-                  <div className="set-label">
-                    <span className="set-name">{t("Keep at most")}</span>
                   </div>
-                  <div className="pill-row">
-                    {[
-                      { label: "500", entries: 500 },
-                      { label: "2000", entries: 2000 },
-                      { label: "unlimited", entries: 0 },
-                    ].map((o) => (
-                      <button
-                        key={`n${o.entries}`}
-                        className={`source ${status?.clip_max_entries === o.entries ? "active" : ""}`}
-                        onClick={async () => {
-                          try {
-                            await invoke("set_clip_max_entries", { entries: o.entries });
-                            await refreshStatus();
-                          } catch (e) {
-                            setLastError(String(e));
-                          }
-                        }}
-                      >
-                        {t(o.label)}
+
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("Notes file")}</span>
+                      <span className="set-desc">
+                        {t("note buy milk appends one timestamped line to this file.")}{" "}
+                        {t("Currently")} <code>{status?.note_path ?? "notes.md"}</code>
+                      </span>
+                    </div>
+                    <div className="token-row">
+                      <input
+                        className="token-input"
+                        value={notePathDraft}
+                        onChange={(e) => setNotePathDraft(e.target.value)}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        placeholder={t("full path, or empty for the default")}
+                        spellCheck={false}
+                      />
+                      <button className="primary-btn" onClick={() => void applyNotePath()}>
+                        {t("Save")}
                       </button>
-                    ))}
+                      <button
+                        className="ghost-btn"
+                        onClick={() => invoke("open_note_file").catch((e) => setNoteMsg(String(e)))}
+                      >
+                        {t("Open")}
+                      </button>
+                    </div>
+                    {noteMsg && (
+                      <p className={noteMsg === "saved" ? "set-empty" : "error-line"}>{t(noteMsg)}</p>
+                    )}
                   </div>
                 </div>
-                <div className="set-row">
-                  <div className="set-label">
-                    <span className="set-name">{t("Keep for")}</span>
+
+                <p className="set-eyebrow">{t("Models & integrations")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">{t("Model download source")}</span>
+                        <span className="set-desc">
+                          {t("Pick the mirror if huggingface.co is unreachable from your network.")}
+                        </span>
+                      </div>
+                      <div className="pill-row">
+                        {HF_ENDPOINTS.map((e) => (
+                          <button
+                            key={e.url}
+                            className={`source ${status?.hf_endpoint === e.url ? "active" : ""}`}
+                            onClick={async () => {
+                              try {
+                                await invoke("set_hf_endpoint", { endpoint: e.url });
+                                await refreshStatus();
+                              } catch (er) {
+                                setLastError(String(er));
+                              }
+                            }}
+                          >
+                            {t(e.label)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="model-status">
+                      <span>
+                        <span className={`status-dot ${status?.model === "ready" ? "ok" : ""}`} />
+                        {t("Semantic model")} —{" "}
+                        {status?.model === "ready"
+                          ? t("ready")
+                          : status?.model === "loading"
+                            ? t("downloading (~500 MB, first run)…")
+                            : (status?.model ?? "…")}
+                      </span>
+                      <span>
+                        <span className={`status-dot ${status?.image_model === "ready" ? "ok" : ""}`} />
+                        {t("Image model")} —{" "}
+                        {status?.image_model === "ready"
+                          ? t("ready")
+                          : status?.image_model === "loading"
+                            ? t("downloading (~200 MB, first run)…")
+                            : status?.image_model === "idle"
+                              ? t("not loaded; loads once an image, video or image clip is indexed")
+                              : (status?.image_model ?? "…")}
+                      </span>
+                    </div>
                   </div>
-                  <div className="pill-row">
-                    {[
-                      { label: "7 days", days: 7 },
-                      { label: "30 days", days: 30 },
-                      { label: "forever", days: 0 },
-                    ].map((o) => (
-                      <button
-                        key={o.days}
-                        className={`source ${status?.clip_retention_days === o.days ? "active" : ""}`}
-                        onClick={async () => {
-                          try {
-                            await invoke("set_clip_retention", { days: o.days });
-                            await refreshStatus();
-                          } catch (e) {
-                            setLastError(String(e));
-                          }
-                        }}
-                      >
-                        {t(o.label)}
-                      </button>
-                    ))}
+
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("MCP server for AI assistants")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Lets Claude Code, Cursor and other MCP clients search this index and read indexed text. Loopback only, behind a token, read-only, off by default.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${(status?.mcp_enabled ?? false) === o.on ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              setMcpMsg(null);
+                              await invoke("set_mcp", { enabled: o.on });
+                              // the listener binds in the background; ask twice
+                              await refreshStatus();
+                              setTimeout(() => void refreshStatus(), 600);
+                            } catch (e) {
+                              setMcpMsg(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                      {status?.mcp_enabled && (
+                        <>
+                          <button
+                            className="ghost-btn"
+                            disabled={!status.mcp_command}
+                            onClick={() => void copyMcpCommand()}
+                          >
+                            {t("Copy Claude Code command")}
+                          </button>
+                          <button className="ghost-btn" onClick={() => void rotateMcpToken()}>
+                            {t("New token")}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    {status?.mcp_enabled && (
+                      <p className={status.mcp_status.startsWith("failed") ? "error-line" : "set-empty"}>
+                        {status.mcp_status.startsWith("failed") ? (
+                          t(status.mcp_status)
+                        ) : status.mcp_url ? (
+                          <>
+                            {t("Listening at")} <code>{status.mcp_url}</code>
+                          </>
+                        ) : (
+                          t("starting")
+                        )}
+                      </p>
+                    )}
+                    {status?.mcp_enabled && status.mcp_command && (
+                      <p className="set-desc">
+                        {t("Other clients take the same URL with the header from this command:")}
+                        <br />
+                        <code className="mono-wrap">{status.mcp_command}</code>
+                      </p>
+                    )}
+                    {mcpMsg && (
+                      <p className={mcpMsg === "copied" ? "set-empty" : "error-line"}>{t(mcpMsg)}</p>
+                    )}
                   </div>
-                </div>
-                <div className="set-row">
-                  <div className="set-label">
-                    <span className="set-name">{t("Clear history")}</span>
-                    <span className="set-desc">
-                      {t("Delete every recorded clip permanently.")}
-                    </span>
-                  </div>
-                  <button
-                    className="danger-btn"
-                    onClick={async () => {
-                      try {
-                        await invoke("clear_clips_now");
-                        await refreshStatus();
-                      } catch (e) {
-                        setLastError(String(e));
-                      }
-                    }}
-                  >
-                    {t("Clear")}
-                  </button>
                 </div>
               </>
             )}
-          </div>
 
-          {/* SYSTEM */}
-          <p className="set-eyebrow">{t("System")}</p>
-          <div className="set-group">
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Updates")}</span>
-                <span className="set-desc">
-                  {updPhase === "available" || updPhase === "downloading"
-                    ? tf("Version {v} is available.", { v: updVersion ?? "" })
-                    : updPhase === "none"
-                      ? t("You are on the latest version.")
-                      : t("Installed in place; your index and settings are kept.")}
-                </span>
-              </div>
-              {updPhase === "available" ? (
-                <button className="primary-btn" onClick={doInstallUpdate}>
-                  {t("Update & restart")}
-                </button>
-              ) : updPhase === "downloading" ? (
-                <button className="primary-btn" disabled>
-                  {updPct}%
-                </button>
-              ) : (
-                <button
-                  className="ghost-btn"
-                  onClick={() => doCheckUpdate(false)}
-                  disabled={updPhase === "checking"}
-                >
-                  {updPhase === "checking" ? t("Checking…") : t("Check now")}
-                </button>
-              )}
-            </div>
-            {updError && <p className="error-line">{updError}</p>}
+            {settingsTab === "local" && (
+              <>
+                <p className="set-eyebrow">{t("Folders")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">
+                          {t("Indexed folders")}
+                          {status != null && status.folder_count > 0 && (
+                            <span className="count-pill">{status.folder_count}</span>
+                          )}
+                        </span>
+                        <span className="set-desc">
+                          {t("Scanned recursively; hidden and gitignored paths are skipped.")}
+                        </span>
+                      </div>
+                      <button className="primary-btn" onClick={addFolder}>
+                        {t("Add folder")}
+                      </button>
+                    </div>
+                    {folders.length === 0 &&
+                      // "failed to load" only when the load actually failed. It used
+                      // to be inferred from status.folder_count, which lags behind
+                      // the list after the last folder is removed and showed this
+                      // as an error every time.
+                      (foldersFailed ? (
+                        <p className="error-line">
+                          {t("The folder list failed to load — please report this with the error below.")}
+                        </p>
+                      ) : (
+                        <p className="set-empty">{t("No folders yet.")}</p>
+                      ))}
+                    {folders.length > 0 && (
+                      <div className="folder-list">
+                        {folders.map((f) => (
+                          <div key={f.id} className="folder-row">
+                            <span className="folder-path" title={f.path}>
+                              {f.path}
+                            </span>
+                            <span className="folder-count">{f.file_count}</span>
+                            <button
+                              className="folder-remove"
+                              onClick={() => rebuildFolder(f.id)}
+                              title={t("Rebuild this folder's index from scratch")}
+                              aria-label={`Rebuild index for ${f.path}`}
+                            >
+                              ↻
+                            </button>
+                            <button
+                              className="folder-remove"
+                              onClick={() => removeFolder(f.id)}
+                              title={t("Remove from index")}
+                              aria-label={`Remove ${f.path}`}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Logs")}</span>
-                <span className="set-desc">
-                  {t("Local activity log (errors, model/ffmpeg status) — attach it to a bug report. Queries are never logged.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                <button
-                  className="ghost-btn"
-                  onClick={() => invoke("open_log_dir").catch((e) => setLastError(String(e)))}
-                >
-                  {t("Open log folder")}
-                </button>
-              </div>
-            </div>
-            <div className="set-row">
-              <div className="set-label">
-                <span className="set-name">{t("Settings file")}</span>
-                <span className="set-desc">
-                  {t("Everything except the GitHub token — move your setup to another machine.")}
-                </span>
-              </div>
-              <div className="pill-row">
-                <button
-                  className="ghost-btn"
-                  onClick={async () => {
-                    try {
-                      const path = await holdOpen(() =>
-                        saveDialog({
-                          defaultPath: "magpie-settings.json",
-                          filters: [{ name: "JSON", extensions: ["json"] }],
-                        }),
-                      );
-                      if (!path) return;
-                      const frontend: Record<string, string> = {};
-                      for (const k of LOCAL_KEYS) {
-                        const v = localStorage.getItem(k);
-                        if (v != null) frontend[k] = v;
-                      }
-                      await invoke("export_settings", { path, frontend });
-                      setLastError(null);
-                    } catch (e) {
-                      setLastError(String(e));
-                    }
-                  }}
-                >
-                  {t("Export")}
-                </button>
-                <button
-                  className="ghost-btn"
-                  onClick={async () => {
-                    try {
-                      const path = await holdOpen(() =>
-                        openDialog({
-                          multiple: false,
-                          filters: [{ name: "JSON", extensions: ["json"] }],
-                        }),
-                      );
-                      if (typeof path !== "string") return;
-                      const frontend = await invoke<Record<string, string>>("import_settings", {
-                        path,
-                      });
-                      for (const k of LOCAL_KEYS) {
-                        if (typeof frontend[k] === "string") localStorage.setItem(k, frontend[k]);
-                      }
-                      window.location.reload(); // re-read every store in one clean pass
-                    } catch (e) {
-                      setLastError(String(e));
-                    }
-                  }}
-                >
-                  {t("Import")}
-                </button>
-              </div>
-            </div>
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("File changes")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Changes inside indexed folders reach the index within seconds, without waiting for the next full walk.",
+                        )}
+                        {status?.watch_enabled && status.watch_status === "watching" && (
+                          <>
+                            {" "}
+                            {t("Watching")} {status.watched_folders} {t("folders")}
+                          </>
+                        )}
+                        {status?.watch_enabled && status.watch_status.startsWith("failed") && (
+                          <>
+                            {" "}
+                            <span className="error-line">{status.watch_status}</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${(status?.watch_enabled ?? true) === o.on ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_watch", { enabled: o.on });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Full rescan")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Every so often all folders are walked again, so anything the watcher missed still lands. Off leaves it to the watcher and to startup.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[5, 15, 30, 60]
+                        .map((n) => ({ label: `${n} ${t("min")}`, minutes: n }))
+                        .concat([{ label: t("off"), minutes: 0 }])
+                        .map((o) => (
+                          <button
+                            key={o.minutes}
+                            className={`source ${(status?.rescan_minutes ?? 30) === o.minutes ? "active" : ""}`}
+                            onClick={async () => {
+                              try {
+                                await invoke("set_rescan_minutes", { minutes: o.minutes });
+                                await refreshStatus();
+                              } catch (e) {
+                                setLastError(String(e));
+                              }
+                            }}
+                          >
+                            {o.label}
+                          </button>
+                        ))}
+                      <button
+                        className="ghost-btn"
+                        disabled={status?.local_indexing ?? false}
+                        onClick={async () => {
+                          try {
+                            await invoke("index_local");
+                            await refreshStatus();
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                      >
+                        {status?.local_indexing ? t("rescanning") : t("Rescan now")}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Max file size")}</span>
+                      <span className="set-desc">
+                        {t("Larger files index by name only. Changing rebuilds.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {FILE_CAPS.map((c) => (
+                        <button
+                          key={c.mb}
+                          className={`source ${status?.max_file_mb === c.mb ? "active" : ""}`}
+                          onClick={() => applyFileCap(c.mb)}
+                        >
+                          {t(c.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Skip git worktrees")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "A linked worktree is a second copy of a checkout that is usually indexed already. Skipped when its main checkout is inside an indexed folder; a worktree that is the only copy is still indexed.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${(status?.skip_worktrees ?? true) === o.on ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_skip_worktrees", { enabled: o.on });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Indexing threads")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "CPU threads each model (text, image, OCR) may use while indexing. Fewer keeps the machine responsive; all cores finishes a first index sooner. Applies right away.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[1, 2, 4, 8]
+                        .filter((n) => n <= (status?.cpu_cores ?? 8))
+                        .map((n) => ({ label: String(n), threads: n }))
+                        .concat([{ label: "all", threads: 0 }])
+                        .map((o) => (
+                          <button
+                            key={o.label}
+                            className={`source ${(status?.index_threads ?? 4) === o.threads ? "active" : ""}`}
+                            onClick={async () => {
+                              try {
+                                await invoke("set_index_threads", { threads: o.threads });
+                                await refreshStatus();
+                              } catch (e) {
+                                setLastError(String(e));
+                              }
+                            }}
+                          >
+                            {o.threads === 0 ? `${t("all cores")} (${status?.cpu_cores ?? "?"})` : o.label}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="set-eyebrow">{t("Images, videos & PDFs")}</p>
+                <div className="set-group">
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Image text (OCR)")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Reads the text inside indexed images and video frames (screenshots, scans, subtitles) so you can search it — video hits jump to the moment the text appears. Off by default; enabling downloads a small model (~15 MB).",
+                        )}
+                        {status?.ocr_enabled && status.ocr_status ? (
+                          <>
+                            {" · "}
+                            {status.ocr_status === "ready" ? t("ready") : status.ocr_status}
+                          </>
+                        ) : null}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      <select
+                        className="set-select"
+                        value={status?.ocr_model ?? "pp-ocr-v4"}
+                        onChange={async (e) => {
+                          try {
+                            // ids/labels mirror core::ocr::OCR_MODELS
+                            await invoke("set_ocr", {
+                              enabled: status?.ocr_enabled ?? false,
+                              model: e.target.value,
+                            });
+                            await refreshStatus();
+                          } catch (err) {
+                            setLastError(String(err));
+                          }
+                        }}
+                        aria-label={t("OCR model")}
+                      >
+                        <option value="pp-ocr-v4">PP-OCRv4 (15 MB)</option>
+                        <option value="pp-ocr-v6-small">PP-OCRv6 small (30 MB)</option>
+                      </select>
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${(status?.ocr_enabled ?? false) === o.on ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_ocr", {
+                                enabled: o.on,
+                                model: status?.ocr_model ?? "pp-ocr-v4",
+                              });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {status?.ocr_enabled && (
+                    <div className="set-row">
+                      <div className="set-label">
+                        <span className="set-name">{t("Scanned PDFs")}</span>
+                        <span className="set-desc">
+                          {t(
+                            "Also read pages of PDFs that have no text layer. Large scans take a while, so this is your call.",
+                          )}
+                        </span>
+                      </div>
+                      <div className="pill-row">
+                        {[
+                          { label: "off", on: false },
+                          { label: "on", on: true },
+                        ].map((o) => (
+                          <button
+                            key={o.label}
+                            className={`source ${(status?.ocr_pdf ?? false) === o.on ? "active" : ""}`}
+                            onClick={async () => {
+                              try {
+                                await invoke("set_ocr_pdf", { enabled: o.on });
+                                await refreshStatus();
+                              } catch (e) {
+                                setLastError(String(e));
+                              }
+                            }}
+                          >
+                            {t(o.label)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">
+                        {t("Video shot search")}
+                        {status != null && status.video_shot_count > 0 && (
+                          <span className="count-pill">{status.video_shot_count}</span>
+                        )}
+                      </span>
+                      <span className="set-desc">
+                        {status?.video_note
+                          ? status.video_note
+                          : t(
+                              "Videos in your folders are split into shots; each shot is searchable by image or description. Needs ffmpeg (auto-downloaded if missing).",
+                            )}
+                        {status?.ffmpeg_status ? (
+                          <>
+                            {" · ffmpeg: "}
+                            {status.ffmpeg_status === "system"
+                              ? t("system install")
+                              : status.ffmpeg_status === "bundled"
+                                ? t("downloaded")
+                                : status.ffmpeg_status}
+                          </>
+                        ) : null}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${status?.video_indexing_enabled === o.on ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_video_indexing", { enabled: o.on });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Decode limits")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Caps ffmpeg while indexing videos, so it never owns the machine. Hardware decode falls back to software if the driver fails.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "1", threads: 1 },
+                        { label: "2", threads: 2 },
+                        { label: "4", threads: 4 },
+                        { label: "auto", threads: 0 },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${status?.video_decode_threads === o.threads ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_video_decode", {
+                                threads: o.threads,
+                                hwaccel: status?.video_hwaccel ?? false,
+                              });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {o.threads === 0 ? t("auto threads") : o.label}
+                        </button>
+                      ))}
+                      <button
+                        className={`source ${status?.video_hwaccel ? "active" : ""}`}
+                        onClick={async () => {
+                          try {
+                            await invoke("set_video_decode", {
+                              threads: status?.video_decode_threads ?? 2,
+                              hwaccel: !(status?.video_hwaccel ?? false),
+                            });
+                            await refreshStatus();
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                        title={t("Hardware decode (falls back to software on failure)")}
+                      >
+                        {t("hw decode")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="set-eyebrow">{t("Apps")}</p>
+                <div className="set-group">
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Pinyin app matching")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${pinyinOn === o.on ? "active" : ""}`}
+                          onClick={() => togglePinyin(o.on)}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row stack">
+                    <div className="set-label">
+                      <span className="set-name">{t("App aliases")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "One rule per line: alias = app name. The alias matches like a second name (pinyin included).",
+                        )}
+                      </span>
+                    </div>
+                    <textarea
+                      className="alias-input"
+                      value={aliasDraft ?? status?.app_aliases ?? ""}
+                      onChange={(e) => {
+                        setAliasDraft(e.target.value);
+                        setAliasMsg(null);
+                      }}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder={"proxy = clash\nbrowser = chrome"}
+                      spellCheck={false}
+                      rows={3}
+                    />
+                    <div className="set-links">
+                      <button
+                        className="link-btn"
+                        onClick={() => saveAliases(aliasDraft ?? status?.app_aliases ?? "")}
+                        disabled={aliasDraft == null}
+                      >
+                        {t("Save aliases")}
+                      </button>
+                      {aliasMsg && (
+                        <span className={aliasMsg === "saved" ? "set-empty" : "error-line"}>
+                          {t(aliasMsg)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {settingsTab === "web" && (
+              <>
+                <p className="set-eyebrow">{t("Browsers")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">{t("Browsers found")}</span>
+                        <span className="set-desc">
+                          {t(
+                            "Bookmarks and history are read from every Chromium- and Firefox-based browser on this computer, all profiles. Safari isn't read yet.",
+                          )}
+                        </span>
+                      </div>
+                      <button
+                        className="ghost-btn"
+                        onClick={() => void invoke("sync_bookmarks_now").catch((e) => setLastError(String(e)))}
+                      >
+                        {t("Sync now")}
+                      </button>
+                    </div>
+                    {webSources !== null &&
+                      (webSources.length === 0 ? (
+                        <p className="set-desc">{t("No browser data found yet.")}</p>
+                      ) : (
+                        <div className="browser-list">
+                          {webSources.map((b) => (
+                            <div key={b.browser} className="browser-line">
+                              <BrowserIcons names={[b.browser]} />
+                              <span className="browser-name">{b.browser}</span>
+                              <span className="set-desc">
+                                {tf("{a} bookmarks · {b} history", { a: b.bookmarks, b: b.history })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {settingsTab === "stars" && (
+              <>
+                <p className="set-eyebrow">{t("Connection")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">GitHub</span>
+                        <span className="set-desc">
+                          {status?.has_token
+                            ? t("Paste a new token to replace the current one.")
+                            : t(
+                                "A personal access token, no scopes needed — it only reads your public stars.",
+                              )}
+                        </span>
+                      </div>
+                      {status?.has_token && status.username ? (
+                        <span className="conn-badge ok">
+                          <span className="conn-dot" aria-hidden="true" /> {status.username}
+                        </span>
+                      ) : (
+                        <span className="conn-badge">{t("not connected")}</span>
+                      )}
+                    </div>
+                    <div className="token-row">
+                      <input
+                        className="token-input"
+                        type="password"
+                        value={tokenInput}
+                        onChange={(e) => setTokenInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.stopPropagation();
+                            submitToken();
+                          }
+                        }}
+                        placeholder="ghp_…"
+                        spellCheck={false}
+                      />
+                      <button className="primary-btn" onClick={submitToken} disabled={tokenBusy}>
+                        {tokenBusy ? t("Checking") : t("Connect")}
+                      </button>
+                    </div>
+                    {tokenError && <p className="error-line">{tokenError}</p>}
+                    <div className="set-links">
+                      <button
+                        className="link-btn"
+                        onClick={() =>
+                          invoke("open_repo", {
+                            url: "https://github.com/settings/tokens/new?description=magpie",
+                          })
+                        }
+                      >
+                        {t("Create one on github.com")}
+                      </button>
+                      {status?.has_token && (
+                        <button
+                          className="link-btn"
+                          onClick={rebuildStars}
+                          title={t("Wipe the star index and sync everything from scratch")}
+                        >
+                          {t("Rebuild star index")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {settingsTab === "clips" && (
+              <>
+                <p className="set-eyebrow">{t("Privacy")}</p>
+                <div className="set-group">
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">
+                        {t("Clipboard history")}
+                        {status?.clipboard_enabled && (
+                          <span className="count-pill">{status.clip_count}</span>
+                        )}
+                      </span>
+                      <span className="set-desc">
+                        {t(
+                          "Recorded locally, searchable in the Clipboard tab. Password-manager secrets are never stored.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", enabled: false },
+                        { label: "on", enabled: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${status?.clipboard_enabled === o.enabled ? "active" : ""}`}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_clipboard_enabled", { enabled: o.enabled });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {status?.clipboard_enabled && (
+                    <>
+                      <div className="set-row">
+                        <div className="set-label">
+                          <span className="set-name">{t("Keep at most")}</span>
+                        </div>
+                        <div className="pill-row">
+                          {[
+                            { label: "500", entries: 500 },
+                            { label: "2000", entries: 2000 },
+                            { label: "unlimited", entries: 0 },
+                          ].map((o) => (
+                            <button
+                              key={`n${o.entries}`}
+                              className={`source ${status?.clip_max_entries === o.entries ? "active" : ""}`}
+                              onClick={async () => {
+                                try {
+                                  await invoke("set_clip_max_entries", { entries: o.entries });
+                                  await refreshStatus();
+                                } catch (e) {
+                                  setLastError(String(e));
+                                }
+                              }}
+                            >
+                              {t(o.label)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="set-row">
+                        <div className="set-label">
+                          <span className="set-name">{t("Keep for")}</span>
+                        </div>
+                        <div className="pill-row">
+                          {[
+                            { label: "7 days", days: 7 },
+                            { label: "30 days", days: 30 },
+                            { label: "forever", days: 0 },
+                          ].map((o) => (
+                            <button
+                              key={o.days}
+                              className={`source ${status?.clip_retention_days === o.days ? "active" : ""}`}
+                              onClick={async () => {
+                                try {
+                                  await invoke("set_clip_retention", { days: o.days });
+                                  await refreshStatus();
+                                } catch (e) {
+                                  setLastError(String(e));
+                                }
+                              }}
+                            >
+                              {t(o.label)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="set-row">
+                        <div className="set-label">
+                          <span className="set-name">{t("Clear history")}</span>
+                          <span className="set-desc">
+                            {t("Delete every recorded clip permanently.")}
+                          </span>
+                        </div>
+                        <button
+                          className="danger-btn"
+                          onClick={async () => {
+                            try {
+                              await invoke("clear_clips_now");
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t("Clear")}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
+            {settingsTab === "about" && (
+              <>
+                <p className="set-eyebrow">{t("System")}</p>
+                <div className="set-group">
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Updates")}</span>
+                      <span className="set-desc">
+                        {updPhase === "available" || updPhase === "downloading"
+                          ? tf("Version {v} is available.", { v: updVersion ?? "" })
+                          : updPhase === "none"
+                            ? t("You are on the latest version.")
+                            : t("Installed in place; your index and settings are kept.")}
+                      </span>
+                    </div>
+                    {updPhase === "available" ? (
+                      <button className="primary-btn" onClick={doInstallUpdate}>
+                        {t("Update & restart")}
+                      </button>
+                    ) : updPhase === "downloading" ? (
+                      <button className="primary-btn" disabled>
+                        {updPct}%
+                      </button>
+                    ) : (
+                      <button
+                        className="ghost-btn"
+                        onClick={() => doCheckUpdate(false)}
+                        disabled={updPhase === "checking"}
+                      >
+                        {updPhase === "checking" ? t("Checking…") : t("Check now")}
+                      </button>
+                    )}
+                  </div>
+                  {updError && <p className="error-line">{updError}</p>}
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Logs")}</span>
+                      <span className="set-desc">
+                        {t("Local activity log (errors, model/ffmpeg status) — attach it to a bug report. Queries are never logged.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      <button
+                        className="ghost-btn"
+                        onClick={() => invoke("open_log_dir").catch((e) => setLastError(String(e)))}
+                      >
+                        {t("Open log folder")}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Settings file")}</span>
+                      <span className="set-desc">
+                        {t("Everything except the GitHub token — move your setup to another machine.")}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      <button
+                        className="ghost-btn"
+                        onClick={async () => {
+                          try {
+                            const path = await holdOpen(() =>
+                              saveDialog({
+                                defaultPath: "magpie-settings.json",
+                                filters: [{ name: "JSON", extensions: ["json"] }],
+                              }),
+                            );
+                            if (!path) return;
+                            const frontend: Record<string, string> = {};
+                            for (const k of LOCAL_KEYS) {
+                              const v = localStorage.getItem(k);
+                              if (v != null) frontend[k] = v;
+                            }
+                            await invoke("export_settings", { path, frontend });
+                            setLastError(null);
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                      >
+                        {t("Export")}
+                      </button>
+                      <button
+                        className="ghost-btn"
+                        onClick={async () => {
+                          try {
+                            const path = await holdOpen(() =>
+                              openDialog({
+                                multiple: false,
+                                filters: [{ name: "JSON", extensions: ["json"] }],
+                              }),
+                            );
+                            if (typeof path !== "string") return;
+                            const frontend = await invoke<Record<string, string>>("import_settings", {
+                              path,
+                            });
+                            for (const k of LOCAL_KEYS) {
+                              if (typeof frontend[k] === "string") localStorage.setItem(k, frontend[k]);
+                            }
+                            window.location.reload(); // re-read every store in one clean pass
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                      >
+                        {t("Import")}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
           </div>
 
           {lastError && <p className="error-line">{lastError}</p>}
@@ -3875,7 +4145,7 @@ export default function App() {
                   key={a.key}
                   role="menuitem"
                   className={`action-item ${i === actionSel ? "on" : ""} ${a.risky ? "risky" : ""}`}
-                  onMouseMove={() => setActionSel(i)}
+                  onMouseMove={() => pointerMovedRef.current && setActionSel(i)}
                   onMouseDown={(ev) => ev.preventDefault() /* keep focus in the box */}
                   onClick={() => void runMenuAction(i)}
                 >
@@ -3958,7 +4228,11 @@ export default function App() {
                 data-idx={i}
                 className={`row ${i >= selLo && i <= selHi && !(topRowActive && (calcHit || bangHit)) ? "selected" : ""} ${armed === hitKey(r) ? "armed" : ""}`}
                 onMouseMove={() => {
-                  if (selAnchor == null) setSelected(i);
+                  // hover selects only when the pointer really moved: a
+                  // move event at the same spot (a touchpad twitch, or the
+                  // engine re-sending one after rows changed under a resting
+                  // pointer) used to jump the selection to that row (#7)
+                  if (pointerMovedRef.current && selAnchor == null) setSelected(i);
                 }}
                 onClick={() => openHit(r)}
               >
@@ -4207,57 +4481,17 @@ export default function App() {
       {/* footer */}
       <div className="footer">
         <span className="hints">
-          {/* ↑↓ needs no hint; the action menu does, and the footer has
-              room for one key only (see the note on the 1–9 chord below) */}
-          <span>
-            <kbd>{MOD}K</kbd> {t("actions")}
-          </span>
-          <span>
-            <kbd>⏎</kbd> {source === "clips" ? t("copy") : t("open")}
-          </span>
-          {/* the 1–9 jump chord is not listed here: the footer is full, and
-              an extra key pushed the index status off its right end. Each
+          {/* ↑↓ needs no hint. The 1–9 jump chord is not listed either: each
               tab's tooltip names it, and so does a launch tip. */}
-          <span>
-            <kbd>tab</kbd> {t("source")}
-          </span>
-          {source === "clips" && (
-            <>
-              <span>
-                <kbd>⇧⏎</kbd> {t("paste")}
-              </span>
-              <span>
-                <kbd>⇧↑↓</kbd> {t("select")}
-              </span>
-              <span>
-                <kbd>{MOD}⌦</kbd> {t("delete")}
-              </span>
-            </>
-          )}
-          {(source === "local" || source === "web" || source === "github-stars") && (
-            <span>
-              <kbd>⇧tab</kbd> {source === "github-stars" ? t("sort") : t("scope")}
-            </span>
-          )}
-          {results.length > 0 && !showSettings && (
-            <span>
-              <kbd>{previewOpen ? "←" : "→"}</kbd> {previewOpen ? t("close preview") : t("preview")}
-            </span>
-          )}
-          <span>
-            <kbd>{IS_MAC ? "⌘," : "alt,"}</kbd> {t("settings")}
-            {(updPhase === "available" || updPhase === "downloading") && (
-              <i className="upd-dot" title={tf("Version {v} is available.", { v: updVersion ?? "" })} />
-            )}
-          </span>
-          <span>
-            <kbd>{MOD}⏎</kbd> {t("web")}
-          </span>
-          {/* no "esc hide": every launcher's Esc closes it, and the room
-              went to the action menu's hint without squeezing the status */}
+          {footerHints
+            .filter((h) => !droppedHints.has(h.key))
+            .map((h) => (
+              <span key={h.key}>{h.node}</span>
+            ))}
         </span>
-        <span className="status">{footerStatus}</span>
-      </div>
+        <span className="status" ref={footerStatusRef}>
+          {footerStatus}
+        </span>      </div>
     </div>
   );
 }
@@ -4343,6 +4577,24 @@ function highlightQuery(text: string, query: string): React.ReactNode[] {
 /// App icons by launch target, for the whole session: the backend caches
 /// too, this just saves the round trip on every re-render and keystroke.
 const appIconCache = new Map<string, string | null>();
+
+/// A key combination, modifier and key apart so "⌘K" does not read as one
+/// glyph and "Ctrl" does not run into its key (#5).
+function Keys({ keys }: { keys: string[] }) {
+  return (
+    <kbd className="keys">
+      {keys.map((k, i) => (
+        <span key={i}>{k}</span>
+      ))}
+    </kbd>
+  );
+}
+
+let canvasForMeasuring: HTMLCanvasElement | null = null;
+function measureCanvas(): HTMLCanvasElement {
+  canvasForMeasuring ??= document.createElement("canvas");
+  return canvasForMeasuring;
+}
 
 /// The browsers a web hit is in: all of them when the search collapsed one
 /// URL kept in several, else the one it came from.

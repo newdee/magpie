@@ -164,10 +164,22 @@ body {
 /* ---------- input row ---------- */
 
 .input-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 16px 14px;
+}
+
+/* Web: "⌘⏎ search in browser" after the typed text, as faint as the footer
+   hints (#5); left is set from the measured text width */
+.query-hint {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  opacity: 0.8;
 }
 
 .search-icon {
@@ -597,9 +609,52 @@ input.query:active {
 .settings-page {
   border-top: none;
   max-height: 580px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   gap: 0;
-  padding: 18px;
+  padding: 18px 18px 0;
+}
+
+/* settings pages (#6): the same pills as the source tabs; they and the
+   title stay put while the page below scrolls */
+.settings-nav {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 -18px;
+  padding: 2px 18px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -18px;
+  padding: 4px 18px 18px;
+}
+
+/* Settings › Web: one line per browser found */
+.browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.browser-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.browser-line .browser-icon {
+  width: 16px;
+  height: 16px;
+}
+.browser-name {
+  min-width: 90px;
+  font-size: 13px;
+  color: var(--text);
 }
 
 /* grouped settings: an uppercase eyebrow over a quiet surface card,
@@ -1251,6 +1306,12 @@ kbd {
   border-radius: 4px;
   padding: 1px 5px;
   margin-right: 3px;
+}
+
+/* modifier and key apart: "⌘ K", "Ctrl K" (#5) */
+kbd.keys {
+  display: inline-flex;
+  gap: 3px;
 }
 
 .status {
