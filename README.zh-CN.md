@@ -215,9 +215,11 @@ Adobe 图标上的官方简称），Linux 免费吃进 `.desktop` 的
 
 「Web」tab 同时检索浏览器书签和历史；`Shift+Tab` 切换 全部 / 书签 /
 历史。历史覆盖页面标题和 URL（不只网址），按访问次数加权，常开的页面排
-更前；每个 profile 只保留访问最多的页面。书签来自任意 Chromium 内核浏览器
-（Chrome、Edge、Brave、Vivaldi、Arc 及各种小众分支，按磁盘上的 profile 结构
-自动发现），外加 Firefox。直接读浏览器本地存储（全部 profile），按标题、
+更前；每个 profile 只保留访问最多的页面。书签和历史来自任意 Chromium 内核
+浏览器（Chrome、Edge、Brave、Vivaldi、Arc、Opera、Helium……）和任意 Firefox
+内核浏览器（Firefox、LibreWolf、Zen、Floorp、Waterfox……），按磁盘上的
+profile 结构自动发现，不靠固定名单；暂不读取 Safari。直接读浏览器本地存储
+（全部 profile，浏览器开着时新加的书签和刚访问的页面也能搜到），按标题、
 URL、文件夹路径检索并叠加语义匹配。`Enter` 在默认浏览器打开。
 
 ### 顺手一个快捷浏览器入口

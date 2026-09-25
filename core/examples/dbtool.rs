@@ -50,6 +50,17 @@ fn main() -> anyhow::Result<()> {
                 println!("  {}x {} — {}", h.visit_count, h.title, h.url);
             }
         }
+        Some("sync-bookmarks") => {
+            let r = magpie_core::bookmarks::sync_bookmarks(&conn)?;
+            println!("browsers={:?} total={} removed={}", r.browsers, r.total, r.removed);
+            for b in magpie_core::bookmarks::bookmarks_by_ids(
+                &conn,
+                &magpie_core::bookmarks::bookmarks_fts_search(&conn, args.get(2).map(String::as_str).unwrap_or("a"), 5)?,
+                &Default::default(),
+            )? {
+                println!("  [{}] {} — {} ({})", b.browser, b.title, b.url, b.folder);
+            }
+        }
         Some("apps") => {
             let apps = magpie_core::apps::list_apps();
             println!("app_count={}", apps.len());

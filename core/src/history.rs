@@ -7,7 +7,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::embed::{self, Embedder};
 
@@ -41,40 +41,6 @@ struct RawHistory {
     last_visit: Option<i64>,
 }
 
-// ---------- discovery ----------
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_default()
-}
-
-/// (browser, history-file path, is_firefox) for every discovered profile.
-fn discover() -> Vec<(String, PathBuf, bool)> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    // Chromium: each profile keeps a `History` SQLite file. Firefox reuses
-    // `places.sqlite` (history + bookmarks in one DB). We reuse the browser
-    // bookmark discovery to locate profile directories, then swap filenames.
-    for (browser, bmark_path, is_firefox) in crate::bookmarks::discover_history_sources() {
-        let hist = if is_firefox {
-            bmark_path // places.sqlite already
-        } else {
-            match bmark_path.parent() {
-                Some(dir) => dir.join("History"),
-                None => continue,
-            }
-        };
-        if hist.is_file() && seen.insert(hist.clone()) {
-            out.push((browser, hist, is_firefox));
-        }
-    }
-    let _ = &dirs_home; // reserved for future direct scans
-    out
-}
-
 // ---------- parsing ----------
 
 /// Chromium epoch (1601-01-01) microseconds -> unix seconds.
@@ -85,20 +51,11 @@ fn webkit_to_unix(micros: i64) -> Option<i64> {
     Some(micros / 1_000_000 - 11_644_473_600)
 }
 
-/// History DBs are locked while the browser runs; read a temp copy.
+/// History DBs are locked while the browser runs; read a snapshot.
 fn read_copy<T>(path: &Path, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let tmp = std::env::temp_dir().join(format!(
-        "magpie-hist-{}-{}.sqlite",
-        std::process::id(),
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("db")
-    ));
-    std::fs::copy(path, &tmp)?;
-    let result = (|| {
-        let conn = Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        f(&conn)
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    result
+    let snap = crate::browsers::Snapshot::of(path)?;
+    let conn = snap.open()?;
+    f(&conn)
 }
 
 fn parse_chromium(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
@@ -124,7 +81,7 @@ fn parse_chromium(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Resu
     })
 }
 
-fn parse_firefox(path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
+fn parse_firefox(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
     read_copy(path, |conn| {
         let mut stmt = conn.prepare(
             "SELECT url, IFNULL(title,''), visit_count, last_visit_date
@@ -135,7 +92,7 @@ fn parse_firefox(path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
             Ok(RawHistory {
                 url: r.get(0)?,
                 title: r.get(1)?,
-                browser: "firefox".to_string(),
+                browser: browser.to_string(),
                 visit_count: r.get(2)?,
                 last_visit: r.get::<_, Option<i64>>(3)?.map(|m| m / 1_000_000),
             })
@@ -153,12 +110,16 @@ fn parse_firefox(path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
 pub fn sync_history(conn: &Connection) -> Result<HistoryReport> {
     let mut raw = Vec::new();
     let mut report = HistoryReport::default();
-    for (browser, path, is_firefox) in discover() {
+    use crate::browsers::Engine;
+    for profile in crate::browsers::profiles() {
+        let (browser, path) = (profile.browser.clone(), profile.history_file());
+        if !path.is_file() {
+            continue;
+        }
         let before = raw.len();
-        let res = if is_firefox {
-            parse_firefox(&path, &mut raw)
-        } else {
-            parse_chromium(&browser, &path, &mut raw)
+        let res = match profile.engine {
+            Engine::Gecko => parse_firefox(&browser, &path, &mut raw),
+            Engine::Chromium => parse_chromium(&browser, &path, &mut raw),
         };
         if res.is_ok() && raw.len() > before && !report.browsers.contains(&browser) {
             report.browsers.push(browser);

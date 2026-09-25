@@ -278,12 +278,14 @@ pinyin included.
 The Web tab searches browser bookmarks and history together; `Shift+Tab`
 narrows to all / bookmarks / history. History covers page titles and URLs
 (not just addresses) with a visit-count boost so pages you open often rank
-higher; only the most-visited pages per profile are kept. Bookmarks come from
-any Chromium-based browser (Chrome, Edge, Brave, Vivaldi, Arc, and
-lesser-known forks are auto-discovered by their on-disk profile layout) plus
-Firefox. Read directly from local stores (all profiles), searchable by title,
-URL, and folder path, with semantic matching on top. `Enter` opens the
-bookmark in your default browser.
+higher; only the most-visited pages per profile are kept. Bookmarks and
+history come from any Chromium-based browser (Chrome, Edge, Brave, Vivaldi,
+Arc, Opera, Helium, ...) and any Firefox-based one (Firefox, LibreWolf, Zen,
+Floorp, Waterfox, ...); forks are found by their on-disk profile layout, not
+a fixed list. Safari isn't read. Read directly from local stores (all
+profiles; new bookmarks and visits show up while the browser is still open),
+searchable by title, URL, and folder path, with semantic matching on top.
+`Enter` opens the bookmark in your default browser.
 
 ### Quick web launcher
 

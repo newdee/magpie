@@ -1,3 +1,56 @@
+# 验收记录 2026-09-25（浏览器通用发现：Firefox 系分支、WAL、Opera，未出包）
+
+issue #5：LibreWolf 书签/历史全都搜不到。根因：Chromium 系按磁盘结构扫描（所以
+Helium 能找到），Firefox 系只写死了 `Firefox/Profiles`，LibreWolf 等分支整个漏掉。
+
+## 实现（新 `core/src/browsers.rs`，书签与历史共用）
+
+- 发现：各平台数据根目录下两层扫描。Chromium profile = `Default`/`Profile N` 含
+  `Bookmarks` 或 `History`，或数据目录本身含 `Bookmarks`（Opera）；Gecko = 含
+  `profiles.ini` 的目录，按 ini 列出的 profile（相对/绝对）读 `places.sqlite`，ini 一个
+  有效都没有才扫 `Profiles/*`、`*`。Thunderbird 排除。Windows 新增 Roaming（Opera）；
+  Linux 扫 home 下点目录（`.mozilla/firefox`、`.librewolf`…）与 Flatpak/Snap 的 app home。
+- 扫描到的目录至少一个 profile 有书签才算浏览器（WebView2/Electron 应用、自动化临时
+  profile 只有 History）；算浏览器后，只有历史的 profile 也读。具名的 chrome/edge/brave
+  不要求书签。
+- 名称：按数据目录名取（`net.imput.helium` → helium，`.librewolf` → librewolf，
+  `Opera Stable` → opera，`Brave-Browser` → brave），不再把所有 Gecko 叫 firefox。
+- `Snapshot`：拷数据库时连 `-wal` 一起拷，读写方式打开副本以应用日志，drop 时删
+  副本及 `-wal`/`-shm`。
+- `dbtool sync-bookmarks`；README 双语、网站文案更新（含"暂不读取 Safari"）。
+
+## 发现并修复
+
+| # | 阶段 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 排查（既有） | Firefox 系分支完全不被发现 | 按 `profiles.ini` 通用扫描 |
+| 2 | 排查（既有） | 只拷 `places.sqlite` 不拷 `-wal`：合成库 2 行只读到 1 行，运行中的浏览器最近的书签/访问读不到 | `Snapshot` 连 `-wal` 拷 |
+| 3 | 排查（既有） | 历史发现依附于书签文件：本机 Chrome `Profile 1` 有历史无书签，历史一直没收录 | profile 按 Bookmarks 或 History 认 |
+| 4 | 开发单测 | 扫描先处理子目录，浏览器被命名为 "user data"/"default" | 先父目录后子目录 |
+| 5 | 本机实测 | 只凭 History 认 profile 会收进 9 个 WebView2 应用（含 magpie 自己）和 Temp 里的 puppeteer profile | 扫描到的目录须有书签 |
+| 6 | 代码 review | 扫描发现的 Brave 等显示为 `brave-browser` | 去 `-browser` 后缀 |
+| 7 | 边界 | `profiles.ini` 非合法 UTF-8 时整个浏览器丢失 | 按字节 lossy 解码 |
+| 8 | 边界 | ini 带 BOM 时首段不被识别，靠回退扫描才找到（会带入已删除 profile） | 解析前去 BOM；测试加残留目录证明走 ini |
+| 9 | 静态 | 文档"尚未落盘的新记录"说法不准（WAL 已在盘上） | 改为"浏览器开着时新加的书签和刚访问的页面也能搜到" |
+
+## 连续三轮干净
+
+- R1（静态一致）：clippy 0；a1 / a3-ipc / docs-parity 0 FAIL；旧发现函数与硬编码
+  "firefox" 残留 0；文档点名的 10 个浏览器在单测断言中各有覆盖（opera 2、helium 1、
+  librewolf 3、zen 2、floorp 1、waterfox 2、firefox 3、arc 2、vivaldi 1、chrome 3）。
+- R2（机制通路，`dbtool sync-bookmarks`，APPDATA 指向假目录）：基线 librewolf+zen+
+  waterfox 共 4 条（librewolf 含只在 WAL 的 1 条；zen ini 为 BOM+CRLF；waterfox ini 非
+  UTF-8；floorp 库为乱码被跳过不影响其他）；删 `-wal` → 3；ini 指向不存在 → 回退扫描
+  仍 4；目录改名 thunderbird → 2；恢复 → 4。源 `-wal` 未被改动，临时副本残留 0。
+- R3（可复现）：cargo test ×2 各 201 行逐行一致、0 失败；本机真实发现 ×3 哈希一致
+  （chrome Default、chrome Profile 1、edge Default；WebView2 与临时 profile 均排除，
+  103 ms）；端到端 ×2 输出哈希一致。
+
+## 未验证
+
+- macOS / Linux 真机：路径布局由单测的假目录覆盖（mac、Windows、Linux 各一组）。
+
+---
 # 验收记录 2026-09-25（Mac 应用搜索变慢：应用先出，0.4.2 修复版）
 
 用户反馈 Mac 上搜应用"以前立马出来，现在要好几秒"。本地标签页原来 `Promise.all`

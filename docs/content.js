@@ -114,11 +114,11 @@ window.FEATURES = {
       tag: "Bookmarks + history",
       en: {
         t: "Bookmarks and history",
-        d: "magpie reads your browsers' own files: every Chromium browser plus Firefox, all profiles. Bookmarks and history come back in one list, with the pages you open most ranked higher.",
+        d: "magpie reads your browsers' own files: every Chromium browser and every Firefox-based one (LibreWolf, Zen, Floorp...), all profiles. Bookmarks and history come back in one list, with the pages you open most ranked higher.",
       },
       zh: {
         t: "书签与浏览历史",
-        d: "直接读浏览器自己的文件：Chromium 系全家桶加 Firefox，所有 profile 都覆盖。书签和历史在一个列表里出，你常开的页面排前面。",
+        d: "直接读浏览器自己的文件：Chromium 系和 Firefox 系（LibreWolf、Zen、Floorp……）全家桶，所有 profile 都覆盖。书签和历史在一个列表里出，你常开的页面排前面。",
       },
     },
     {

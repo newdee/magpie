@@ -3,6 +3,7 @@ pub use rusqlite;
 pub mod apps;
 pub mod badge;
 pub mod bookmarks;
+mod browsers;
 pub mod calc;
 pub mod clips;
 pub mod db;
