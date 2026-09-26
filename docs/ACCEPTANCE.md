@@ -1,3 +1,50 @@
+# 验收记录 2026-09-27（本地小工具批次，0.4.6）
+
+## 实现
+
+- `core/src/handy.rs`：金额大写（万亿分组、零的补写、角分、负数）、拼音（pinyin 库 + 约 60 个常见多音词表）、
+  全 / 半角（中文句子标点 ，！？：；（） 保持全角）、Unicode / HTML 转义互转、无偏随机数与 pick、系统
+  状况（sysinfo 开 disk feature）、二维码解码（rqrr）、行级 diff（similar）、倒计时时长解析。
+- 动词：大写/dx、py/拼音、半角/全角、unicode、html、random/pick/dice/coin（抛硬币 中文作答）、sys、
+  timer/倒计时；`qr` 单独输入时先读剪贴板图片里的二维码。
+- `dl`：`files::newest_in` 列下载文件夹最新文件（排除进行中与隐藏），负 id；`path_is_allowed` 放行下载
+  文件夹，并拒绝任何 `..` 分量（原 starts_with 判断可被 `已索引\..\..\x` 绕过）。
+- `diff`：`clips::latest_texts` 取剪贴板历史最近两段文字。
+- 倒计时：tauri-plugin-notification；`start_timer` / `list_timers` / `cancel_timer`；提醒文字不写日志；
+  `MAGPIE_NOTIFY_DRYRUN` 供测试。
+- 图片剪贴条"图片另存为…"（存 JPEG，即历史中的存储格式）。
+- 顶部行：计时 / 对比 / 列表三种新形态，标签与提示经 `CALC_LABELS` / `CALC_MESSAGES` 表翻译。
+- README 双语 7 条、网站 5 条、6 条小贴士、docs-parity 新增 9 项必检。
+
+## 发现并修复
+
+| # | 阶段 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 单测 | 写入工具把测试里的 Unicode 转义预先解码成汉字，转义测试的输入里其实没有转义 | 测试用 format! 拼出反斜杠 + u + 十六进制 |
+| 2 | 单测 | 半角把中文逗号 ，（U+FF0C）也转成英文逗号 | 规则改为保留中文句子标点 |
+| 3 | 编译 | 新函数与既有 `files::recent_files` 同名 | 改名 `newest_in` |
+| 4 | review | `path_is_allowed` 可被 `..` 绕过 | 拒绝 ParentDir 分量，单测覆盖 |
+| 5 | 环境 | `node_modules\emojilib` junction 被标为不受信任装入点，前端构建报找不到模块 | 拆掉后重建 junction，记入记忆 |
+| 6 | 环境 | 会话落在 Session 0，应用建不了窗口，真机测试无法运行 | 用户同意后以一次性交互计划任务在 Session 1 运行 runner，用完删除 |
+| 7 | 仪器 | vite dev server 随机整页刷新，demo 测试导航 `ERR_ABORTED` | demo 改为静态构建 + `vite preview` |
+
+## 连续三轮干净
+
+- R1（机制 + 回归）：Session 1 真机 T20 14/14、T13 5/5、T15 18/18、T9 30/30、T22 11/11、T23 6/6、T26 6/6、
+  T29 15/15、T31 27/27（各动词真实输出；应用生成的二维码经图片读回一致；dl 排序与排除；下载文件夹内 `..`
+  越界被拒；剪贴板历史关闭时 diff 提示；图片另存为只收 .jpg、非图片 id 被拒；2 秒倒计时到点触发事件并出
+  列表、600 秒倒计时可停、0 秒被拒；界面回车开始计时并收起、`timer` 列出、回车全停）；demo（静态构建）
+  T24 12/12、T25、T20b 3/3、T28 14/14、T32 12/12。
+- R2（静态 + review）：clippy 0、tsc 0、a1 / a3（371 键）/ docs-parity 0 FAIL、网站 40/40；diff 复查无新发现。
+- R3（可复现）：cargo test ×2 各 222 行一致；T31 ×2（Session 1）各 27/27 逐行一致；T32 ×2 一致。
+
+## 未验证
+
+- 倒计时真实系统通知的显示（测试走 dry-run，只验证到点触发）；倒计时不跨应用重启保留（设计如此）。
+- macOS / Linux 上的 dl、sys、二维码识别：CI 编译与单测覆盖，未真机运行。
+
+---
+
 # 验收记录 2026-09-26（工具批次：截图取字、端口、终端/编辑器、回收站、ip、符号，0.4.5）
 
 ## 实现
