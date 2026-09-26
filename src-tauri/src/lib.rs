@@ -1266,7 +1266,7 @@ fn search_apps(
     query: String,
     limit: Option<usize>,
     pinyin: Option<bool>,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
     let started = std::time::Instant::now();
     // matched under the lock, which is released before the database is
     // opened: an app rescan must not wait on it
@@ -1293,20 +1293,17 @@ fn search_apps(
     if ms > 50 {
         log::info!("slow app search: {ms} ms");
     }
-    // an icon already in memory rides along, so the row paints with it in
-    // its first frame instead of asking for it after (`icon` null: known to
-    // have none; absent: not read yet, the row asks)
-    let icons = state.app_icons.lock().unwrap();
-    Ok(hits
-        .into_iter()
-        .map(|h| {
-            let mut v = serde_json::to_value(&h).unwrap_or_default();
-            if let Some(icon) = icons.get(&h.target) {
-                v["icon"] = json!(icon);
-            }
-            v
-        })
-        .collect())
+    Ok(hits)
+}
+
+/// Every app icon the backend holds (target → data URL, or null for an app
+/// known to have none). The palette takes them all at once, at start and
+/// after `app-icons-changed`, so an app row paints with its icon in its
+/// first frame; sending them with each search instead cost ~33 KB per
+/// keystroke against ~1 KB without.
+#[tauri::command]
+fn cached_app_icons(state: State<'_, AppState>) -> std::collections::HashMap<String, Option<String>> {
+    state.app_icons.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -4837,7 +4834,8 @@ pub fn run() {
             installed_editors,
             open_in_terminal,
             open_in_editor,
-            trash_path
+            trash_path,
+            cached_app_icons
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

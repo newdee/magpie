@@ -84,8 +84,6 @@ interface AppHit {
   name: string;
   target: string;
   score: number;
-  /** the icon, when the backend had it in memory (null: it has none) */
-  icon?: string | null;
 }
 
 interface ClipHit {
@@ -811,6 +809,10 @@ export default function App() {
   useEffect(() => {
     settingsPageRef.current?.scrollTo({ top: 0 });
   }, [settingsTab]);
+  // the app icons the backend already holds, into the palette's cache
+  useEffect(() => {
+    void loadAppIcons().then(() => setIconEpoch((n) => n + 1));
+  }, []);
   // installed editors for the action menu's "Open in …": read at start and
   // each time the menu opens, so an editor installed meanwhile shows up
   const [editors, setEditors] = useState<{ name: string; target: string }[]>([]);
@@ -1047,8 +1049,6 @@ export default function App() {
           invoke<Omit<AppHit, "kind">[]>("search_apps", { query: q, pinyin: pinyinRef.current })
             .catch(() => [] as Omit<AppHit, "kind">[])
             .then((a) => {
-              // icons that came with the hits paint in the rows' first frame
-              for (const x of a) if (x.icon !== undefined) appIconCache.set(x.target, x.icon);
               apps = a.map((x) => ({ ...x, kind: "app" as const }));
               paint();
               // icons of the apps on screen: re-read in the background if an
@@ -1338,7 +1338,7 @@ export default function App() {
       // palette's copies and let the rows on screen fetch them again
       listen("app-icons-changed", () => {
         appIconCache.clear();
-        setIconEpoch((n) => n + 1);
+        void loadAppIcons().finally(() => setIconEpoch((n) => n + 1));
       }),
       // the selection-search chord: the backend copied the selected text and
       // is about to summon the palette; make that text the query
@@ -4765,6 +4765,17 @@ function BrowserIcons({ names }: { names: string[] }) {
       })}
     </span>
   );
+}
+
+/// Every icon the backend already holds, into the palette's cache, so an app
+/// row paints with its icon in its first frame instead of flashing the
+/// monogram while it asks. Once at start and after `app-icons-changed`.
+function loadAppIcons(): Promise<void> {
+  return invoke<Record<string, string | null>>("cached_app_icons")
+    .then((m) => {
+      for (const [target, url] of Object.entries(m)) appIconCache.set(target, url);
+    })
+    .catch(() => {});
 }
 
 /// The OS icon for an app row. Until it arrives (or when there is none) the

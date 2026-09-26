@@ -1,3 +1,55 @@
+# 验收记录 2026-09-26（工具批次：截图取字、端口、终端/编辑器、回收站、ip、符号，0.4.5）
+
+## 实现
+
+- `ocr`：读剪贴板图片（`clips::clipboard_image`，测试钩子 `MAGPIE_TEST_CLIPBOARD_IMAGE` 以图片文件代替
+  剪贴板），用用户已开启的 OCR 引擎识别；未开启 / 未就绪 / 无图 / 无字各有提示，前端按
+  `OCR_MESSAGES` 表翻译。
+- `port 3000` / `端口 3000` / `kill :3000`：`procs::on_port`（listeners crate），TCP 仅 LISTEN、UDP 绑定，
+  按进程合并套接字，沿用 kill 的保护名单与两次回车结束。
+- 操作菜单（文件、视频）：在终端中打开所在文件夹、用已安装编辑器打开（VS Code、Cursor、Trae、Zed、
+  Sublime Text、VSCodium、Windsurf，按应用名识别）、移到回收站 / 废纸篓（两次回车，后端再校验
+  `confirmed`，仅限已索引文件夹，移除后立即从索引删行）。启动先规划（`core/src/launch.rs` 的
+  `Launch`），`MAGPIE_OPEN_DRYRUN` 只返回将执行的命令。Windows 编辑器经 `ShellExecuteW`（解析 .lnk，
+  路径作为单一参数）。macOS 回收站用 NSFileManager。
+- `ip`：`if-addrs` 读网卡，去回环与链路本地，私有地址在前、虚拟网卡（WSL、Docker、VM）在后。
+- 符号：`:` 查找并入约 70 个符号（中英关键词），`:sym` / `:符号` 列全部；符号不进最高档。
+- 图标：前端启动时与 `app-icons-changed` 后一次性取 `cached_app_icons`，应用行第一帧即有图标。
+- README 双语、网站 4 条、4 条小贴士、docs-parity 新增 6 项必检。
+
+## 发现并修复
+
+| # | 阶段 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | T28 | 符号 ♥ 的首个关键词是 heart，进了最高档，`:heart` 排在所有 emoji 前 | 符号不进最高档 |
+| 2 | T28 | 断言假设 ❤️ 在 ♥ 前（❤️ 在 emojilib 里是 red_heart，只算部分匹配） | 断言改为"符号不居首、前面有 emoji" |
+| 3 | T29 | 本机只有 Trae CN，编辑器列表为空 | 列表加入 Trae |
+| 4 | review | macOS 回收站默认经 Finder，首次会弹"控制 Finder"授权 | 改 NSFileManager（CI macOS clippy 编译通过） |
+| 5 | T20 偶发 | 图标在行出现后才到，偶尔先闪首字母 | 见 6 |
+| 6 | review（实测） | 第一版把缓存图标随每次搜索返回：每次按键 33 KB（不带 1 KB） | 改为启动时一次取全部（141 个 724 KB），每次搜索回到 1.0 KB；T20 ×5 全过 |
+| 7 | review | 小贴士用了设问（"刚截了图？"） | 改为陈述 |
+| 8 | 静态 | 5 条 OCR 提示只在 Rust 出现，探针判为死键 | 前端显式 `OCR_MESSAGES` 表，只翻译表内的 |
+
+## 连续三轮干净
+
+- R1（机制 + 回归，真机隔离配置 + demo）：T20 14/14、T13 5/5、T15 18/18、T9 30/30、T22 11/11、
+  T23 6/6、T26 6/6、T29 15/15（ip 192.168.1.94 以太网，Tailscale / Clash TUN / WSL 在后；测试自起的
+  监听进程被查到、结束后端口空；终端 dry-run `wt.exe -d <文件夹>`；Trae CN 以单参数接收含 `&` 与空格
+  的路径；伪造编辑器、索引外路径、未确认删除均被拒；回收站 dry-run 文件仍在；OCR 关闭时提示开启，
+  开启后中英两行识别正确 152 ms，界面顶行"复制的图片里的文字 · 2 行"）；demo：T24 12/12、T25、
+  T20b 3/3、T28 14/14。
+- R2（静态 + review）：clippy 0、cargo test 208、tsc 0、a1 / a3（338 键）/ docs-parity 0 FAIL；网站
+  中英键一致、rest 36/36、长破折号 0、问号 0；图标预加载失败路径复查。
+- R3（可复现）：cargo test ×2 各 210 行一致；T29 ×2、T23 ×2、T28 ×2 输出逐行一致（毫秒、PID、
+  端口、内存归一化后）。
+
+## 未验证
+
+- 终端与编辑器的真实启动（`wt.exe`、`ShellExecuteW`、macOS `open -a`、Linux 终端）：会在桌面弹窗，
+  只验证了规划出的命令。真实移到回收站只在 Linux CI 上跑（避免放进用户回收站）。
+- macOS / Linux 上的端口查询、ip、剪贴板图片：CI 编译通过，未在真机运行。
+
+---
 # 验收记录 2026-09-26（网站文案第二版：去 AI 味，中文用本土修辞）
 
 用户反馈第一版"AI 味还是太明显"，要求"多用一些中文的修辞手法"。
