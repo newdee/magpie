@@ -124,6 +124,53 @@ interface CalcHit {
   error?: boolean;
   /// a PNG (base64) to show and copy instead of text, e.g. a QR code
   image?: string | null;
+  /// `timer 25m …`: seconds; Enter starts the countdown, `value` is the reminder
+  timer?: number | null;
+  /// `timer` alone: the running countdowns; Enter stops them all
+  timerIds?: number[];
+  /// `diff`: the last two copies, line by line ("+", "-" or " ", text)
+  diff?: [string, string][];
+}
+
+/// Labels the backend gives calculator / transform rows, translated when
+/// shown; any other label (numbers in it, a unit) shows as it comes.
+const CALC_LABELS = [
+  "Chinese capitals",
+  "pinyin",
+  "half-width",
+  "full-width",
+  "unicode decoded",
+  "unicode escaped",
+  "html decoded",
+  "html escaped",
+  "coin",
+  "dice",
+  "system",
+  "QR code in the copied image",
+];
+/// Messages rows answer with when they cannot do their job; translated too.
+const CALC_MESSAGES = [
+  "Turn on clipboard history to compare the last two things you copied",
+  "Copy two pieces of text first; diff compares the last two",
+  "The last two copies are the same",
+  "No QR code found in the copied image",
+];
+
+function calcLabel(alt: string | null | undefined): string {
+  if (!alt) return "";
+  const m = /^clipboard → (.+)$/.exec(alt);
+  if (m) return `${t("clipboard")} → ${CALC_LABELS.includes(m[1]) ? t(m[1]) : m[1]}`;
+  return CALC_LABELS.includes(alt) ? t(alt) : alt;
+}
+
+/// 1500 → "25:00", 5400 → "1:30:00"
+function clock(secs: number): string {
+  const s = Math.max(0, Math.round(secs));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(r)}` : `${m}:${pad(r)}`;
 }
 
 /// A system command (lock, sleep, restart, …) offered next to apps.
@@ -932,6 +979,20 @@ export default function App() {
     // Clipboard is the exception — its whole point is "what did I just copy",
     // so an empty query lists the most recent clips.
     const srcId = (sourcesRef.current[srcIdx] ?? sourcesRef.current[0]).id;
+    // `dl` / `最近下载`: the newest files in the Downloads folder
+    if (/^(dl|最近下载)$/i.test(q.trim())) {
+      try {
+        const fs = await invoke<Hit[]>("recent_downloads");
+        if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
+          setResults(fs);
+          setSelected(0);
+          setSelAnchor(null);
+        }
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return;
+    }
     // `port 3000` (or `kill :3000`) lists what listens on that port
     const portQ = matchPort(q);
     if (portQ !== null) {
@@ -1126,6 +1187,50 @@ export default function App() {
     setEmojiHits(null);
     setNoteHit(matchNote(q));
     setBangHit(matchBang(q, loadBangs()));
+    if (/^diff$/i.test(q)) {
+      // the last two copies, line by line; read once, not per keystroke
+      let live = true;
+      setCalcHit(null);
+      invoke<CalcHit>("clip_diff")
+        .then((r) => {
+          if (!live) return;
+          if (r.error) {
+            setCalcHit({ ...r, value: CALC_MESSAGES.includes(r.value) ? t(r.value) : r.value });
+            return;
+          }
+          const d = r.diff ?? [];
+          const added = d.filter(([k]) => k === "+").length;
+          const removed = d.filter(([k]) => k === "-").length;
+          setCalcHit({ ...r, alt: tf("diff · {r} removed, {a} added", { r: removed, a: added }) });
+        })
+        .catch((e) => live && setCalcHit({ value: String(e), alt: "diff", error: true }));
+      return () => {
+        live = false;
+      };
+    }
+    if (/^(timer|timers|倒计时)$/i.test(q)) {
+      // the countdowns running now; Enter stops them
+      let live = true;
+      setCalcHit(null);
+      invoke<{ id: number; label: string; ends_at: number }[]>("list_timers")
+        .then((ts) => {
+          if (!live) return;
+          if (ts.length === 0) {
+            setCalcHit({ value: t("No timer running. Try timer 25m"), alt: null, error: true });
+            return;
+          }
+          const now = Date.now();
+          setCalcHit({
+            value: ts.map((x) => `${clock((x.ends_at - now) / 1000)} ${x.label}`).join(" · "),
+            alt: tf("{n} running · Enter stops them all", { n: ts.length }),
+            timerIds: ts.map((x) => x.id),
+          });
+        })
+        .catch(() => {});
+      return () => {
+        live = false;
+      };
+    }
     if (/^(ocr|取字)$/i.test(q)) {
       // the text in the image on the clipboard; read once, not per keystroke
       let live = true;
@@ -1442,6 +1547,19 @@ export default function App() {
     async (c: CalcHit) => {
       if (c.error) return;
       try {
+        if (c.timer) {
+          // a countdown: the app keeps the clock, a notification says when
+          await invoke("start_timer", { seconds: c.timer, label: c.value });
+          setNotice(tf("Timer set: {clock}", { clock: clock(c.timer) }));
+          await finishAction();
+          return;
+        }
+        if (c.timerIds) {
+          for (const id of c.timerIds) await invoke("cancel_timer", { id });
+          setCalcHit(null);
+          setNotice(tf("Stopped {n} timers", { n: c.timerIds.length }));
+          return;
+        }
         if (c.image) {
           await invoke("copy_png", { pngB64: c.image });
         } else {
@@ -1711,6 +1829,32 @@ export default function App() {
                           setImageQuery(null);
                         }),
                       ),
+                  },
+                ]
+              : []),
+            ...(hit.clip_kind === "image"
+              ? [
+                  {
+                    key: "save-image",
+                    label: t("Save image…"),
+                    run: async () => {
+                      const d = new Date();
+                      const pad = (n: number) => String(n).padStart(2, "0");
+                      const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+                      const dest = await holdOpen(() =>
+                        saveDialog({
+                          defaultPath: `clipboard-${stamp}.jpg`,
+                          filters: [{ name: "JPEG", extensions: ["jpg", "jpeg"] }],
+                        }),
+                      );
+                      if (!dest) return;
+                      try {
+                        await invoke("save_clip_image", { clipId: hit.id, dest });
+                        setNotice(tf("Saved {name}", { name: dest.split(/[\\/]/).pop() ?? dest }));
+                      } catch (e) {
+                        setLastError(String(e));
+                      }
+                    },
                   },
                 ]
               : []),
@@ -4307,18 +4451,35 @@ export default function App() {
                     {calcHit.swatch && (
                       <i className="color-swatch" style={{ background: calcHit.swatch }} />
                     )}
-                    {calcHit.swatch || calcHit.error || calcHit.image
-                      ? calcHit.value
-                      : // a multi-line result (pretty JSON) previews as one line
-                        `= ${oneLine(calcHit.value)}`}
+                    {calcHit.timer
+                      ? `⏲ ${clock(calcHit.timer)} · ${calcHit.value}`
+                      : calcHit.diff
+                        ? t("Last two copies compared")
+                        : calcHit.swatch || calcHit.error || calcHit.image || calcHit.timerIds
+                          ? calcHit.value
+                          : // a multi-line result (pretty JSON) previews as one line
+                            `= ${oneLine(calcHit.value)}`}
                   </span>
+                  {calcHit.diff && (
+                    <pre className="calc-diff">
+                      {calcHit.diff.slice(0, 12).map(([k, line], i) => (
+                        <span key={i} className={k === "+" ? "add" : k === "-" ? "removed" : ""}>
+                          {`${k} ${line}\n`}
+                        </span>
+                      ))}
+                      {calcHit.diff.length > 12 && tf("… {n} more lines", { n: calcHit.diff.length - 12 })}
+                    </pre>
+                  )}
                   <span className="row-sub">
-                    {calcHit.alt ? `${calcHit.alt}${calcHit.error ? "" : " · "}` : ""}
-                    {calcHit.error
-                      ? ""
-                      : calcHit.image
-                        ? t("Enter copies the image")
-                        : t("Enter copies the result")}
+                    {calcHit.timer
+                      ? t("Enter starts the timer; a notification comes when it ends")
+                      : `${calcLabel(calcHit.alt)}${calcHit.alt && !calcHit.error && !calcHit.timerIds ? " · " : ""}${
+                          calcHit.error || calcHit.timerIds
+                            ? ""
+                            : calcHit.image
+                              ? t("Enter copies the image")
+                              : t("Enter copies the result")
+                        }`}
                   </span>
                 </div>
                 </div>

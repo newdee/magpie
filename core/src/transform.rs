@@ -17,6 +17,9 @@ pub struct TransformResult {
     /// A PNG (base64) to show instead of text, e.g. a QR code; Enter copies
     /// the image.
     pub image: Option<String>,
+    /// `timer 25m`: seconds to count down; Enter starts the timer instead of
+    /// copying, and `value` is what the reminder will say.
+    pub timer: Option<u64>,
 }
 
 pub fn transform(query: &str) -> Option<TransformResult> {
@@ -100,6 +103,70 @@ pub fn transform(query: &str) -> Option<TransformResult> {
             ..Default::default()
         }),
         "ip" | "本机ip" if rest.is_empty() => ip_verb(),
+        "大写" | "dx" => {
+            let (src, from_clip) = source(rest)?;
+            let value = crate::handy::rmb_upper(src.trim())?;
+            Some(TransformResult { label: labeled("Chinese capitals".into(), from_clip), value, ..Default::default() })
+        }
+        "py" | "拼音" => {
+            let (src, from_clip) = source(rest)?;
+            // only when there is Chinese in it: `py` alone on English text is a search
+            src.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)).then(|| TransformResult {
+                label: labeled("pinyin".into(), from_clip),
+                value: crate::handy::pinyin_of(src.trim()),
+                ..Default::default()
+            })
+        }
+        "半角" | "全角" => {
+            let (src, from_clip) = source(rest)?;
+            let (value, label) = if cmd == "半角" {
+                (crate::handy::to_halfwidth(&src), "half-width")
+            } else {
+                (crate::handy::to_fullwidth(&src), "full-width")
+            };
+            Some(TransformResult { label: labeled(label.into(), from_clip), value, ..Default::default() })
+        }
+        "unicode" => {
+            let (src, from_clip) = source(rest)?;
+            let (value, decoded) = crate::handy::unicode_toggle(&src);
+            let label = if decoded { "unicode decoded" } else { "unicode escaped" };
+            Some(TransformResult { label: labeled(label.into(), from_clip), value, ..Default::default() })
+        }
+        "html" => {
+            let (src, from_clip) = source(rest)?;
+            let (value, decoded) = crate::handy::html_toggle(&src);
+            let label = if decoded { "html decoded" } else { "html escaped" };
+            Some(TransformResult { label: labeled(label.into(), from_clip), value, ..Default::default() })
+        }
+        "random" | "随机" => random_verb(rest),
+        "pick" | "抽签" => {
+            let items = crate::handy::pick_items(rest);
+            (items.len() >= 2).then(|| {
+                let i = crate::handy::random_between(0, items.len() as i64 - 1).unwrap_or(0) as usize;
+                TransformResult { label: format!("picked from {}", items.len()), value: items[i].clone(), ..Default::default() }
+            })
+        }
+        "coin" | "抛硬币" if rest.is_empty() => {
+            let heads = crate::handy::random_between(0, 1)? == 0;
+            let value = match (cmd == "抛硬币", heads) {
+                (true, true) => "正面",
+                (true, false) => "反面",
+                (false, true) => "heads",
+                (false, false) => "tails",
+            };
+            Some(TransformResult { label: "coin".into(), value: value.into(), ..Default::default() })
+        }
+        "dice" | "骰子" if rest.is_empty() => Some(TransformResult {
+            label: "dice".into(),
+            value: crate::handy::random_between(1, 6)?.to_string(),
+            ..Default::default()
+        }),
+        "sys" | "系统" if rest.is_empty() => Some(TransformResult {
+            label: "system".into(),
+            value: crate::handy::system_summary(),
+            ..Default::default()
+        }),
+        "timer" | "倒计时" if !rest.is_empty() => timer_verb(rest),
         "json" => json_verb(rest),
         "md5" | "sha1" | "sha256" => hash_verb(cmd, rest),
         "jwt" => jwt_verb(rest),
@@ -108,6 +175,37 @@ pub fn transform(query: &str) -> Option<TransformResult> {
         | "kebab" | "title" => text_verb(cmd, rest),
         _ => color(q),
     }
+}
+
+/// `random` (1–100), `random 6`, `random 10 20`: a whole number, inclusive.
+fn random_verb(rest: &str) -> Option<TransformResult> {
+    let nums: Vec<i64> = rest.split_whitespace().map(|t| t.parse().ok()).collect::<Option<_>>()?;
+    let (lo, hi) = match nums.as_slice() {
+        [] => (1, 100),
+        [n] if *n >= 1 => (1, *n),
+        [a, b] => (*a, *b),
+        _ => return None,
+    };
+    let v = crate::handy::random_between(lo, hi)?;
+    Some(TransformResult { label: format!("random {}–{}", lo.min(hi), lo.max(hi)), value: v.to_string(), ..Default::default() })
+}
+
+/// `timer 25m 开会`: a countdown; the first word is the length, the rest
+/// what the reminder says. Enter starts it (the app keeps the clock).
+fn timer_verb(rest: &str) -> Option<TransformResult> {
+    let (len, what) = match rest.split_once(char::is_whitespace) {
+        Some((l, w)) => (l, w.trim()),
+        None => (rest, ""),
+    };
+    let secs = crate::handy::parse_duration(len)?;
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let clock = if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") };
+    Some(TransformResult {
+        label: format!("timer {clock}"),
+        value: if what.is_empty() { "Time's up".into() } else { what.to_string() },
+        timer: Some(secs),
+        ..Default::default()
+    })
 }
 
 /// `ip`: this machine's IPv4 addresses on the local network. Enter copies
@@ -415,6 +513,22 @@ fn jwt_verb(rest: &str) -> Option<TransformResult> {
 /// screen with a phone.
 fn qr_verb(rest: &str) -> Option<TransformResult> {
     use base64::Engine;
+    // `qr` alone with an image on the clipboard: read the code in it
+    if rest.is_empty() {
+        if let Ok(img) = crate::clips::clipboard_image() {
+            if let Some(text) = crate::handy::decode_qr(&img) {
+                return Some(TransformResult { label: "QR code in the copied image".into(), value: text, ..Default::default() });
+            }
+            if crate::clips::clipboard_text().map(|t| t.trim().is_empty()).unwrap_or(true) {
+                return Some(TransformResult {
+                    label: "QR code".into(),
+                    value: "No QR code found in the copied image".into(),
+                    error: true,
+                    ..Default::default()
+                });
+            }
+        }
+    }
     let (src, from_clip) = source(rest)?;
     let text = src.trim();
     let code = match qrcode::QrCode::new(text.as_bytes()) {
@@ -662,6 +776,32 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
 mod tests {
     use super::*;
 
+    /// The local helpers reach the box: each verb answers, and the ones that
+    /// would shadow a search (py on English words, a bare timer) stay quiet.
+    #[test]
+    fn handy_verbs_answer_from_the_box() {
+        assert_eq!(transform("大写 1234.56").unwrap().value, "壹仟贰佰叁拾肆元伍角陆分");
+        assert_eq!(transform("dx 100").unwrap().value, "壹佰元整");
+        assert!(transform("大写 abc").is_none());
+        assert_eq!(transform("py 重庆").unwrap().value, "chóng qìng");
+        assert!(transform("py thon").is_none(), "no Chinese: a search, not pinyin");
+        assert_eq!(transform("半角 ＡＢＣ１２３").unwrap().value, "ABC123");
+        assert_eq!(transform("全角 AB").unwrap().value, "ＡＢ");
+        assert_eq!(transform("html <b>").unwrap().value, "&lt;b&gt;");
+        let r = transform("random 10 20").unwrap();
+        let n: i64 = r.value.parse().unwrap();
+        assert!((10..=20).contains(&n) && r.label == "random 10–20");
+        assert!((1..=6).contains(&transform("dice").unwrap().value.parse::<i64>().unwrap()));
+        assert!(["正面", "反面"].contains(&transform("抛硬币").unwrap().value.as_str()));
+        let p = transform("pick 火锅 烧烤 麻辣烫").unwrap();
+        assert!(["火锅", "烧烤", "麻辣烫"].contains(&p.value.as_str()) && p.label == "picked from 3");
+        assert!(transform("pick onlyone").is_none());
+        let t = transform("timer 25m 开会").unwrap();
+        assert_eq!((t.timer, t.value.as_str(), t.label.as_str()), (Some(1500), "开会", "timer 25:00"));
+        assert_eq!(transform("倒计时 1h").unwrap().timer, Some(3600));
+        assert!(transform("timer").is_none() && transform("timer soon").is_none());
+        assert!(transform("sys").unwrap().value.starts_with("CPU "));
+    }
     /// `ip`: a LAN address that is not loopback, the first one ranked; the
     /// ranking puts real adapters before virtual ones and private before public.
     #[test]

@@ -263,6 +263,15 @@ pub fn recent_clips(conn: &Connection, limit: usize) -> Result<Vec<ClipHit>> {
     Ok(rows)
 }
 
+/// The text of the last `n` things copied, newest first (for `diff`).
+pub fn latest_texts(conn: &Connection, n: usize) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT content FROM clips WHERE kind = 'text' ORDER BY last_copied DESC, id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([n as i64], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 // ---------- image clips ----------
 
 /// Longest edge stored for an image clip; larger captures downscale.

@@ -12,6 +12,7 @@ pub mod embed;
 pub mod files;
 pub mod filters;
 pub mod github;
+pub mod handy;
 pub mod history;
 pub mod launch;
 pub mod ocr;

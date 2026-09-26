@@ -26,6 +26,9 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
+// countdowns started in the demo (`timer 25m …`), for `timer` to list
+const demoTimers: { id: number; label: string; ends_at: number }[] = [];
+
 const folders = [
   { id: 1, path: "C:\\Users\\dfine\\Documents\\projects", file_count: 1284 },
   { id: 2, path: "C:\\Users\\dfine\\Pictures\\screenshots", file_count: 411 },
@@ -411,6 +414,10 @@ mockIPC((cmd, args) => {
         return { value: `${q.toLowerCase()}  ·  rgb(${r}, ${g}, ${b})`, alt: "color", swatch: q.toLowerCase() };
       }
       if (q === "uuid") return { value: "3f2c9a1e-8b4d-4e7a-9c21-d5f0a6b83e14", alt: "UUID v4", swatch: null };
+      if (q === "大写 1234.56") return { value: "壹仟贰佰叁拾肆元伍角陆分", alt: "Chinese capitals" };
+      if (q === "py 重庆") return { value: "chóng qìng", alt: "pinyin" };
+      if (q === "sys") return { value: "CPU 12% · memory 9.8 of 32 GB · C: 120 GB free of 476 GB", alt: "system" };
+      if (q === "timer 25m 开会") return { value: "开会", alt: "timer 25:00", timer: 1500 };
       if (q.startsWith("qr ")) {
         // a stand-in picture (a 2x2 checker PNG), shown pixelated like a real code
         const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAAAAABX3VL4AAAADklEQVR4nGNgYGBgAAAABQABXvMqGgAAAABJRU5ErkJggg==";
@@ -504,6 +511,34 @@ mockIPC((cmd, args) => {
     case "reveal_app":
     case "run_app_as_admin":
       return null;
+    case "recent_downloads": {
+      const t = Math.floor(Date.now() / 1000);
+      return [
+        { kind: "file", id: -1, path: "C:\\Users\\me\\Downloads\\invoice-2026-09.pdf", name: "invoice-2026-09.pdf", ext: "pdf", size: 184_000, mtime: t - 120, score: 0, thumb: null, snippet: null },
+        { kind: "file", id: -2, path: "C:\\Users\\me\\Downloads\\magpie_0.4.5_x64-setup.exe", name: "magpie_0.4.5_x64-setup.exe", ext: "exe", size: 9_400_000, mtime: t - 3600, score: 0, thumb: null, snippet: null },
+      ];
+    }
+    case "clip_diff":
+      return {
+        value: " host: localhost\n-port: 3000\n+port: 8080\n timeout: 30",
+        alt: "diff · 1 removed, 1 added",
+        diff: [[" ", "host: localhost"], ["-", "port: 3000"], ["+", "port: 8080"], [" ", "timeout: 30"]],
+      };
+    case "list_timers":
+      return demoTimers.map((x) => ({ ...x }));
+    case "start_timer": {
+      const a = args as { seconds: number; label: string };
+      demoTimers.push({ id: demoTimers.length + 1, label: a.label, ends_at: Date.now() + a.seconds * 1000 });
+      return demoTimers.length;
+    }
+    case "cancel_timer": {
+      const id = (args as { id: number }).id;
+      const i = demoTimers.findIndex((x) => x.id === id);
+      if (i >= 0) demoTimers.splice(i, 1);
+      return i >= 0;
+    }
+    case "save_clip_image":
+      return 48_000;
     case "installed_editors":
       return [{ name: "Visual Studio Code", target: "code" }, { name: "Cursor", target: "cursor" }];
     case "list_port_processes":

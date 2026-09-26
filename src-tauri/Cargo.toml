@@ -38,6 +38,7 @@ getrandom = "0.3"
 tokio-util = "0.7"
 notify = "8.2.0"
 tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2.4.0"
 
 [dev-dependencies]
 # the MCP integration test talks to the server with rmcp's own client

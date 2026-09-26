@@ -1329,17 +1329,106 @@ pub fn recent_files(conn: &Connection, limit: usize) -> Result<Vec<FileHit>> {
     Ok(rows)
 }
 
-/// Is `path` inside one of the registered folders? Guard for the open command.
+/// Is `path` inside one of the registered folders, or the Downloads folder
+/// (`dl` lists it)? Guard for every command that opens, copies or moves a
+/// file the palette names. A `..` anywhere is refused: `C:\indexed\..\x`
+/// starts with the folder yet points outside it.
 pub fn path_is_allowed(conn: &Connection, path: &str) -> Result<bool> {
-    let folders = list_folders(conn)?;
     let p = Path::new(path);
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Ok(false);
+    }
+    if downloads_dir().is_some_and(|d| p.starts_with(&d)) {
+        return Ok(true);
+    }
+    let folders = list_folders(conn)?;
     Ok(folders.iter().any(|f| p.starts_with(&f.path)))
+}
+
+/// The user's Downloads folder (where the OS says it is, moved or
+/// localized). `MAGPIE_TEST_DOWNLOADS_DIR` stands in for it in tests.
+pub fn downloads_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("MAGPIE_TEST_DOWNLOADS_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    dirs::download_dir()
+}
+
+/// A file straight from a folder listing, for `dl`.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentFile {
+    pub path: String,
+    pub name: String,
+    pub ext: Option<String>,
+    pub size: u64,
+    pub mtime: i64,
+}
+
+/// The newest files directly in `dir` (not its subfolders), newest first.
+/// Hidden files and downloads still in progress (.crdownload, .part,
+/// .download, .tmp) are left out.
+pub fn newest_in(dir: &Path, limit: usize) -> Vec<RecentFile> {
+    const PARTIAL: &[&str] = &["crdownload", "part", "partial", "download", "tmp", "opdownload"];
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<RecentFile> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let meta = e.metadata().ok()?;
+            if !meta.is_file() || name.starts_with('.') || name.eq_ignore_ascii_case("desktop.ini") {
+                return None;
+            }
+            let ext = Path::new(&name).extension().map(|x| x.to_string_lossy().to_lowercase());
+            if ext.as_deref().is_some_and(|x| PARTIAL.contains(&x)) {
+                return None;
+            }
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            Some(RecentFile { path: e.path().to_string_lossy().to_string(), name, ext, size: meta.len(), mtime })
+        })
+        .collect();
+    out.sort_by(|a, b| b.mtime.cmp(&a.mtime).then_with(|| a.name.cmp(&b.name)));
+    out.truncate(limit);
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn newest_in_lists_the_newest_finished_files() {
+        let dir = std::env::temp_dir().join(format!("magpie-recent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let now = std::time::SystemTime::now();
+        for (i, name) in ["old.pdf", "mid.zip", "new.png", "big.iso.crdownload", ".hidden", "sub/inner.txt"].iter().enumerate() {
+            let p = dir.join(name);
+            std::fs::write(&p, "x").unwrap();
+            let f = std::fs::File::options().write(true).open(&p).unwrap();
+            f.set_modified(now - std::time::Duration::from_secs(1000 - i as u64 * 100)).unwrap();
+        }
+        let names: Vec<String> = newest_in(&dir, 10).into_iter().map(|f| f.name).collect();
+        assert_eq!(names, vec!["new.png", "mid.zip", "old.pdf"]);
+        assert_eq!(newest_in(&dir, 2).len(), 2);
+        assert!(newest_in(&dir.join("nope"), 5).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parent_dir_escapes_are_refused() {
+        let conn = crate::db::open_in_memory().unwrap();
+        let root = if cfg!(windows) { r"C:\work" } else { "/work" };
+        conn.execute("INSERT INTO folders(id, path) VALUES (1, ?1)", [root]).unwrap();
+        let inside = Path::new(root).join("a.txt");
+        let escape = Path::new(root).join("..").join("etc").join("passwd");
+        assert!(path_is_allowed(&conn, inside.to_str().unwrap()).unwrap());
+        assert!(!path_is_allowed(&conn, escape.to_str().unwrap()).unwrap(), "{}", escape.display());
+    }
     /// A real move to the trash, run only on Linux (CI): on a desktop it
     /// would put a file in the user's own Recycle Bin or Trash.
     #[cfg(target_os = "linux")]

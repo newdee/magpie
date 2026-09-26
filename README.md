@@ -129,13 +129,32 @@ vaguely remember (or drop in an image), hit Enter.
 - **Your local IP**: `ip` shows this machine's address on the local network,
   real adapters before virtual ones (WSL, Docker). Read from the adapters, so
   it works offline and sends nothing.
+- **Newest downloads**: `dl` lists the newest files in your Downloads folder,
+  without indexing it; `Enter`, `Ctrl+K` and the rest work as on any file.
+  Downloads still in progress are left out.
+- **Chinese capitals and pinyin**: `大写 1234.56` gives 壹仟贰佰叁拾肆元伍角陆分
+  for invoices and contracts. `py 重庆` gives *chóng qìng*, with tones; common
+  words read differently from their characters (银行, 长大) come out right,
+  other polyphonic characters get their most common reading.
+- **Width and escapes**: `半角` and `全角` convert letters, digits and symbols
+  (the marks of a Chinese sentence stay wide); `unicode` and `html` escape or
+  unescape. Alone they work on the clipboard.
+- **QR codes both ways**: with an image on the clipboard, `qr` reads the code
+  in it; with text, it draws one.
+- **Compare two copies**: `diff` shows how the last two texts you copied
+  differ, line by line. It needs the clipboard history.
+- **Timers**: `timer 25m standup` starts a countdown and a notification comes
+  when it ends. `timer` alone lists the running ones; `Enter` stops them.
+- **System at a glance, and chance**: `sys` shows CPU load, memory and free disk
+  space. `random 1 100`, `pick pizza tacos ramen`, `dice` and `coin`.
 - **An action menu on every row**: `Ctrl+K` (`⌘K` on macOS) lists what the
   selected result can do: open with the default app or show in its folder,
   copy the path or the file, open a file's folder in a terminal or the file in
   an installed editor (VS Code, Cursor, Trae, Zed, Sublime Text and a few more), move
   a file to the Recycle Bin or Trash (a second `Enter` confirms), run an app as
   administrator (Windows), copy a repo's clone command or a page as a Markdown
-  link, pin or delete a clip, end a process.
+  link, save an image from the clipboard history as a file, pin or delete a
+  clip, end a process.
 - **PDF to Markdown**: on a PDF, `Ctrl+K` offers *Copy as Markdown* and
   *Save as Markdown…* (next to the PDF by default). Every page is converted
   in order, headings, lists and tables included; scanned pages are read by

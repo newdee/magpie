@@ -1308,6 +1308,25 @@ kbd {
   margin-right: 3px;
 }
 
+/* diff: the last two copies, line by line */
+.calc-diff {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: hidden;
+}
+.calc-diff .add {
+  color: #5fbf73;
+}
+.calc-diff .removed {
+  color: #e0686b;
+}
+
 /* modifier and key apart: "⌘ K", "Ctrl K" (#5) */
 kbd.keys {
   display: inline-flex;

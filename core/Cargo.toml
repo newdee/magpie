@@ -43,7 +43,7 @@ ffmpeg-sidecar = "2"
 # time zones for the calculator (tz.rs)
 chrono-tz = "0.10.4"
 # running processes for `kill <name>` (procs.rs)
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "disk"] }
 serde-transcode = "1.1.1"
 md-5 = "0.11.0"
 sha1 = "0.11.0"
@@ -52,6 +52,9 @@ qrcode = { version = "0.14.1", default-features = false, features = ["image"] }
 listeners = "0.6.1"
 if-addrs = "0.15.0"
 trash = "5.2.9"
+similar = "3.2.0"
+rqrr = "0.11.0"
+dirs = "7.0.0"
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]

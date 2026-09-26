@@ -72,6 +72,9 @@ struct AppState {
     /// The stamp (`apps::icon_stamp`) each cached icon was read at, so a
     /// search can tell cheaply whether an app on screen changed since.
     icon_stamps: Arc<StdMutex<std::collections::HashMap<String, i64>>>,
+    /// `timer 25m …` countdowns that have not fired yet
+    timers: Arc<StdMutex<Vec<TimerEntry>>>,
+    timer_seq: Arc<AtomicU64>,
     /// Version string of a pending update ("" = none) — drives the tray
     /// badge and the extra tray menu item.
     update_badge: Arc<StdMutex<String>>,
@@ -3666,7 +3669,7 @@ fn calc_query(query: String) -> Option<serde_json::Value> {
         return Some(json!({ "value": r.value, "alt": r.alt }));
     }
     magpie_core::transform::transform(&query).map(|t| {
-        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image })
+        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image, "timer": t.timer })
     })
 }
 
@@ -3810,6 +3813,130 @@ async fn trash_path(state: State<'_, AppState>, path: String, confirmed: bool) -
     let _ = files::forget_path(&conn, &path);
     Ok(String::new())
 }
+/// `diff` alone: the last two texts copied, line by line (the older one is
+/// "before"). Needs the clipboard history, which keeps them.
+#[tauri::command]
+async fn clip_diff(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    if !state.clip_watch.load(Ordering::SeqCst) {
+        return Ok(json!({ "value": "Turn on clipboard history to compare the last two things you copied", "alt": "diff", "error": true }));
+    }
+    let texts = {
+        let conn = state.db.lock().await;
+        clips::latest_texts(&conn, 2).map_err(err_str)?
+    };
+    let [new, old] = texts.as_slice() else {
+        return Ok(json!({ "value": "Copy two pieces of text first; diff compares the last two", "alt": "diff", "error": true }));
+    };
+    let lines = magpie_core::handy::line_diff(old, new);
+    let added = lines.iter().filter(|(t, _)| *t == '+').count();
+    let removed = lines.iter().filter(|(t, _)| *t == '-').count();
+    if added + removed == 0 {
+        return Ok(json!({ "value": "The last two copies are the same", "alt": "diff", "error": true }));
+    }
+    let unified: String = lines.iter().map(|(t, l)| format!("{t}{l}")).collect::<Vec<_>>().join("\n");
+    Ok(json!({
+        "value": unified,
+        "alt": format!("diff · {removed} removed, {added} added"),
+        "diff": lines.iter().map(|(t, l)| json!([t.to_string(), l])).collect::<Vec<_>>(),
+    }))
+}
+
+/// `dl`: the newest files in the Downloads folder, shaped like file hits.
+/// Negative ids keep them apart from indexed files.
+#[tauri::command(async)]
+fn recent_downloads() -> Vec<serde_json::Value> {
+    let Some(dir) = files::downloads_dir() else { return Vec::new() };
+    files::newest_in(&dir, 20)
+        .into_iter()
+        .enumerate()
+        .map(|(i, f)| {
+            json!({
+                "kind": "file", "id": -(i as i64) - 1, "path": f.path, "name": f.name, "ext": f.ext,
+                "size": f.size, "mtime": f.mtime, "score": 0.0, "thumb": null, "snippet": null,
+            })
+        })
+        .collect()
+}
+
+/// Save an image from the clipboard history to a file, as stored (JPEG, up
+/// to 1600 px on the long edge).
+#[tauri::command]
+async fn save_clip_image(state: State<'_, AppState>, clip_id: i64, dest: String) -> Result<u64, String> {
+    let lower = dest.to_lowercase();
+    if !(lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
+        return Err("an image clip is saved as .jpg".into());
+    }
+    let jpeg = {
+        let conn = state.db.lock().await;
+        clips::image_clip_jpeg(&conn, clip_id).map_err(err_str)?
+    }
+    .ok_or("that clip is not an image")?;
+    std::fs::write(&dest, &jpeg).map_err(err_str)?;
+    Ok(jpeg.len() as u64)
+}
+
+/// A `timer 25m` countdown that has not fired yet.
+struct TimerEntry {
+    id: u64,
+    label: String,
+    /// unix milliseconds
+    ends_at: i64,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// Start a countdown; when it ends a system notification says `label`.
+/// `MAGPIE_NOTIFY_DRYRUN` (tests) skips the notification, the event still
+/// fires. The label is the user's own words and is never logged.
+#[tauri::command]
+fn start_timer(app: AppHandle, state: State<'_, AppState>, seconds: u64, label: String) -> Result<u64, String> {
+    if seconds == 0 || seconds > 86_400 {
+        return Err("a timer runs from one second to 24 hours".into());
+    }
+    let id = state.timer_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let ends_at = now_ms + seconds as i64 * 1000;
+    let (app2, label2) = (app.clone(), label.clone());
+    let task = tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+        app2.state::<AppState>().timers.lock().unwrap().retain(|t| t.id != id);
+        log::info!("timer {id} done");
+        let _ = app2.emit("timer-fired", json!({ "id": id, "label": label2 }));
+        if std::env::var_os("MAGPIE_NOTIFY_DRYRUN").is_none() {
+            use tauri_plugin_notification::NotificationExt;
+            let _ = app2.notification().builder().title("magpie").body(&label2).show();
+        }
+    });
+    state.timers.lock().unwrap().push(TimerEntry { id, label, ends_at, task });
+    Ok(id)
+}
+
+/// Countdowns still running, soonest first.
+#[tauri::command]
+fn list_timers(state: State<'_, AppState>) -> Vec<serde_json::Value> {
+    let mut v: Vec<(i64, serde_json::Value)> = state
+        .timers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|t| (t.ends_at, json!({ "id": t.id, "label": t.label, "ends_at": t.ends_at })))
+        .collect();
+    v.sort_by_key(|(e, _)| *e);
+    v.into_iter().map(|(_, j)| j).collect()
+}
+
+/// Stop a countdown before it fires. Returns whether one was stopped.
+#[tauri::command]
+fn cancel_timer(state: State<'_, AppState>, id: u64) -> bool {
+    let mut timers = state.timers.lock().unwrap();
+    match timers.iter().position(|t| t.id == id) {
+        Some(i) => {
+            timers.remove(i).task.abort();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Put a PNG (base64, e.g. a `qr` code) on the clipboard as an image.
 #[tauri::command]
 async fn copy_png(png_b64: String) -> Result<(), String> {
@@ -4515,6 +4642,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -4592,6 +4720,8 @@ pub fn run() {
                 apps: Arc::new(StdMutex::new(Vec::new())),
                 app_icons: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 icon_stamps: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+                timers: Arc::new(StdMutex::new(Vec::new())),
+                timer_seq: Arc::new(AtomicU64::new(0)),
                 update_badge: Arc::new(StdMutex::new(String::new())),
                 ocr: Arc::new(StdMutex::new(None)),
                 ocr_status: Arc::new(StdMutex::new(String::new())),
@@ -4835,7 +4965,13 @@ pub fn run() {
             open_in_terminal,
             open_in_editor,
             trash_path,
-            cached_app_icons
+            cached_app_icons,
+            clip_diff,
+            recent_downloads,
+            save_clip_image,
+            start_timer,
+            list_timers,
+            cancel_timer
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
