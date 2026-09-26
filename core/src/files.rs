@@ -152,6 +152,31 @@ fn dunce_canonicalize(p: &Path) -> Result<String> {
     Ok(s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s))
 }
 
+/// Move a file to the OS trash (Recycle Bin, Finder's Trash, the freedesktop
+/// trash), where it can still be restored.
+pub fn move_to_trash(path: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let result = {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        // the crate's default asks Finder to do it, which makes macOS ask the
+        // user for permission to control Finder the first time; the system
+        // call needs no permission (Finder's "Put Back" is what it gives up)
+        let mut ctx = trash::TrashContext::new();
+        ctx.set_delete_method(DeleteMethod::NsFileManager);
+        ctx.delete(path)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let result = trash::delete(path);
+    result.map_err(|e| anyhow::anyhow!("could not move it to the trash: {e}"))
+}
+
+/// Drop one file from the index (its chunks and vectors follow by FK), after
+/// it was moved to the trash from the palette; the watcher would find out a
+/// moment later, this makes the row go away at once. Returns rows removed.
+pub fn forget_path(conn: &Connection, path: &str) -> Result<usize> {
+    Ok(conn.execute("DELETE FROM files WHERE path = ?1", [path])?)
+}
+
 pub fn remove_folder(conn: &Connection, folder_id: i64) -> Result<()> {
     // explicit deletes so the FTS sync triggers fire (FK cascade is not relied on)
     conn.execute("DELETE FROM files WHERE folder_id = ?1", [folder_id])?;
@@ -1314,7 +1339,34 @@ pub fn path_is_allowed(conn: &Connection, path: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::open_in_memory;
+
+    /// A real move to the trash, run only on Linux (CI): on a desktop it
+    /// would put a file in the user's own Recycle Bin or Trash.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn move_to_trash_takes_the_file_away() {
+        let dir = std::env::temp_dir().join(format!("magpie-trash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("to be trashed.txt");
+        std::fs::write(&f, "x").unwrap();
+        move_to_trash(f.to_str().unwrap()).unwrap();
+        assert!(!f.exists());
+        assert!(move_to_trash(f.to_str().unwrap()).is_err(), "gone already");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn forget_path_drops_just_that_row() {
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute("INSERT INTO folders(id, path) VALUES (1, '/w')", []).unwrap();
+        for p in ["/w/a.txt", "/w/b.txt"] {
+            conn.execute("INSERT INTO files(folder_id, path, name, ext, size, mtime) VALUES (1, ?1, 'x', 'txt', 1, 1)", [p]).unwrap();
+        }
+        assert_eq!(forget_path(&conn, "/w/a.txt").unwrap(), 1);
+        assert_eq!(forget_path(&conn, "/w/a.txt").unwrap(), 0);
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 1);
+    }    use crate::db::open_in_memory;
 
     #[test]
     fn substring_snippet_is_char_boundary_safe_and_marked() {

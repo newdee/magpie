@@ -49,6 +49,9 @@ md-5 = "0.11.0"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 qrcode = { version = "0.14.1", default-features = false, features = ["image"] }
+listeners = "0.6.1"
+if-addrs = "0.15.0"
+trash = "5.2.9"
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]

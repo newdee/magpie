@@ -120,13 +120,22 @@ vaguely remember (or drop in an image), hit Enter.
   trash, toggle dark mode, by name in either language (`lock`, `锁屏`,
   `sp`). Restart, shut down and emptying the trash take a second `Enter`.
 - **End a process**: `kill chrome` lists running processes by name with
-  their memory; `Enter` twice ends the selected one. magpie and the system's
-  own processes are never listed.
+  their memory; `Enter` twice ends the selected one. `port 3000` (or
+  `kill :3000`) lists what is listening on that port instead. magpie and the
+  system's own processes are never listed.
+- **Text in a copied image**: `ocr` alone reads the text in the image on your
+  clipboard, a screenshot you just took for instance; `Enter` copies it. Uses
+  the OCR engine, so switch on *Image text (OCR)* in settings first.
+- **Your local IP**: `ip` shows this machine's address on the local network,
+  real adapters before virtual ones (WSL, Docker). Read from the adapters, so
+  it works offline and sends nothing.
 - **An action menu on every row**: `Ctrl+K` (`⌘K` on macOS) lists what the
   selected result can do: open with the default app or show in its folder,
-  copy the path or the file, run an app as administrator (Windows), copy a
-  repo's clone command or a page as a Markdown link, pin or delete a clip,
-  end a process.
+  copy the path or the file, open a file's folder in a terminal or the file in
+  an installed editor (VS Code, Cursor, Trae, Zed, Sublime Text and a few more), move
+  a file to the Recycle Bin or Trash (a second `Enter` confirms), run an app as
+  administrator (Windows), copy a repo's clone command or a page as a Markdown
+  link, pin or delete a clip, end a process.
 - **PDF to Markdown**: on a PDF, `Ctrl+K` offers *Copy as Markdown* and
   *Save as Markdown…* (next to the PDF by default). Every page is converted
   in order, headings, lists and tables included; scanned pages are read by
@@ -159,8 +168,9 @@ vaguely remember (or drop in an image), hit Enter.
 - **Bang-style web shortcuts**: `gh magpie` searches GitHub, `g …` Google,
   `bd …` Baidu. Prefixes are editable rules in settings (`prefix = URL
   with {q}`).
-- **Emoji lookup**: type `:` then a keyword (`:fire`, `:火`) and click or
-  `Enter` to copy.
+- **Emoji and symbol lookup**: type `:` then a keyword (`:fire`, `:火`) and
+  click or `Enter` to copy. Symbols that are not emoji are there too, such as
+  `:arrow` →, `:乘` ×, `:rmb` ¥, `:cmd` ⌘; `:sym` lists them all.
 - **Every row has a copy**: `Ctrl+C` copies what identifies the row, a
   file's path, a repo's or page's URL, a clip's text. `Ctrl+Shift+C` puts a
   file itself on the clipboard, ready to paste into chat or mail as an

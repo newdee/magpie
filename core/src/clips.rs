@@ -465,6 +465,24 @@ pub fn clipboard_text() -> Result<String> {
         .map_err(|e| anyhow::anyhow!("clipboard: {e}"))
 }
 
+/// The image on the clipboard, for `ocr`. `MAGPIE_TEST_CLIPBOARD_IMAGE`
+/// (tests) names an image file to read instead, so a test never touches
+/// the real clipboard.
+pub fn clipboard_image() -> Result<image::DynamicImage> {
+    if let Ok(path) = std::env::var("MAGPIE_TEST_CLIPBOARD_IMAGE") {
+        return image::open(&path).map_err(|e| anyhow::anyhow!("test image {path}: {e}"));
+    }
+    if sensitive_clip_present() {
+        return Err(anyhow::anyhow!("the clipboard holds something marked confidential"));
+    }
+    let img = arboard::Clipboard::new()
+        .and_then(|mut b| b.get_image())
+        .map_err(|_| anyhow::anyhow!("no image on the clipboard"))?;
+    let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+        .ok_or_else(|| anyhow::anyhow!("the clipboard image could not be read"))?;
+    Ok(image::DynamicImage::ImageRgba8(rgba))
+}
+
 /// Put text back on the clipboard (Enter on a clip hit).
 pub fn set_clipboard_text(text: &str) -> Result<()> {
     arboard::Clipboard::new()

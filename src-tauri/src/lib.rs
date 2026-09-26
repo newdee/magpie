@@ -1266,7 +1266,7 @@ fn search_apps(
     query: String,
     limit: Option<usize>,
     pinyin: Option<bool>,
-) -> Result<Vec<magpie_core::apps::AppEntry>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     let started = std::time::Instant::now();
     // matched under the lock, which is released before the database is
     // opened: an app rescan must not wait on it
@@ -1293,7 +1293,20 @@ fn search_apps(
     if ms > 50 {
         log::info!("slow app search: {ms} ms");
     }
-    Ok(hits)
+    // an icon already in memory rides along, so the row paints with it in
+    // its first frame instead of asking for it after (`icon` null: known to
+    // have none; absent: not read yet, the row asks)
+    let icons = state.app_icons.lock().unwrap();
+    Ok(hits
+        .into_iter()
+        .map(|h| {
+            let mut v = serde_json::to_value(&h).unwrap_or_default();
+            if let Some(icon) = icons.get(&h.target) {
+                v["icon"] = json!(icon);
+            }
+            v
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -2226,7 +2239,7 @@ async fn browser_icon(
 ) -> Result<Option<String>, String> {
     let target = {
         let apps = state.apps.lock().unwrap();
-        magpie_core::apps::browser_app(&apps, &browser).map(|a| a.target.clone())
+        magpie_core::apps::app_named(&apps, &browser).map(|a| a.target.clone())
     };
     match target {
         Some(target) => app_icon(app, state, target).await,
@@ -3660,6 +3673,146 @@ fn calc_query(query: String) -> Option<serde_json::Value> {
     })
 }
 
+/// `ocr` alone in the box: the text in the image on the clipboard, shaped
+/// like a calculator hit (Enter copies it). The OCR engine is the one the
+/// user switched on in settings; when it is off, or no image is on the
+/// clipboard, the hit says so instead.
+#[tauri::command]
+async fn ocr_clipboard(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let status = state.ocr_status.lock().unwrap().clone();
+    if state.ocr.lock().unwrap().is_none() {
+        let why = if status.is_empty() || status.starts_with("failed") {
+            "Turn on Image text (OCR) in settings to read text from images"
+        } else {
+            "The OCR model is still getting ready"
+        };
+        return Ok(json!({ "value": why, "alt": "ocr", "error": true }));
+    }
+    let ocr = state.ocr.clone();
+    let text = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let img = clips::clipboard_image()?;
+        let mut guard = ocr.lock().unwrap();
+        let engine = guard.as_mut().ok_or_else(|| anyhow::anyhow!("OCR was switched off"))?;
+        engine.extract_text(&img)
+    })
+    .await
+    .map_err(err_str)?;
+    Ok(match text {
+        Ok(t) if !t.trim().is_empty() => {
+            let lines = t.trim().lines().count();
+            json!({ "value": t.trim(), "alt": format!("text in the copied image · {lines} lines") })
+        }
+        Ok(_) => json!({ "value": "No text found in the copied image", "alt": "ocr", "error": true }),
+        Err(e) => json!({ "value": capitalize(&e.to_string()), "alt": "ocr", "error": true }),
+    })
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+/// `port 3000` / `kill :3000`: the processes listening on that port.
+#[tauri::command]
+async fn list_port_processes(port: u16) -> Result<Vec<magpie_core::procs::ProcHit>, String> {
+    tokio::task::spawn_blocking(move || magpie_core::procs::on_port(port))
+        .await
+        .map_err(err_str)?
+        .map_err(err_str)
+}
+
+/// Editors the action menu offers "Open in …" for, as their apps are named.
+const EDITORS: &[&str] = &["Visual Studio Code", "Cursor", "Trae", "Zed", "Sublime Text", "VSCodium", "Windsurf"];
+
+/// The editors from [`EDITORS`] that are installed: (name, app target).
+#[tauri::command]
+fn installed_editors(state: State<'_, AppState>) -> Vec<serde_json::Value> {
+    let apps = state.apps.lock().unwrap();
+    EDITORS
+        .iter()
+        .filter_map(|name| magpie_core::apps::app_named(&apps, name))
+        .map(|a| json!({ "name": a.name, "target": a.target }))
+        .collect()
+}
+
+/// Tests set `MAGPIE_OPEN_DRYRUN`: the openers below report what they would
+/// run or remove, and nothing appears on screen or moves to the trash.
+fn open_dry_run() -> bool {
+    std::env::var_os("MAGPIE_OPEN_DRYRUN").is_some()
+}
+
+async fn require_indexed(state: &AppState, path: &str) -> Result<(), String> {
+    let allowed = {
+        let conn = state.db.lock().await;
+        files::path_is_allowed(&conn, path).map_err(err_str)?
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err("path is outside indexed folders".into())
+    }
+}
+
+fn run_launch(app: &AppHandle, l: magpie_core::launch::Launch) -> Result<String, String> {
+    if open_dry_run() {
+        return Ok(format!("dry run: {l}"));
+    }
+    magpie_core::launch::run(&l).map_err(err_str)?;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    Ok(String::new())
+}
+
+/// A terminal in the folder of an indexed file (or in the folder itself).
+#[tauri::command]
+async fn open_in_terminal(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<String, String> {
+    require_indexed(&state, &path).await?;
+    let dir = magpie_core::launch::folder_of(Path::new(&path));
+    let l = magpie_core::launch::terminal_at(&dir).map_err(err_str)?;
+    run_launch(&app, l)
+}
+
+/// An indexed file or folder in an installed editor. `editor` must be the
+/// app target of one of [`installed_editors`], so nothing else can be run.
+#[tauri::command]
+async fn open_in_editor(app: AppHandle, state: State<'_, AppState>, path: String, editor: String) -> Result<String, String> {
+    require_indexed(&state, &path).await?;
+    let known = {
+        let apps = state.apps.lock().unwrap();
+        EDITORS.iter().any(|n| magpie_core::apps::app_named(&apps, n).is_some_and(|a| a.target == editor))
+    };
+    if !known {
+        return Err("not an installed editor".into());
+    }
+    let l = magpie_core::launch::editor_with(&editor, Path::new(&path)).map_err(err_str)?;
+    run_launch(&app, l)
+}
+
+/// Move an indexed file to the trash (the palette asks twice first, and the
+/// check is repeated here so no caller can skip it); its row leaves the
+/// index at once.
+#[tauri::command]
+async fn trash_path(state: State<'_, AppState>, path: String, confirmed: bool) -> Result<String, String> {
+    if !confirmed {
+        return Err("confirm first".into());
+    }
+    require_indexed(&state, &path).await?;
+    if !Path::new(&path).exists() {
+        return Err("that file is no longer there".into());
+    }
+    if open_dry_run() {
+        return Ok(format!("dry run: trash {path}"));
+    }
+    let p = path.clone();
+    tokio::task::spawn_blocking(move || files::move_to_trash(&p))
+        .await
+        .map_err(err_str)?
+        .map_err(err_str)?;
+    let conn = state.db.lock().await;
+    let _ = files::forget_path(&conn, &path);
+    Ok(String::new())
+}
 /// Put a PNG (base64, e.g. a `qr` code) on the clipboard as an image.
 #[tauri::command]
 async fn copy_png(png_b64: String) -> Result<(), String> {
@@ -4678,7 +4831,13 @@ pub fn run() {
             copy_png,
             refresh_app_icons,
             browser_icon,
-            web_sources
+            web_sources,
+            ocr_clipboard,
+            list_port_processes,
+            installed_editors,
+            open_in_terminal,
+            open_in_editor,
+            trash_path
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

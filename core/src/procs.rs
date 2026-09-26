@@ -1,4 +1,5 @@
 //! `kill <name>` in the query box: running processes by name, and ending one.
+//! `port 3000` (or `kill :3000`): the processes listening on a port.
 //!
 //! Ending is guarded: the process must still carry the name the palette
 //! showed (a PID can be reused between listing and Enter), and magpie itself
@@ -16,6 +17,9 @@ pub struct ProcHit {
     pub memory: u64,
     /// full path of the executable, when the OS lets us read it
     pub exe: Option<String>,
+    /// for a port search: the sockets it listens on ("TCP 0.0.0.0:3000")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listen: Option<String>,
 }
 
 fn snapshot() -> System {
@@ -54,12 +58,67 @@ pub fn find(query: &str, limit: usize) -> Vec<ProcHit> {
                     name,
                     memory: p.memory(),
                     exe: p.exe().map(|e| e.to_string_lossy().into_owned()),
+                    listen: None,
                 },
             ))
         })
         .collect();
     hits.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.memory.cmp(&a.1.memory)).then(a.1.pid.cmp(&b.1.pid)));
     hits.into_iter().take(limit).map(|(_, h)| h).collect()
+}
+
+/// The processes listening on `port`: TCP sockets in the listening state and
+/// UDP sockets bound to it, one row per process however many sockets it
+/// holds (IPv4 and IPv6, several addresses). Protected processes are left
+/// out, the same as for `find`.
+pub fn on_port(port: u16) -> Result<Vec<ProcHit>> {
+    let me = std::process::id();
+    let sys = snapshot();
+    let mut hits: Vec<ProcHit> = listening(port)?
+        .into_iter()
+        .filter_map(|(pid, fallback_name, sockets)| {
+            let p = sys.process(Pid::from_u32(pid));
+            let name = p.map(|p| p.name().to_string_lossy().into_owned()).unwrap_or(fallback_name);
+            if protected(pid, &name.to_lowercase(), me) {
+                return None;
+            }
+            Some(ProcHit {
+                pid,
+                name,
+                memory: p.map(|p| p.memory()).unwrap_or(0),
+                exe: p.and_then(|p| p.exe()).map(|e| e.to_string_lossy().into_owned()),
+                listen: Some(sockets.join(", ")),
+            })
+        })
+        .collect();
+    hits.sort_by(|a, b| b.memory.cmp(&a.memory).then(a.pid.cmp(&b.pid)));
+    Ok(hits)
+}
+
+/// Every process with a socket listening on `port`, unfiltered: (pid, name
+/// the socket table gave, sockets as "TCP 0.0.0.0:3000"), in PID order.
+fn listening(port: u16) -> Result<Vec<(u32, String, Vec<String>)>> {
+    use listeners::{Protocol, SocketState};
+    let mut by_pid: std::collections::BTreeMap<u32, (String, Vec<String>)> = Default::default();
+    for l in listeners::get_all().map_err(|e| anyhow!("could not read the socket table: {e}"))? {
+        if l.socket.port() != port {
+            continue;
+        }
+        let proto = match l.protocol {
+            Protocol::TCP if l.state == SocketState::Listen => "TCP",
+            Protocol::UDP => "UDP",
+            _ => continue, // an open connection, not a listener
+        };
+        let entry = by_pid.entry(l.process.pid).or_insert_with(|| (l.process.name.clone(), Vec::new()));
+        let socket = format!("{proto} {}", l.socket);
+        if !entry.1.contains(&socket) {
+            entry.1.push(socket);
+        }
+    }
+    Ok(by_pid.into_iter().map(|(pid, (name, mut sockets))| {
+        sockets.sort();
+        (pid, name, sockets)
+    }).collect())
 }
 
 /// Processes that are never offered or ended: magpie itself, the first
@@ -154,5 +213,26 @@ mod tests {
         let me = std::process::id();
         assert!(end(me, "anything").is_err());
         assert!(find("", 10).is_empty());
+    }
+
+    /// A port this test listens on is found, with this process behind it;
+    /// `on_port` then leaves it out, since a process never offers itself
+    /// (the same guard that keeps magpie off the list). Once closed, it is gone.
+    #[test]
+    fn finds_who_listens_on_a_port() {
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let udp = std::net::UdpSocket::bind(("127.0.0.1", port)).ok(); // same number, UDP too
+        let found = listening(port).unwrap();
+        let mine = found.iter().find(|(pid, _, _)| *pid == std::process::id());
+        let (_, _, sockets) = mine.unwrap_or_else(|| panic!("this process not found on {port}: {found:?}"));
+        assert!(sockets.contains(&format!("TCP 127.0.0.1:{port}")), "{sockets:?}");
+        if udp.is_some() {
+            assert!(sockets.contains(&format!("UDP 127.0.0.1:{port}")), "{sockets:?}");
+        }
+        assert!(on_port(port).unwrap().iter().all(|h| h.pid != std::process::id()), "itself is protected");
+        drop(tcp);
+        drop(udp);
+        assert!(listening(port).unwrap().iter().all(|(pid, _, _)| *pid != std::process::id()), "closed");
     }
 }

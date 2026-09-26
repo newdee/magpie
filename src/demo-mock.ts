@@ -504,6 +504,18 @@ mockIPC((cmd, args) => {
     case "reveal_app":
     case "run_app_as_admin":
       return null;
+    case "installed_editors":
+      return [{ name: "Visual Studio Code", target: "code" }, { name: "Cursor", target: "cursor" }];
+    case "list_port_processes":
+      return (args as { port?: number })?.port === 3000
+        ? [{ pid: 18244, name: "node.exe", memory: 142_000_000, exe: "C:\\Program Files\\nodejs\\node.exe", listen: "TCP 0.0.0.0:3000, TCP [::]:3000" }]
+        : [];
+    case "ocr_clipboard":
+      return { value: "Error: ENOENT: no such file or directory, open 'config.yaml'\n    at Object.openSync (node:fs:596:3)", alt: "ocr" };
+    case "open_in_terminal":
+    case "open_in_editor":
+    case "trash_path":
+      return "";
     case "web_sources":
       return [
         { browser: "chrome", bookmarks: 86, history: 1204 },

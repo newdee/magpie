@@ -390,13 +390,14 @@ fn read_strings(path: &std::path::Path) -> Option<plist::Dictionary> {
     (!d.is_empty()).then_some(d)
 }
 
-/// The installed app a browser's hits came from, by the name bookmark and
-/// history indexing gave it ("chrome", "librewolf", "opera gx"): the app
+/// The installed app with this name: a browser by the name bookmark and
+/// history indexing gave it ("chrome", "librewolf", "opera gx"), or an
+/// editor ("Visual Studio Code", "Cursor"). The app
 /// named exactly that (or "<name> Browser"), else one ending in it ("Google
 /// Chrome", "Microsoft Edge"), else one starting with it ("Brave Browser");
 /// the shortest name wins a tie, so "Firefox" beats "Firefox Developer
 /// Edition" and "Google Chrome" beats "Chrome Remote Desktop".
-pub fn browser_app<'a>(apps: &'a [AppEntry], browser: &str) -> Option<&'a AppEntry> {
+pub fn app_named<'a>(apps: &'a [AppEntry], browser: &str) -> Option<&'a AppEntry> {
     let norm = |s: &str| {
         s.to_lowercase()
             .chars()
@@ -983,6 +984,12 @@ struct DesktopEntry {
     names: Vec<(String, String)>,
 }
 
+/// The Exec= line of a Linux `.desktop` file, field codes (%f, %U …) left in.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn desktop_exec(path: &std::path::Path) -> Option<String> {
+    parse_desktop(path).map(|d| d.exec)
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 fn parse_desktop(path: &std::path::Path) -> Option<DesktopEntry> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -1053,7 +1060,7 @@ mod tests {
             app("Archive Utility"),
             app("Helium"),
         ];
-        let got = |b: &str| browser_app(&apps, b).map(|a| a.name.as_str());
+        let got = |b: &str| app_named(&apps, b).map(|a| a.name.as_str());
         assert_eq!(got("chrome"), Some("Google Chrome"));
         assert_eq!(got("edge"), Some("Microsoft Edge"));
         assert_eq!(got("brave"), Some("Brave Browser"));

@@ -128,6 +128,10 @@ export const TIPS: string[] = [
   "json alone pretty-prints your clipboard — upper, lower, slug, lines, count too",
   "json min squeezes JSON onto one line, json sort orders its keys; bad JSON shows where it breaks",
   "md5, sha1 or sha256 hash your clipboard, or the text you type after them",
+  "After a screenshot, type ocr and the text on it is ready to copy",
+  "port 3000 shows what is listening on it; Enter twice ends it",
+  "Ctrl+K on a file opens its folder in a terminal, or the file in your editor",
+  ":sym lists symbols like → × ¥ ⌘; ip shows your local network address",
   "jwt decodes the token on your clipboard and tells you when it expires — nothing leaves your machine",
   "snake, kebab, camel, pascal, title: snake MyMacCleaner gives my_mac_cleaner",
   "qr turns your clipboard into a QR code; Enter copies it as an image",
@@ -182,22 +186,66 @@ const ZH: Record<string, string> = {
 
 const ALL: [string, string[]][] = Object.entries(emojilib as Record<string, string[]>);
 
-/** Search by English keywords (emojilib) or the Chinese layer. Empty query
- * returns a popular starter set. */
+// Symbols that are not emoji but get typed all the time, with English and
+// Chinese keywords (the first English one is the name). `:sym` / `:符号`
+// lists them all; otherwise they rank after emoji at the same match level.
+const SYMBOLS: [string, string, string][] = [
+  ["×", "multiply times x", "乘 乘号"], ["÷", "divide", "除 除号"], ["±", "plus_minus", "正负"],
+  ["≈", "approx almost", "约等于"], ["≠", "not_equal", "不等于"], ["≤", "less_equal", "小于等于"],
+  ["≥", "greater_equal", "大于等于"], ["∞", "infinity", "无穷"], ["√", "sqrt root", "根号"],
+  ["∑", "sum sigma", "求和"], ["π", "pi", "圆周率"], ["°", "degree", "度"],
+  ["℃", "celsius", "摄氏度"], ["℉", "fahrenheit", "华氏度"], ["‰", "permille", "千分号"],
+  ["→", "arrow right", "右箭头 箭头"], ["←", "arrow left", "左箭头 箭头"], ["↑", "arrow up", "上箭头 箭头"],
+  ["↓", "arrow down", "下箭头 箭头"], ["↔", "arrow both", "双向箭头 箭头"], ["⇒", "implies double_arrow", "推出"],
+  ["⇔", "iff equivalent", "等价"], ["•", "bullet dot", "圆点 项目符号"], ["·", "middle_dot interpunct", "间隔号 点"],
+  ["…", "ellipsis dots", "省略号"], ["—", "em_dash dash", "破折号"], ["–", "en_dash dash", "连接号"],
+  ["¥", "yen yuan rmb cny", "人民币 元 日元"], ["€", "euro eur", "欧元"], ["£", "pound gbp", "英镑"],
+  ["¢", "cent", "分"], ["©", "copyright", "版权"], ["®", "registered", "注册"],
+  ["™", "trademark tm", "商标"], ["§", "section", "章节"], ["¶", "paragraph pilcrow", "段落"],
+  ["✓", "check tick", "对勾 勾"], ["✗", "cross wrong", "叉 错"], ["★", "star black", "实心星 星"],
+  ["☆", "star white", "空心星 星"], ["♠", "spade", "黑桃"], ["♥", "heart suit", "红桃"],
+  ["♦", "diamond", "方块"], ["♣", "club", "梅花"], ["⌘", "command cmd", "命令键"],
+  ["⌥", "option alt", "选项键"], ["⇧", "shift", "上档键"], ["⌃", "control ctrl", "控制键"],
+  ["⏎", "return enter", "回车"], ["⌫", "backspace delete", "退格"], ["⇥", "tab", "制表"],
+  ["⎋", "escape esc", "退出键"], ["「」", "corner_brackets quote", "直角引号 引号"], ["『』", "white_corner_brackets", "双直角引号 引号"],
+  ["【】", "lenticular_brackets", "方头括号 括号"], ["《》", "book_title angle_brackets", "书名号"], ["²", "squared superscript_2", "平方 上标"],
+  ["³", "cubed superscript_3", "立方 上标"], ["½", "half", "二分之一"], ["¼", "quarter", "四分之一"],
+  ["α", "alpha", "阿尔法"], ["β", "beta", "贝塔"], ["γ", "gamma", "伽马"],
+  ["Δ", "delta", "德尔塔 变化量"], ["μ", "micro mu", "微"], ["Ω", "omega ohm", "欧姆"],
+];
+const SYMBOL_ENTRIES: [string, string[], string[]][] = SYMBOLS.map(([s, en, zh]) => [s, en.split(" "), zh.split(" ")]);
+
+/** Search by English keywords (emojilib) or the Chinese layer, symbols
+ * included. Empty query returns a popular starter set. */
 export function searchEmoji(q: string, limit = 40): EmojiHit[] {
   const query = q.trim().toLowerCase();
   if (!query) {
     return Object.keys(ZH).slice(0, limit).map((e) => ({ emoji: e, name: ZH[e] }));
   }
-  // primary-name match first, then any exact keyword, then substrings
+  if (query === "sym" || query === "symbol" || query === "符号") {
+    return SYMBOL_ENTRIES.slice(0, Math.max(limit, SYMBOL_ENTRIES.length)).map(([s, en, zh]) => ({
+      emoji: s,
+      name: `${en[0].replace(/_/g, " ")} ${zh[0]}`,
+    }));
+  }
+  // primary-name match first, then any exact keyword, then substrings;
+  // emoji before symbols at each level
   const primary: EmojiHit[] = [];
   const exact: EmojiHit[] = [];
   const partial: EmojiHit[] = [];
-  for (const [emoji, keywords] of ALL) {
-    const zh = ZH[emoji];
+  const entries: [string, string[], string[] | null][] = [
+    ...ALL.map(([e, k]): [string, string[], string[] | null] => [e, k, null]),
+    ...SYMBOL_ENTRIES,
+  ];
+  for (const [emoji, keywords, symbolZh] of entries) {
+    const zh = symbolZh ? symbolZh.join(" ") : ZH[emoji];
     const zhWords = zh ? zh.split(" ") : [];
-    const hit = { emoji, name: zh ?? keywords[0].replace(/_/g, " ") };
-    if (keywords[0] === query || zhWords[0] === query) {
+    const hit = {
+      emoji,
+      name: symbolZh ? `${keywords[0].replace(/_/g, " ")} ${symbolZh[0]}` : (zh ?? keywords[0].replace(/_/g, " ")),
+    };
+    // a symbol is never a primary match: :heart should lead with ❤️, not ♥
+    if (!symbolZh && (keywords[0] === query || zhWords[0] === query)) {
       primary.push(hit);
     } else if (keywords.includes(query) || zhWords.includes(query)) {
       exact.push(hit);

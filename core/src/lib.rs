@@ -13,6 +13,7 @@ pub mod files;
 pub mod filters;
 pub mod github;
 pub mod history;
+pub mod launch;
 pub mod ocr;
 pub mod search;
 pub mod frecency;

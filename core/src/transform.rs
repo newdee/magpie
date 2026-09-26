@@ -99,6 +99,7 @@ pub fn transform(query: &str) -> Option<TransformResult> {
             swatch: None,
             ..Default::default()
         }),
+        "ip" | "本机ip" if rest.is_empty() => ip_verb(),
         "json" => json_verb(rest),
         "md5" | "sha1" | "sha256" => hash_verb(cmd, rest),
         "jwt" => jwt_verb(rest),
@@ -107,6 +108,42 @@ pub fn transform(query: &str) -> Option<TransformResult> {
         | "kebab" | "title" => text_verb(cmd, rest),
         _ => color(q),
     }
+}
+
+/// `ip`: this machine's IPv4 addresses on the local network. Enter copies
+/// the first; the label names its adapter and lists the others. Read from
+/// the adapters themselves, so nothing is sent anywhere and it works offline.
+fn ip_verb() -> Option<TransformResult> {
+    let addrs = local_ipv4s();
+    let ((name, ip), others) = addrs.split_first()?;
+    let mut label = format!("local IP · {name}");
+    if !others.is_empty() {
+        let rest: Vec<String> = others.iter().map(|(n, a)| format!("{a} ({n})")).collect();
+        label.push_str(&format!(" · also {}", rest.join(", ")));
+    }
+    Some(TransformResult { label, value: ip.to_string(), ..Default::default() })
+}
+
+/// IPv4 addresses of adapters that are up, without loopback and link-local
+/// ones: private LAN addresses first, virtual adapters (WSL, Docker, VMs)
+/// last, so the first is the one other devices on your network can reach.
+fn local_ipv4s() -> Vec<(String, std::net::Ipv4Addr)> {
+    const VIRTUAL: &[&str] = &["vethernet", "wsl", "docker", "vmware", "virtualbox", "vbox", "hyper-v", "veth", "bridge", "utun"];
+    let mut v: Vec<(String, std::net::Ipv4Addr)> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.is_oper_up() && !i.is_loopback())
+        .filter_map(|i| match i.addr {
+            if_addrs::IfAddr::V4(a) if !a.ip.is_link_local() => Some((i.name, a.ip)),
+            _ => None,
+        })
+        .collect();
+    v.sort_by_key(|(name, ip)| {
+        let n = name.to_lowercase();
+        (VIRTUAL.iter().any(|x| n.contains(x)), !ip.is_private(), ip.octets())
+    });
+    v.dedup_by(|a, b| a.1 == b.1);
+    v
 }
 
 /// Text verbs work on the argument when there is one, otherwise on whatever
@@ -625,6 +662,24 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
 mod tests {
     use super::*;
 
+    /// `ip`: a LAN address that is not loopback, the first one ranked; the
+    /// ranking puts real adapters before virtual ones and private before public.
+    #[test]
+    fn ip_lists_this_machines_lan_addresses() {
+        if let Some(r) = transform("ip") {
+            let ip: std::net::Ipv4Addr = r.value.parse().unwrap();
+            assert!(!ip.is_loopback() && !ip.is_link_local(), "{ip}");
+            assert!(r.label.starts_with("local IP · "), "{}", r.label);
+            assert_eq!(transform("本机IP").map(|r| r.value), Some(ip.to_string()));
+        }
+        let all = local_ipv4s();
+        let keys: Vec<(bool, bool)> = all
+            .iter()
+            .map(|(n, ip)| (["vethernet", "wsl", "docker", "vmware", "virtualbox", "vbox", "hyper-v", "veth", "bridge", "utun"].iter().any(|x| n.to_lowercase().contains(x)), !ip.is_private()))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] <= w[1]), "ranked: {all:?}");
+        assert!(transform("ip address lookup").is_none(), "ip with words is a search");
+    }
     #[test]
     fn generators_have_expected_shape() {
         let u = transform("uuid").unwrap().value;

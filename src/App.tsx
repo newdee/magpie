@@ -84,6 +84,8 @@ interface AppHit {
   name: string;
   target: string;
   score: number;
+  /** the icon, when the backend had it in memory (null: it has none) */
+  icon?: string | null;
 }
 
 interface ClipHit {
@@ -141,6 +143,8 @@ interface ProcessHit {
   name: string;
   memory: number;
   exe: string | null;
+  /** port search: the sockets it listens on ("TCP 0.0.0.0:3000") */
+  listen?: string;
 }
 
 type Hit =
@@ -167,6 +171,23 @@ function hitKey(r: Hit): string {
     default:
       return `${r.kind}-${r.id}`;
   }
+}
+
+/// What `ocr_clipboard` answers when it cannot read text; the backend speaks
+/// English and these are translated when shown (keep in step with lib.rs).
+const OCR_MESSAGES = [
+  "Turn on Image text (OCR) in settings to read text from images",
+  "The OCR model is still getting ready",
+  "No text found in the copied image",
+  "No image on the clipboard",
+  "The clipboard holds something marked confidential",
+];
+
+/// `port 3000` / `端口 3000` / `kill :3000` → 3000; anything else → null.
+function matchPort(q: string): number | null {
+  const m = /^(?:(?:port|端口)\s+:?|(?:kill|结束)\s+:)(\d{1,5})$/i.exec(q.trim());
+  const n = m ? Number(m[1]) : NaN;
+  return n >= 1 && n <= 65535 ? n : null;
 }
 
 /// `kill chrome` / `结束 chrome` → "chrome"; anything else → null.
@@ -790,6 +811,14 @@ export default function App() {
   useEffect(() => {
     settingsPageRef.current?.scrollTo({ top: 0 });
   }, [settingsTab]);
+  // installed editors for the action menu's "Open in …": read at start and
+  // each time the menu opens, so an editor installed meanwhile shows up
+  const [editors, setEditors] = useState<{ name: string; target: string }[]>([]);
+  useEffect(() => {
+    invoke<{ name: string; target: string }[]>("installed_editors")
+      .then(setEditors)
+      .catch(() => {});
+  }, [actionsOpen]);
   // Settings › Web: the browsers found and what each contributed
   const [webSources, setWebSources] = useState<WebSource[] | null>(null);
   const loadWebSources = useCallback(() => {
@@ -901,6 +930,21 @@ export default function App() {
     // Clipboard is the exception — its whole point is "what did I just copy",
     // so an empty query lists the most recent clips.
     const srcId = (sourcesRef.current[srcIdx] ?? sourcesRef.current[0]).id;
+    // `port 3000` (or `kill :3000`) lists what listens on that port
+    const portQ = matchPort(q);
+    if (portQ !== null) {
+      try {
+        const ps = await invoke<Omit<ProcessHit, "kind">[]>("list_port_processes", { port: portQ });
+        if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
+          setResults(ps.map((p) => ({ ...p, kind: "process" as const })));
+          setSelected(0);
+          setSelAnchor(null);
+        }
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return;
+    }
     // `kill <name>` lists running processes, from any tab
     const killQ = matchKill(q);
     if (killQ) {
@@ -1003,6 +1047,8 @@ export default function App() {
           invoke<Omit<AppHit, "kind">[]>("search_apps", { query: q, pinyin: pinyinRef.current })
             .catch(() => [] as Omit<AppHit, "kind">[])
             .then((a) => {
+              // icons that came with the hits paint in the rows' first frame
+              for (const x of a) if (x.icon !== undefined) appIconCache.set(x.target, x.icon);
               apps = a.map((x) => ({ ...x, kind: "app" as const }));
               paint();
               // icons of the apps on screen: re-read in the background if an
@@ -1080,6 +1126,24 @@ export default function App() {
     setEmojiHits(null);
     setNoteHit(matchNote(q));
     setBangHit(matchBang(q, loadBangs()));
+    if (/^(ocr|取字)$/i.test(q)) {
+      // the text in the image on the clipboard; read once, not per keystroke
+      let live = true;
+      setCalcHit(null);
+      invoke<CalcHit>("ocr_clipboard")
+        .then((r) => {
+          if (!live) return;
+          setCalcHit(
+            r.error
+              ? { ...r, value: OCR_MESSAGES.includes(r.value) ? t(r.value) : r.value }
+              : { ...r, alt: tf("Text in the copied image · {n} lines", { n: r.value.split("\n").length }) },
+          );
+        })
+        .catch((e) => live && setCalcHit({ value: String(e), alt: "ocr", error: true } as CalcHit));
+      return () => {
+        live = false;
+      };
+    }
     if (q.length >= 2) {
       invoke<CalcHit | null>("calc_query", { query: q })
         .then((r) => setCalcHit(r ?? null))
@@ -1495,6 +1559,41 @@ export default function App() {
       const act = (p: Promise<unknown>) => p.catch((e) => setLastError(String(e)));
       const copy = (text: string) => act(invoke("copy_clip", { text }));
       const refresh = () => void runSearch(queryRef.current, sourceRef.current);
+      // a file's folder in a terminal, the file in each installed editor
+      const openElsewhere = (path: string): RowAction[] => [
+        {
+          key: "terminal",
+          label: t("Open in terminal"),
+          run: () => act(invoke("open_in_terminal", { path }).then(finishAction)),
+        },
+        ...editors.map((ed) => ({
+          key: `editor-${ed.name}`,
+          label: tf("Open in {app}", { app: ed.name }),
+          run: () => act(invoke("open_in_editor", { path, editor: ed.target }).then(finishAction)),
+        })),
+      ];
+      // to the OS trash, on a second Enter; the row leaves the list
+      const trashAction = (h: FileHit | VideoHit): RowAction => ({
+        key: "trash",
+        label: t(IS_WIN ? "Move to Recycle Bin" : "Move to Trash"),
+        risky: true,
+        run: async () => {
+          const k = hitKey(h);
+          if (armedRef.current !== k) {
+            setArmed(k);
+            return;
+          }
+          setArmed(null);
+          try {
+            await invoke("trash_path", { path: h.path, confirmed: true });
+            setResults((rs) => rs.filter((x) => hitKey(x) !== k));
+            const name = h.path.split(/[\\/]/).pop() ?? h.path;
+            setNotice(tf(IS_WIN ? "Moved {name} to the Recycle Bin" : "Moved {name} to the Trash", { name }));
+          } catch (e) {
+            setLastError(String(e));
+          }
+        },
+      });
       switch (hit.kind) {
         case "file":
           return [
@@ -1546,6 +1645,8 @@ export default function App() {
               : []),
             { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
             { key: "copy-file", label: t("Copy file"), run: () => act(invoke("copy_file_clip", { path: hit.path })) },
+            ...openElsewhere(hit.path),
+            trashAction(hit),
           ];
         case "video":
           return [
@@ -1556,6 +1657,8 @@ export default function App() {
               run: () => act(invoke("open_file", { path: hit.path }).then(finishAction)),
             },
             { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
+            ...openElsewhere(hit.path),
+            trashAction(hit),
           ];
         case "app":
           return [
@@ -1632,7 +1735,7 @@ export default function App() {
           ];
       }
     },
-    [openHit, runRisky, finishAction, runSearch],
+    [openHit, runRisky, finishAction, runSearch, editors],
   );
 
   const menuActions = useMemo(
@@ -4258,7 +4361,7 @@ export default function App() {
                       <span className="row-sub">
                         {armed === hitKey(r)
                           ? t("Press Enter again to end this process")
-                          : `PID ${r.pid} · ${formatSize(r.memory)}${r.exe ? ` · ${r.exe}` : ""}`}
+                          : `${r.listen ? `${r.listen} · ` : ""}PID ${r.pid} · ${formatSize(r.memory)}${r.exe ? ` · ${r.exe}` : ""}`}
                       </span>
                     </div>
                     <div className="row-meta">
