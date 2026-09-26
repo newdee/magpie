@@ -131,6 +131,7 @@ export const TIPS: string[] = [
   "After a screenshot, type ocr and the text on it is ready to copy",
   "port 3000 shows what is listening on it; Enter twice ends it",
   "Ctrl+K on a file opens its folder in a terminal, or the file in your editor",
+  "Ctrl+K on a file can also move it to the Recycle Bin (the Trash on a Mac); Enter twice confirms",
   ":sym lists symbols like → × ¥ ⌘; ip shows your local network address",
   "jwt decodes the token on your clipboard and tells you when it expires — nothing leaves your machine",
   "snake, kebab, camel, pascal, title: snake MyMacCleaner gives my_mac_cleaner",

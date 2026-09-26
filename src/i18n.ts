@@ -388,6 +388,7 @@ const ZH: Record<string, string> = {
   "port 3000 shows what is listening on it; Enter twice ends it": "port 3000 看看谁占着这个端口，按两次回车就能结束它",
   "Ctrl+K on a file opens its folder in a terminal, or the file in your editor": "在文件上按 Ctrl+K，可以在终端里打开它的文件夹，或用编辑器打开它",
   ":sym lists symbols like → × ¥ ⌘; ip shows your local network address": ":sym 列出 → × ¥ ⌘ 这类符号；ip 显示本机局域网地址",
+  "Ctrl+K on a file can also move it to the Recycle Bin (the Trash on a Mac); Enter twice confirms": "在文件上按 Ctrl+K 还能把它移到回收站（Mac 上是废纸篓），按两次回车确认",
   "Open in terminal": "在终端中打开",
   "Open in {app}": "用 {app} 打开",
   "Move to Trash": "移到废纸篓",
