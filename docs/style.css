@@ -139,6 +139,9 @@ kbd {
   align-items: center;
   gap: 8px;
 }
+.top nav > * {
+  white-space: nowrap;
+}
 .nav-link {
   padding: 6px 12px;
   font-size: 14px;
@@ -370,7 +373,7 @@ main {
   position: absolute;
   top: -180px;
   left: 50%;
-  width: 900px;
+  width: min(900px, 100vw); /* never wider than a phone: it would widen the page */
   height: 620px;
   transform: translateX(-50%);
   background: radial-gradient(
@@ -602,7 +605,7 @@ main {
 /* ---------- the rest: compact two-column definition list ---------- */
 .rest {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
   gap: 4px 48px;
   margin: 0;
 }
@@ -628,7 +631,7 @@ main {
   padding: 0;
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
   gap: 16px;
 }
 .privacy .claims li {
@@ -768,6 +771,19 @@ footer a:hover {
   }
   .privacy .claims {
     grid-template-columns: 1fr;
+  }
+}
+
+/* phones: the top bar keeps one line; "Tour" only jumps down the page */
+@media (max-width: 520px) {
+  .top {
+    padding: 12px 16px;
+  }
+  .top nav {
+    gap: 6px;
+  }
+  .nav-link {
+    display: none;
   }
 }
 
