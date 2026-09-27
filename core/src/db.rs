@@ -393,6 +393,18 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Disconnect GitHub (issue #6): the token, the account name, the star
+/// index with its READMEs and vectors, and which repos were opened. One
+/// transaction, so a crash leaves either the old account or none.
+pub fn forget_github(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM meta WHERE key IN ('token', 'username', 'last_sync')", [])?;
+    tx.execute("DELETE FROM repos", [])?; // chunks and FTS rows follow (cascade, trigger)
+    tx.execute("DELETE FROM hit_stats WHERE kind = 'repo'", [])?;
+    tx.commit()?;
+    Ok(())
+}
+
 // ---------- repos ----------
 
 pub fn upsert_repo(conn: &Connection, repo: &Repo) -> Result<()> {
@@ -700,6 +712,35 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(fts_search(&conn, "scraping", 10).unwrap().is_empty());
         assert!(all_repo_chunk_embeddings(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn forget_github_clears_the_account_and_its_index_only() {
+        let mut conn = open_in_memory().unwrap();
+        upsert_repo(&conn, &sample(1, "alice/scraper", "web scraping framework")).unwrap();
+        put_repo_chunks(&conn, 1, "h", &[vec![0.1, 0.2]]).unwrap();
+        for (k, v) in [("token", "t"), ("username", "alice"), ("last_sync", "1"), ("ui_lang", "zh")] {
+            meta_set(&conn, k, v).unwrap();
+        }
+        crate::frecency::record_use(&conn, "repo", "https://github.com/alice/scraper", 1).unwrap();
+        crate::frecency::record_use(&conn, "app", "notepad", 1).unwrap();
+
+        forget_github(&mut conn).unwrap();
+        assert_eq!(repo_count(&conn).unwrap(), 0);
+        assert!(fts_search(&conn, "scraping", 10).unwrap().is_empty());
+        assert!(all_repo_chunk_embeddings(&conn).unwrap().is_empty());
+        for k in ["token", "username", "last_sync"] {
+            assert_eq!(meta_get(&conn, k).unwrap(), None, "{k}");
+        }
+        assert_eq!(meta_get(&conn, "ui_lang").unwrap().as_deref(), Some("zh"), "other settings stay");
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM hit_stats")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(kinds, ["app"], "only the repo history goes");
     }
 
     #[test]

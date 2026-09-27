@@ -83,7 +83,9 @@ vaguely remember (or drop in an image), hit Enter.
   settings.
 - **Clipboard history that respects secrets**: opt-in, stored locally, and
   clips a password manager marks confidential are never recorded (honored on
-  Windows and macOS). Cap it by count and age, multi-select and delete, and
+  Windows and macOS). Passwords and access keys you copy yourself show with
+  the middle starred until you ask to see them, and MCP clients only ever get
+  the starred form. Cap it by count and age, multi-select and delete, and
   `Shift+Enter` pastes straight into the app you came from. `Ctrl+P` pins a
   clip: it sorts first and survives count/age pruning.
 - **Copied images are history too**: screenshots and copied pictures join
@@ -273,7 +275,9 @@ star list: names, descriptions, topics, and full READMEs (chunk-embedded).
 Unstars are detected, README fetches are ETag-incremental, and only changed
 content re-embeds. Sort matches by relevance, starred date, or star count
 (pills or `Shift+Tab`); every row shows last-push time so abandoned projects
-are obvious.
+are obvious. A token is checked with GitHub before it is saved; once
+connected, Settings offers Change token and Disconnect, which removes the
+token and the star index from your computer.
 
 ### Applications
 
@@ -285,6 +289,11 @@ by full pinyin or initials (`wx` / `weixin` → 微信, `wangyiyun` → 网易�
 heteronyms included (`cq` and `zq` both find 重庆…), so you never switch input
 methods to launch an app. Toggleable in settings. Apps come from the Start
 Menu on Windows, `/Applications` on macOS, and `.desktop` entries on Linux.
+Apps kept elsewhere, such as on an external drive, join the list when you add
+their folder under Settings → Local Files → App folders: only the apps are listed
+(bundles on macOS; shortcuts and programs on Windows, skipping uninstallers
+and updaters; desktop entries and AppImages on Linux), not the files inside
+them. An unplugged drive simply drops its apps until it is back.
 On macOS, apps inside folders are found too (Utilities, a vendor's folder),
 and an app also answers to its localized name: `活动监视器` or `huodong` finds
 Activity Monitor, shown under its Chinese name when the interface is in
@@ -334,7 +343,14 @@ Clipboard tab. This is the one source where an empty query is useful, listing
 what you most recently copied. `Enter` copies an entry back; `Ctrl+Delete`
 removes the selected entries; `Shift`+arrows multi-select (and `Enter` then
 copies them joined). Text marked confidential by password managers is never
-recorded. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
+recorded. What you copy yourself is checked for secrets: keys with a known
+shape (GitHub, OpenAI, AWS, Slack, JWTs, private keys, …) anywhere in a clip,
+the value in `password = …` or `API_KEY: …`, and a clip that is one word
+mixing three kinds of characters the way generated passwords do. These show
+as head and tail with `****` in between; `Show` on the row (or `Ctrl+K` →
+Show the full text) reveals one until the palette loses focus. Copying or
+pasting always gives the full text, and the MCP server returns only the
+starred form. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 / forever), or clear it entirely.
 
 ## Keyboard

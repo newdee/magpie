@@ -202,6 +202,73 @@ pub fn parse_alias_rules(text: &str) -> Vec<(String, String)> {
 
 /// Enumerate installed applications from platform-standard locations.
 pub fn list_apps() -> Vec<AppEntry> {
+    list_apps_with(&[])
+}
+
+/// Parse the stored app-folder list: one absolute path per line.
+pub fn parse_app_folders(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Program files a user-added app folder holds on this platform. macOS
+/// reads bundles the way `/Applications` is read; Windows takes shortcuts
+/// and programs, skipping installers and helpers; Linux takes desktop
+/// entries and AppImages. Never more than [`APP_DIR_DEPTH`] levels down, so
+/// a whole drive added by mistake costs a bounded scan on every refresh,
+/// not a walk of the disk. A folder that is missing (an unplugged drive)
+/// yields nothing.
+fn folder_programs(dir: &std::path::Path) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        find_bundles(dir, APP_DIR_DEPTH)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        #[cfg(windows)]
+        let (walked, shallow) = ("lnk", "exe");
+        #[cfg(not(windows))]
+        let (walked, shallow) = ("desktop", "AppImage");
+        let mut out = files_with_ext(dir, walked, APP_DIR_DEPTH);
+        out.extend(files_with_ext(dir, shallow, 2).into_iter().filter(|p| !is_helper_program(p)));
+        out.sort();
+        out
+    }
+}
+
+/// Uninstallers, updaters and crash reporters that sit beside a program.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn is_helper_program(p: &std::path::Path) -> bool {
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    ["unins", "uninstall", "setup", "install", "update", "crash", "helper", "elevate"]
+        .iter()
+        .any(|w| stem.contains(w))
+}
+
+/// Files ending in `.ext` (any case) at most `depth` folders down.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn files_with_ext(dir: &std::path::Path, ext: &str, depth: usize) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    for p in entries.flatten().map(|e| e.path()) {
+        if p.is_dir() {
+            if depth > 1 && !is_symlink(&p) {
+                out.extend(files_with_ext(&p, ext, depth - 1));
+            }
+        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case(ext)) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// [`list_apps`] plus the programs in folders the user added (issue #6: apps
+/// kept on an external drive). The standard locations come first, so a
+/// same-named copy elsewhere never shadows the installed one.
+pub fn list_apps_with(extra: &[PathBuf]) -> Vec<AppEntry> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push = |name: String, target: PathBuf, extra: Vec<String>, names: Vec<(String, String)>| {
@@ -269,14 +336,31 @@ pub fn list_apps() -> Vec<AppEntry> {
             }
         }
     }
+    for dir in extra {
+        for p in folder_programs(dir) {
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if p.extension().and_then(|x| x.to_str()) == Some("desktop") {
+                if let Some(d) = parse_desktop(&p) {
+                    push(d.name, p.clone(), d.keywords, d.names);
+                }
+                continue;
+            }
+            #[cfg(target_os = "macos")]
+            let names = bundle_names(&p);
+            #[cfg(not(target_os = "macos"))]
+            let names = Vec::new();
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                push(stem.to_string(), p.clone(), Vec::new(), names);
+            }
+        }
+    }
     out
 }
 
 /// How deep below an applications folder bundles are looked for. Two covers
 /// `/System/Applications/Utilities/Activity Monitor.app` and a vendor folder
 /// such as `/Applications/Adobe Photoshop/…`; three leaves room for a folder
-/// the user made inside one of those.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+/// the user made inside one of those. User-added app folders use it too.
 const APP_DIR_DEPTH: usize = 3;
 
 /// Every `.app` bundle under `dir`, looking into plain folders up to `depth`
@@ -1167,6 +1251,56 @@ mod tests {
         localize(&mut plain, "zh");
         assert_eq!(plain[0].name, "Terminal");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn app_folders_add_their_programs_and_skip_helpers() {
+        let root = std::env::temp_dir().join(format!("magpie-appdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        #[cfg(target_os = "macos")]
+        let (files, dirs, want): (&[&str], &[&str], &[&str]) = (
+            &[],
+            &["Big Tool.app/Contents", "Suite/Editor.app/Contents/Helpers/Inner.app", "Suite/readme"],
+            &["Big Tool.app", "Suite/Editor.app"],
+        );
+        #[cfg(windows)]
+        let (files, dirs, want): (&[&str], &[&str], &[&str]) = (
+            &["Big Tool.lnk", "Suite/a/Editor.lnk", "d1/d2/d3/TooDeep.lnk", "Portable/tool.EXE",
+              "Portable/unins000.exe", "Portable/CrashReporter.exe", "Portable/x/y/too-deep.exe", "Portable/readme.txt"],
+            &[],
+            &["Big Tool.lnk", "Portable/tool.EXE", "Suite/a/Editor.lnk"],
+        );
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let (files, dirs, want): (&[&str], &[&str], &[&str]) = (
+            &["big-tool.desktop", "d1/d2/d3/too-deep.desktop", "Tools/Editor.AppImage", "Tools/updater.AppImage", "Tools/notes.txt"],
+            &[],
+            &["Tools/Editor.AppImage", "big-tool.desktop"],
+        );
+        for d in dirs {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for f in files {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            let body = if f.ends_with(".desktop") { "[Desktop Entry]\nName=Big Tool\nExec=big-tool\n" } else { "x" };
+            std::fs::write(p, body).unwrap();
+        }
+        let mut found: Vec<String> = folder_programs(&root)
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"))
+            .collect();
+        found.sort();
+        assert_eq!(found, want);
+
+        // they join the app list by name, and can be launched by target
+        let apps = list_apps_with(std::slice::from_ref(&root));
+        let big = apps.iter().find(|a| a.name == "Big Tool").expect("Big Tool listed");
+        assert!(std::path::Path::new(&big.target).starts_with(&root));
+        // an unplugged drive: nothing, no error
+        let before = list_apps().len();
+        assert_eq!(list_apps_with(&[root.join("gone")]).len(), before);
+        assert_eq!(parse_app_folders(" /a \n\n/b\n"), [PathBuf::from("/a"), PathBuf::from("/b")]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

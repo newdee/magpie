@@ -31,19 +31,26 @@ pub struct ClipHit {
     pub height: Option<i64>,
     pub pinned: bool,
     pub score: f32,
+    /// The text with passwords and keys starred, when it holds any
+    /// ([`crate::secrets`]). Shown instead of `content` until the user asks.
+    pub masked: Option<String>,
 }
 
 const CLIP_COLS: &str =
     "id, content, first_copied, last_copied, copy_count, kind, thumb, width, height, pinned";
 
 fn row_to_hit(r: &rusqlite::Row) -> rusqlite::Result<ClipHit> {
+    let content: String = r.get(1)?;
+    let clip_kind: String = r.get(5)?;
+    let masked = if clip_kind == "text" { crate::secrets::masked(&content) } else { None };
     Ok(ClipHit {
         id: r.get(0)?,
-        content: r.get(1)?,
+        content,
+        masked,
         first_copied: r.get(2)?,
         last_copied: r.get(3)?,
         copy_count: r.get(4)?,
-        clip_kind: r.get(5)?,
+        clip_kind,
         thumb: r.get(6)?,
         width: r.get(7)?,
         height: r.get(8)?,

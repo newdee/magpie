@@ -90,11 +90,11 @@ window.FEATURES = {
       tag: "App launcher",
       en: {
         t: "Also an app launcher",
-        d: "Type part of an app's name and press Enter. It matches the start of a word, the middle, or initials such as vsc. Chinese app names match by pinyin, and you can add your own aliases.",
+        d: "Type part of an app's name and press Enter. It matches the start of a word, the middle, or initials such as vsc. Chinese app names match by pinyin, and you can add your own aliases. Apps on an external drive are found once you add their folder.",
       },
       zh: {
         t: "顺带当个启动器",
-        d: "敲应用名里的几个字，回车即开。开头、中间、首字母缩写（vsc 这种）都认得；中文应用名打拼音就行，还能给应用起个顺口的别名。",
+        d: "敲应用名里的几个字，回车即开。开头、中间、首字母缩写（vsc 这种）都认得；中文应用名打拼音就行，还能给应用起个顺口的别名。装在外接硬盘上的应用，把文件夹加进来也一样找得到。",
       },
     },
     {
@@ -126,11 +126,11 @@ window.FEATURES = {
       tag: "Clipboard",
       en: {
         t: "Clipboard history",
-        d: "Off by default and stored locally. Copy an old entry again, paste it into the app you were using, or pin the ones you use daily. Anything your password manager marks as confidential is never stored.",
+        d: "Off by default and stored locally. Copy an old entry again, paste it into the app you were using, or pin the ones you use daily. Anything your password manager marks as confidential is never stored, and passwords or keys you copy yourself show with the middle starred.",
       },
       zh: {
         t: "剪贴板历史",
-        d: "默认关闭，开了也只存在本机。旧内容可以再复制一遍、直接粘回刚才的应用，天天用的还能钉住。密码管理器标成机密的内容，一个字也不留。",
+        d: "默认关闭，开了也只存在本机。旧内容可以再复制一遍、直接粘回刚才的应用，天天用的还能钉住。密码管理器标成机密的内容，一个字也不留；自己复制的密码、密钥，只露个头尾，中间打上星号。",
       },
     },
     {
@@ -399,14 +399,14 @@ window.FEATURES = {
       "<b>No full-disk scanning.</b> magpie reads only the folders you add. It respects .gitignore, skips hidden files, and does not follow symlinks out of those folders.",
       "<b>Nothing leaves your machine.</b> The index is a single SQLite file in your user profile. The models run locally and work offline once downloaded.",
       "<b>Queries are not logged.</b> The log records errors and model status, enough for a useful bug report. What you typed is not in it.",
-      "<b>Secrets are not stored.</b> Clips marked confidential by your password manager are never saved, and exported settings leave out the GitHub token.",
+      "<b>Secrets are not stored.</b> Clips marked confidential by your password manager are never saved. Passwords and keys you copy yourself show starred, and MCP clients only get the starred form. Exported settings leave out the GitHub token.",
       "<b>Signed and notarized.</b> macOS builds carry a Developer ID signature and Apple notarization. Updates are installed in place after their signature is verified.",
     ],
     zh: [
       "<b>不做全盘扫描。</b>只读取你添加的文件夹，遵守 .gitignore，跳过隐藏文件，也不会顺着符号链接走出文件夹。",
       "<b>数据不出本机。</b>索引就是用户目录下的一个 SQLite 文件。模型在本机运行，下载完成后离线可用。",
       "<b>搜索内容不入日志。</b>日志只记录错误和模型状态，提 bug 时够用；你输入过什么，日志里一个字也没有。",
-      "<b>机密不留痕。</b>密码管理器标为机密的剪贴内容一律不存；导出设置时也不带 GitHub token。",
+      "<b>机密不留痕。</b>密码管理器标为机密的剪贴内容一律不存；自己复制的密码、密钥打上星号显示，交给 MCP 客户端的也是打码后的样子；导出设置时也不带 GitHub token。",
       "<b>签名、公证俱全。</b>Mac 版带开发者签名并经苹果公证，更新前先校验签名，再原地安装。",
     ],
   },

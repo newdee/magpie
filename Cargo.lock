@@ -3739,6 +3739,7 @@ dependencies = [
  "pinyin",
  "plist",
  "qrcode",
+ "regex",
  "reqwest 0.13.4",
  "rqrr",
  "rusqlite",

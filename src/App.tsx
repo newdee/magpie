@@ -99,6 +99,8 @@ interface ClipHit {
   height: number | null;
   pinned: boolean;
   score: number;
+  /// the text with passwords and keys starred; shown until the user asks
+  masked: string | null;
 }
 
 interface VideoHit {
@@ -258,6 +260,7 @@ interface Status {
   clip_retention_days: number;
   clip_max_entries: number;
   app_aliases: string;
+  app_folders: string[];
   video_count: number;
   video_shot_count: number;
   video_indexing_enabled: boolean;
@@ -708,6 +711,9 @@ export default function App() {
   const [tokenInput, setTokenInput] = useState("");
   const [tokenBusy, setTokenBusy] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  // connected: the token field stays folded until "Change token"
+  const [tokenEditing, setTokenEditing] = useState(false);
+  const [disconnectArmed, setDisconnectArmed] = useState(false);
   const [imageQuery, setImageQuery] = useState<ImageQuery | null>(null);
   const [repoSort, setRepoSort] = useState<RepoSort>(() => {
     const saved = localStorage.getItem("magpie.sort") as RepoSort | null;
@@ -772,6 +778,21 @@ export default function App() {
     localStorage.setItem("magpie.pinyin", on ? "1" : "0");
     setPinyinOn(on);
   }, []);
+
+  // clips whose masked secret the user chose to see (issue #6). Masked again
+  // as soon as the palette loses focus.
+  const [revealed, setRevealed] = useState<ReadonlySet<number>>(() => new Set());
+  const toggleReveal = useCallback((id: number) => {
+    setRevealed((s) => {
+      const n = new Set(s);
+      if (!n.delete(id)) n.add(id);
+      return n;
+    });
+  }, []);
+  const clipShown = useCallback(
+    (c: ClipHit) => (c.masked != null && !revealed.has(c.id) ? c.masked : c.content),
+    [revealed],
+  );
 
   // app alias rules ("proxy = clash", one per line); saved to the backend,
   // which re-attaches aliases to the in-memory app list
@@ -1359,6 +1380,7 @@ export default function App() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const un = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       clearTimeout(timer);
+      if (!focused) setRevealed((s) => (s.size ? new Set() : s));
       if (focused || !hideOnBlurRef.current || holdOpenCount > 0) return;
       timer = setTimeout(() => {
         if (hideOnBlurRef.current && holdOpenCount === 0) void getCurrentWindow().hide();
@@ -1832,6 +1854,15 @@ export default function App() {
                   },
                 ]
               : []),
+            ...(hit.masked != null
+              ? [
+                  {
+                    key: "reveal",
+                    label: revealed.has(hit.id) ? t("Hide the full text") : t("Show the full text"),
+                    run: () => toggleReveal(hit.id),
+                  },
+                ]
+              : []),
             ...(hit.clip_kind === "image"
               ? [
                   {
@@ -1879,7 +1910,7 @@ export default function App() {
           ];
       }
     },
-    [openHit, runRisky, finishAction, runSearch, editors],
+    [openHit, runRisky, finishAction, runSearch, editors, revealed, toggleReveal],
   );
 
   const menuActions = useMemo(
@@ -2323,6 +2354,7 @@ export default function App() {
     try {
       await invoke<string>("set_token", { token: tokenInput.trim() });
       setTokenInput("");
+      setTokenEditing(false);
       await refreshStatus();
     } catch (e) {
       setTokenError(String(e));
@@ -2330,6 +2362,22 @@ export default function App() {
       setTokenBusy(false);
     }
   }, [tokenInput, tokenBusy, refreshStatus]);
+
+  // Disconnect asks twice: it drops the whole star index
+  const disconnectGithub = useCallback(async () => {
+    if (!disconnectArmed) {
+      setDisconnectArmed(true);
+      return;
+    }
+    setDisconnectArmed(false);
+    try {
+      await invoke("disconnect_github");
+      setTokenError(null);
+      await refreshStatus();
+    } catch (e) {
+      setTokenError(String(e));
+    }
+  }, [disconnectArmed, refreshStatus]);
 
   const pickQueryImage = useCallback(async () => {
     const file = await holdOpen(() =>
@@ -2346,6 +2394,22 @@ export default function App() {
       thumbSrc: thumb ? `data:image/jpeg;base64,${thumb}` : undefined,
     });
   }, [acceptImageQuery]);
+
+  // folders whose programs join the app list (apps kept on another drive)
+  const setAppFolder = useCallback(
+    async (path: string | null, add: boolean) => {
+      const dir = path ?? (await holdOpen(() => openDialog({ directory: true, multiple: false })));
+      if (typeof dir !== "string") return;
+      try {
+        await invoke<string[]>("set_app_folder", { path: dir, add });
+        setLastError(null);
+        await refreshStatus();
+      } catch (e) {
+        setLastError(String(e));
+      }
+    },
+    [refreshStatus],
+  );
 
   const addFolder = useCallback(async () => {
     const dir = await holdOpen(() => openDialog({ directory: true, multiple: false }));
@@ -3967,6 +4031,41 @@ export default function App() {
                   </div>
 
                   <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">{t("App folders")}</span>
+                        <span className="set-desc">
+                          {t(
+                            "Apps kept outside the usual places, such as on an external drive. Only the apps in a folder are listed, not the files inside them.",
+                          )}
+                        </span>
+                      </div>
+                      <button className="ghost-btn" onClick={() => void setAppFolder(null, true)}>
+                        {t("Add folder")}
+                      </button>
+                    </div>
+                    {(status?.app_folders ?? []).length > 0 && (
+                      <div className="folder-list">
+                        {(status?.app_folders ?? []).map((p) => (
+                          <div key={p} className="folder-row">
+                            <span className="folder-path" title={p}>
+                              {p}
+                            </span>
+                            <button
+                              className="folder-remove"
+                              onClick={() => void setAppFolder(p, false)}
+                              title={t("Remove")}
+                              aria-label={`Remove ${p}`}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="set-row stack">
                     <div className="set-label">
                       <span className="set-name">{t("App aliases")}</span>
                       <span className="set-desc">
@@ -4058,7 +4157,9 @@ export default function App() {
                         <span className="set-name">GitHub</span>
                         <span className="set-desc">
                           {status?.has_token
-                            ? t("Paste a new token to replace the current one.")
+                            ? tokenEditing
+                              ? t("Paste a new token to replace the current one.")
+                              : t("Connected. Your stars sync from this account.")
                             : t(
                                 "A personal access token, no scopes needed — it only reads your public stars.",
                               )}
@@ -4072,6 +4173,26 @@ export default function App() {
                         <span className="conn-badge">{t("not connected")}</span>
                       )}
                     </div>
+                    {status?.has_token && !tokenEditing && (
+                      <div className="token-row">
+                        <button className="ghost-btn" onClick={() => setTokenEditing(true)}>
+                          {t("Change token")}
+                        </button>
+                        <button
+                          className="danger-btn"
+                          onClick={disconnectGithub}
+                          onBlur={() => setDisconnectArmed(false)}
+                        >
+                          {disconnectArmed ? t("Click again to disconnect") : t("Disconnect")}
+                        </button>
+                      </div>
+                    )}
+                    {status?.has_token && !tokenEditing && disconnectArmed && (
+                      <p className="set-desc">
+                        {t("The token and the star index are removed from this computer. Nothing changes on GitHub.")}
+                      </p>
+                    )}
+                    {(!status?.has_token || tokenEditing) && (
                     <div className="token-row">
                       <input
                         className="token-input"
@@ -4086,11 +4207,25 @@ export default function App() {
                         }}
                         placeholder="ghp_…"
                         spellCheck={false}
+                        autoFocus={tokenEditing}
                       />
                       <button className="primary-btn" onClick={submitToken} disabled={tokenBusy}>
                         {tokenBusy ? t("Checking") : t("Connect")}
                       </button>
+                      {tokenEditing && (
+                        <button
+                          className="ghost-btn"
+                          onClick={() => {
+                            setTokenEditing(false);
+                            setTokenInput("");
+                            setTokenError(null);
+                          }}
+                        >
+                          {t("Cancel")}
+                        </button>
+                      )}
                     </div>
+                    )}
                     {tokenError && <p className="error-line">{tokenError}</p>}
                     <div className="set-links">
                       <button
@@ -4550,9 +4685,9 @@ export default function App() {
                 ) : r.kind === "clip" ? (
                   <>
                     <div className="row-main">
-                      <span className="row-title clip-text" title={r.content}>
+                      <span className="row-title clip-text" title={clipShown(r)}>
                         {r.pinned && <span className="pin-mark">📌 </span>}
-                        {r.content.split("\n")[0].slice(0, 200)}
+                        {clipShown(r).split("\n")[0].slice(0, 200)}
                       </span>
                       {r.content.includes("\n") && (
                         <span className="row-sub">
@@ -4563,6 +4698,20 @@ export default function App() {
                       )}
                     </div>
                     <div className="row-meta">
+                      {r.masked != null && (
+                        <button
+                          className="reveal-btn"
+                          // keep focus in the input, and don't open the row
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleReveal(r.id);
+                          }}
+                          title={revealed.has(r.id) ? t("Hide the full text") : t("Show the full text")}
+                        >
+                          {revealed.has(r.id) ? t("Hide") : t("Show")}
+                        </button>
+                      )}
                       {relTimeUnix(r.last_copied) && (
                         <span className="mono">{relTimeUnix(r.last_copied)}</span>
                       )}
@@ -4715,7 +4864,14 @@ export default function App() {
             ))}
           </div>
           {previewOpen && (
-            <PreviewPane hit={results[selected]} data={preview} query={query} />
+            <PreviewPane
+              hit={results[selected]}
+              data={preview}
+              query={query}
+              clipShown={clipShown}
+              revealed={revealed}
+              onReveal={toggleReveal}
+            />
           )}
           </div>
         )
@@ -4971,10 +5127,16 @@ function PreviewPane({
   hit,
   data,
   query,
+  clipShown,
+  revealed,
+  onReveal,
 }: {
   hit: Hit | undefined;
   data: Record<string, unknown> | null;
   query: string;
+  clipShown: (c: ClipHit) => string;
+  revealed: ReadonlySet<number>;
+  onReveal: (id: number) => void;
 }) {
   if (!hit) return <div className="preview-pane" />;
   return (
@@ -4993,9 +5155,21 @@ function PreviewPane({
       ) : hit.kind === "clip" ? (
         <>
           <p className="pv-title">{t("Clipboard entry")}</p>
-          <pre className="pv-text">{hit.content}</pre>
+          <pre className="pv-text">{clipShown(hit)}</pre>
           <p className="pv-meta">
             {relTimeUnix(hit.last_copied)} · ×{hit.copy_count}
+            {hit.masked != null && (
+              <>
+                {" · "}
+                <button
+                  className="link-btn"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onReveal(hit.id)}
+                >
+                  {revealed.has(hit.id) ? t("Hide the full text") : t("Show the full text")}
+                </button>
+              </>
+            )}
           </p>
         </>
       ) : hit.kind === "bookmark" || hit.kind === "history" ? (

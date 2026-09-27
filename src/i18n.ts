@@ -311,6 +311,24 @@ const ZH: Record<string, string> = {
   "Latin queries match Chinese app names by full pinyin or initials (wx → 微信).":
     "拉丁输入按全拼或首字母匹配中文应用名（wx → 微信）。",
   "App aliases": "应用别名",
+  "App folders": "应用文件夹",
+  "Passwords and keys in the clipboard history show starred; Show on the row reveals one":
+    "剪贴板历史里的密码和密钥打着星号，点行尾的「显示」才露出全文",
+  "Apps on an external drive: add their folder in Settings → Local Files → App folders":
+    "外接硬盘上的应用：在 设置 → 本地文件 → 应用文件夹 里把目录加进来",
+  "Apps kept outside the usual places, such as on an external drive. Only the apps in a folder are listed, not the files inside them.":
+    "装在别处的应用，比如外接硬盘上的，可以把所在文件夹加进来。只收应用本身，里面的零碎文件不收。",
+  Show: "显示",
+  Hide: "隐藏",
+  "Show the full text": "显示完整内容",
+  "Hide the full text": "重新隐藏",
+  Cancel: "取消",
+  "Change token": "更换 token",
+  Disconnect: "断开连接",
+  "Click again to disconnect": "再点一次断开",
+  "Connected. Your stars sync from this account.": "已连接，星标从这个账号同步。",
+  "The token and the star index are removed from this computer. Nothing changes on GitHub.":
+    "会删掉本机保存的 token 和星标索引，GitHub 上的东西不受影响。",
   "One rule per line: alias = app name. The alias matches like a second name (pinyin included).":
     "一行一条：别名 = 应用名。别名当作第二名字参与匹配（含拼音）。",
   "Save aliases": "保存别名",

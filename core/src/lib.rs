@@ -17,6 +17,7 @@ pub mod history;
 pub mod launch;
 pub mod ocr;
 pub mod search;
+pub mod secrets;
 pub mod frecency;
 pub mod notes;
 pub mod procs;

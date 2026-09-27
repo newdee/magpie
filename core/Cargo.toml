@@ -55,6 +55,8 @@ trash = "5.2.9"
 similar = "3.2.0"
 rqrr = "0.11.0"
 dirs = "7.0.0"
+# secret shapes in clipboard text (secrets.rs); already in the tree via tokenizers
+regex = "1"
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]

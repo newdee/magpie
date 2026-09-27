@@ -50,6 +50,7 @@ const status = {
   clip_retention_days: 30,
   clip_max_entries: 2000,
   app_aliases: "proxy = clash",
+  app_folders: ["D:\\Portable"] as string[],
   video_count: 12,
   video_shot_count: 486,
   video_indexing_enabled: true,
@@ -265,13 +266,17 @@ const imageHits = [
   window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt }));
 };
 
+// a key assembled at run time (no key-shaped literal in the repo); masked the
+// way core/src/secrets.rs masks it
+const demoKey = "sk-proj-" + "Xy9zQw3e".repeat(4);
 const clipHits = [
-  { id: 6, content: "", first_copied: now - 120, last_copied: now - 120, copy_count: 1, clip_kind: "image", thumb: scenePng(mountainScene), width: 1600, height: 1000, pinned: false, score: 0 },
-  { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
-  { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
-  { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
-  { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
-  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0 },
+  { id: 7, content: `OPENAI_API_KEY=${demoKey}`, first_copied: now - 60, last_copied: now - 60, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0, masked: "OPENAI_API_KEY=sk-pro****9zQw3e" as string | null },
+  { id: 6, content: "", first_copied: now - 120, last_copied: now - 120, copy_count: 1, clip_kind: "image", thumb: scenePng(mountainScene), width: 1600, height: 1000, pinned: false, score: 0, masked: null },
+  { id: 1, content: "cargo build --release -p magpie", first_copied: now - 300, last_copied: now - 300, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0, masked: null },
+  { id: 2, content: "https://github.com/newdee/magpie/releases/latest", first_copied: now - 3600, last_copied: now - 1200, copy_count: 3, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0, masked: null },
+  { id: 3, content: "SELECT rowid FROM files_fts WHERE files_fts MATCH ?1\nORDER BY bm25(files_fts, 8.0, 4.0, 4.0, 1.0)\nLIMIT 30", first_copied: now - 2 * 3600, last_copied: now - 2 * 3600, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0, masked: null },
+  { id: 4, content: "ffmpeg -i input.mp4 -c:v libx264 -crf 20 out.mp4", first_copied: now - day, last_copied: now - 5 * 3600, copy_count: 2, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0, masked: null },
+  { id: 5, content: "release-notes@plumeworks.example", first_copied: now - 2 * day, last_copied: now - 2 * day, copy_count: 1, clip_kind: "text", thumb: null, width: null, height: null, pinned: false, score: 0, masked: null },
 ];
 
 // the demo's MCP server: a fixed port and a token that "rotates" between two
@@ -564,6 +569,16 @@ mockIPC((cmd, args) => {
       // a stand-in app icon: the demo has no OS to ask. ?noicons=1 shows
       // what an app looks like before its icon is read (the monogram)
       return new URLSearchParams(location.search).has("noicons") ? null : appIconSvg;
+    case "set_app_folder": {
+      const a = args as { path: string; add: boolean };
+      const list = status.app_folders.filter((p) => p !== a.path);
+      status.app_folders = a.add ? [...list, a.path] : list;
+      return status.app_folders;
+    }
+    case "disconnect_github":
+      status.has_token = false;
+      status.username = "";
+      return null;
     case "plugin:event|listen":
       return 1;
     case "plugin:updater|check":

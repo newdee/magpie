@@ -1114,6 +1114,23 @@ input.query:active {
   border: 1px solid var(--accent-border);
 }
 
+/* show / hide on a clip whose password or key is starred */
+.reveal-btn {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: none;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.reveal-btn:hover {
+  color: var(--text);
+}
+
 /* neutral badges so they distinguish bookmark vs history without shouting */
 .web-badge {
   color: var(--text-faint);

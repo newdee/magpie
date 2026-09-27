@@ -412,6 +412,10 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "clip_retention_days": clip_retention_days,
         "clip_max_entries": clip_max_entries,
         "app_aliases": db::meta_get(&conn, "app_aliases").map_err(err_str)?.unwrap_or_default(),
+        "app_folders": db::meta_get(&conn, "app_folders")
+            .map_err(err_str)?
+            .map(|t| magpie_core::apps::parse_app_folders(&t))
+            .unwrap_or_default(),
         "video_count": magpie_core::videos::video_count(&conn).map_err(err_str)?,
         "video_shot_count": magpie_core::videos::shot_count(&conn).map_err(err_str)?,
         "video_indexing_enabled": db::meta_get(&conn, "video_indexing")
@@ -485,6 +489,25 @@ async fn set_token(
     // first token → kick off initial sync immediately
     spawn_sync(app);
     Ok(login)
+}
+
+/// Forget the GitHub token and everything synced with it (issue #6).
+#[tauri::command]
+async fn disconnect_github(state: State<'_, AppState>) -> Result<(), String> {
+    // hold the sync flag while forgetting: a sync that started in between
+    // would have read the old token and written the stars back
+    if state.sync_running.swap(true, Ordering::SeqCst) {
+        return Err("sync is running; try again when it finishes".into());
+    }
+    let forgotten = {
+        let mut conn = state.db.lock().await;
+        db::forget_github(&mut conn).map_err(err_str)
+    };
+    state.sync_running.store(false, Ordering::SeqCst);
+    forgotten?;
+    reload_store(&state.db_path, &state.store);
+    log::info!("github disconnected");
+    Ok(())
 }
 
 #[tauri::command]
@@ -1504,11 +1527,17 @@ fn spawn_app_scan(app: AppHandle) {
     let apps = state.apps.clone();
     let db_path = state.db_path.clone();
     std::thread::spawn(move || {
-        let mut list = magpie_core::apps::list_apps();
+        let conn = db::open(&db_path).ok();
+        let extra = conn
+            .as_ref()
+            .and_then(|c| db::meta_get(c, "app_folders").ok().flatten())
+            .map(|t| magpie_core::apps::parse_app_folders(&t))
+            .unwrap_or_default();
+        let mut list = magpie_core::apps::list_apps_with(&extra);
         // user alias rules ("proxy = clash") ride on top of the built-ins;
         // applied before localizing, since rules name apps as installed
         let mut ui_lang = String::from("en");
-        if let Ok(conn) = db::open(&db_path) {
+        if let Some(conn) = conn {
             if let Ok(Some(text)) = db::meta_get(&conn, "app_aliases") {
                 let rules = magpie_core::apps::parse_alias_rules(&text);
                 magpie_core::apps::apply_user_aliases(&mut list, &rules);
@@ -1521,6 +1550,37 @@ fn spawn_app_scan(app: AppHandle) {
         *apps.lock().unwrap() = list;
         tauri::async_runtime::spawn(prefetch_app_icons(app));
     });
+}
+
+/// Add or remove a folder whose programs join the app list (issue #6: apps
+/// kept on an external drive). Returns the list as stored. A folder that is
+/// not there now (an unplugged drive) can still be removed.
+#[tauri::command(async)]
+fn set_app_folder(app: AppHandle, state: State<'_, AppState>, path: String, add: bool) -> Result<Vec<String>, String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    let mut list: Vec<String> = db::meta_get(&conn, "app_folders")
+        .map_err(err_str)?
+        .map(|t| magpie_core::apps::parse_app_folders(&t))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let path = path.trim().to_string();
+    if add {
+        let p = std::path::Path::new(&path);
+        if !p.is_absolute() || !p.is_dir() {
+            return Err("pick a folder".into());
+        }
+        if !list.iter().any(|x| x == &path) {
+            list.push(path);
+        }
+    } else {
+        list.retain(|x| x != &path);
+    }
+    db::meta_set(&conn, "app_folders", &list.join("\n")).map_err(err_str)?;
+    drop(conn);
+    spawn_app_scan(app);
+    Ok(list)
 }
 
 /// Persist the "alias = app name" rule text and re-attach aliases in place.
@@ -1829,6 +1889,15 @@ fn tag_kind(mut v: serde_json::Value, kind: &str) -> serde_json::Value {
     v
 }
 
+/// A clip as the MCP server hands it out: passwords and keys never leave for
+/// another program in the clear, whatever the palette shows (issue #6).
+fn clip_for_mcp(mut c: clips::ClipHit) -> serde_json::Value {
+    if let Some(m) = c.masked.take() {
+        c.content = m;
+    }
+    tag_kind(serde_json::to_value(&c).unwrap_or_default(), "clip")
+}
+
 impl TauriBackend {
     /// Query vectors the way the palette gets them: `try_lock`, so a bulk
     /// embed pass owning a model degrades the call to keyword-only instead
@@ -1886,7 +1955,7 @@ impl mcp::Backend for TauriBackend {
             Clips => {
                 search::search_clips(&conn, &store, query, qvec.as_deref(), image_qvec.as_deref(), limit)?
                     .into_iter()
-                    .map(|c| tag_kind(serde_json::to_value(&c).unwrap_or_default(), "clip"))
+                    .map(clip_for_mcp)
                     .collect()
             }
         })
@@ -3837,7 +3906,11 @@ async fn clip_diff(state: State<'_, AppState>) -> Result<serde_json::Value, Stri
     Ok(json!({
         "value": unified,
         "alt": format!("diff · {removed} removed, {added} added"),
-        "diff": lines.iter().map(|(t, l)| json!([t.to_string(), l])).collect::<Vec<_>>(),
+        // drawn lines are masked like clip rows; Enter still copies the full diff
+        "diff": lines
+            .iter()
+            .map(|(t, l)| json!([t.to_string(), magpie_core::secrets::masked(l).unwrap_or_else(|| l.clone())]))
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -4152,6 +4225,28 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
             .map_err(err_str)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod clip_mcp_tests {
+    use super::clip_for_mcp;
+    use magpie_core::{clips, db};
+
+    /// issue #6: a copied key reaches MCP clients starred, plain text as is
+    #[test]
+    fn mcp_gets_keys_masked_and_plain_clips_whole() {
+        let conn = db::open_in_memory().unwrap();
+        let key = format!("ghp_{}", "a1B2".repeat(9));
+        clips::record_clip(&conn, &format!("GITHUB_TOKEN={key}"), 1000, 0).unwrap();
+        clips::record_clip(&conn, "cargo build --release", 1001, 0).unwrap();
+        let out: Vec<serde_json::Value> =
+            clips::recent_clips(&conn, 10).unwrap().into_iter().map(clip_for_mcp).collect();
+        let text: Vec<&str> = out.iter().map(|v| v["content"].as_str().unwrap()).collect();
+        assert_eq!(text, ["cargo build --release", "GITHUB_TOKEN=ghp_a1****B2a1B2"]);
+        let wire = serde_json::to_string(&out).unwrap();
+        assert!(!wire.contains(&key), "the key is nowhere in what is sent");
+        assert!(out.iter().all(|v| v["kind"] == "clip" && v["masked"].is_null()));
+    }
 }
 
 #[cfg(test)]
@@ -4900,6 +4995,8 @@ pub fn run() {
             index_local,
             rebuild_folder,
             rebuild_stars,
+            disconnect_github,
+            set_app_folder,
             search_web,
             search_apps,
             launch_app,
