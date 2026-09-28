@@ -723,6 +723,50 @@ mod tests {
     }
 
     #[test]
+    fn write_tx_waits_for_another_writer_where_a_deferred_one_fails() {
+        let dir = std::env::temp_dir().join(format!("magpie-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("t.db");
+        let a = open(&path).unwrap();
+        let b = open(&path).unwrap();
+        meta_set(&a, "k", "0").unwrap();
+
+        // the failure the bookmark sync hit: a deferred transaction reads,
+        // another connection commits, the write then fails at once (517)
+        let tx = a.unchecked_transaction().unwrap();
+        let _: i64 = tx.query_row("SELECT count(*) FROM meta", [], |r| r.get(0)).unwrap();
+        meta_set(&b, "k", "1").unwrap();
+        let err = tx.execute("UPDATE meta SET value = '2' WHERE key = 'k'", []).unwrap_err();
+        assert_eq!(err.sqlite_error().map(|e| e.extended_code), Some(517), "SQLITE_BUSY_SNAPSHOT: {err}");
+        drop(tx);
+
+        // write_tx takes the lock at BEGIN, so the busy timeout covers the
+        // wait: another writer holds the lock for 300 ms, this one waits and
+        // then succeeds instead of failing
+        let holder = std::thread::spawn({
+            let path = path.clone();
+            move || {
+                let c = open(&path).unwrap();
+                let t = write_tx(&c).unwrap();
+                t.execute("UPDATE meta SET value = '3' WHERE key = 'k'", []).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                t.commit().unwrap();
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let t0 = std::time::Instant::now();
+        let tx = write_tx(&a).unwrap();
+        let _: i64 = tx.query_row("SELECT count(*) FROM meta", [], |r| r.get(0)).unwrap();
+        tx.execute("UPDATE meta SET value = '4' WHERE key = 'k'", []).unwrap();
+        tx.commit().unwrap();
+        holder.join().unwrap();
+        assert!(t0.elapsed().as_millis() >= 150, "it waited for the other writer ({:?})", t0.elapsed());
+        assert_eq!(meta_get(&a, "k").unwrap().as_deref(), Some("4"));
+        drop((a, b));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn forget_github_clears_the_account_and_its_index_only() {
         let mut conn = open_in_memory().unwrap();
         upsert_repo(&conn, &sample(1, "alice/scraper", "web scraping framework")).unwrap();

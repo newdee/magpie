@@ -472,6 +472,9 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         // which models sit in memory right now (a busy lock counts as yes)
         "text_model_loaded": state.embedder.try_lock().map(|g| g.is_some()).unwrap_or(true),
         "image_model_loaded": state.siglip.try_lock().map(|g| g.is_some()).unwrap_or(true),
+        // a load in flight: it cannot be cut short, it finishes and is dropped
+        "text_model_loading": state.model_initing.load(Ordering::SeqCst),
+        "image_model_loading": state.siglip_initing.load(Ordering::SeqCst),
         "image_model": state.siglip_status.lock().unwrap().clone(),
         "ocr_enabled": db::meta_get(&conn, "ocr_enabled")
             .map_err(err_str)?
