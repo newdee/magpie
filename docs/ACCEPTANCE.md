@@ -1,3 +1,54 @@
+# 验收记录 2026-09-28（Linux 修复，0.4.8）
+
+起因：AppImage 目录的机器人把 magpie 收进 PR（AppImage/appimage.github.io#6015），它在 Ubuntu 22.04 上的测试报
+`AppRun.wrapped: Permission denied`，启动即退。
+
+## 实现
+
+- release.yml：构建前把 `~/.cache/tauri/AppRun-x86_64` 以 0755 预置（Tauri 打包器以 0770 缓存它并连权限复制进
+  AppImage 成为 `AppRun.wrapped`，tauri-apps/tauri#16155）；构建后解包检查，AppImage 里有任何"属主可执行、其他人
+  不可执行"的文件就让 run 失败（草稿已上传，但失败的 run 不发布）。
+- 托盘：Linux 上图标临时目录改为应用自己的缓存目录（此前无 `XDG_RUNTIME_DIR` 时用所有用户共享的 `/tmp/tray-icon`，
+  后来的用户 Permission denied，setup 失败、应用崩溃）；托盘创建失败降级为警告，不再中断启动。
+- 前端：`app-icons-changed` 时图标表由"先清空再拉取"改为"拉取后整体替换"。
+
+## 发现并修复
+
+| # | 阶段 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 分析 | AppImage 内 `AppRun.wrapped` 为 0770（WSL 解包 0.4.7 实测），其他用户不可执行 | 预置 0755 + 构建后检查；检查脚本先在本地对 0.4.7 验证：未解包失败、原样失败、chmod 755 后通过；预置文件与包内 `AppRun.wrapped` 逐字节相同（31552 B），证实复制链 |
+| 2 | 检查脚本 | 本地第一版在目录不存在时也报"通过" | CI 版 `set -euo pipefail` 并断言 `AppRun.wrapped` 存在且可执行 |
+| 3 | CI 真机 | 换 nobody 用户启动崩溃：`tray icon error: Permission denied`（runner 先建了 `/tmp/tray-icon`） | 托盘图标写每用户缓存目录；托盘失败不致命 |
+| 4 | 真机回归 | T20「cached icons paint with the rows」首跑偶发 mono,mono：唤出触发应用重扫 → `app-icons-changed` → 前端先清空图标表，异步拉回前渲染的行只有首字母 | 改为拉取后整体替换 |
+| 5 | review | `app-icons-changed` 监听处注释仍写「忘掉副本、重新拉取」 | 注释改为整体替换；前端包去注释后与 exe 内嵌的 `dist/` 3 个文件哈希一致，无需重建 |
+| 6 | 过程 | 切分支失败，一个只含临时 workflow 的提交推到了 main（e802913） | 以新提交撤回（7a303af），未强推 |
+
+## 轮次
+
+- 22.04 尝试：ubuntu-22.04 runner 上链接失败（ONNX Runtime 预编译库需要 glibc 2.38 的 `__isoc23_strtol` 与 GCC 13 的
+  libstdc++）；本机 WSL Ubuntu 22.04.5（glibc 2.35）运行 0.4.7：`GLIBC_2.38/2.39`、`GLIBCXX_3.4.31` not found，包内
+  GTK / cairo / glib 同样要 2.38。结论：支持 22.04 需整个 Linux 构建迁到 22.04，另立项。
+- CI（ubuntu-24.04，临时分支，已删）：预置后包内 `AppRun.wrapped` 为 `-rwxr-xr-x`，检查通过；runner 身份启动 20 s 仍在
+  运行；先由 runner 建 0700 的 `/tmp/tray-icon`，nobody 身份启动 20 s 仍在运行、无托盘警告（修复前 exit 101 panic）。
+- A 轮（机制，Windows 真机，含 #4 修复的 exe）：T20 14/14、T13 5/5、T15 18/18、T9 30/30、T22 11/11、T23 6/6、T26 6/6、
+  T29 15/15、T31 27/27、T33 25/25，另 T20 单跑 ×3 均 img,img；日志窗口内启动 13 次、托盘警告 0、panic 0。
+- B 轮（静态 + review）：clippy 0、tsc 0、探针 0 FAIL、YAML 可解析；review 抓到 #5，不计数。
+
+## 连续三轮干净（修 #5 之后）
+
+- C1（静态）：tsc 0、a1 / a3 / docs-parity 0 FAIL、`git diff --check` 干净。
+- C2（demo 回归）：T24 12/12、T25（35 行设置、滚动 900px 导航不动）、T20b 3/3、T28 14/14、T32 12/12。
+- C3（可复现）：Session 1 真机 T20 ×2 各 14/14，归一化耗时毫秒数后 24 行逐行一致；cargo test ×2 各 241 行一致
+  （A6A89EC4F41AA623），10 组结果全部 ok。
+
+## 遗留
+
+- Ubuntu 22.04 / Debian 12 支持：Linux 构建迁到 22.04 + 改用微软官方 ONNX Runtime 动态库（已在 PR 6015 说明将支持）。
+- 首次启动、浏览器历史很大时，书签同步偶发 `database is locked`（历史整批导入的事务超过 5 s busy_timeout）；下次定时
+  同步自动补上。旧问题，未修。
+
+---
+
 # 验收记录 2026-09-27（issue #6 三条建议，0.4.7）
 
 ## 实现

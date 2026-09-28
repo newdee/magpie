@@ -1461,11 +1461,10 @@ export default function App() {
       }),
       // tray menu entry point
       listen("open-settings", () => setShowSettings(true)),
-      // the backend re-read some app icons (new or updated apps): forget the
-      // palette's copies and let the rows on screen fetch them again
+      // the backend re-read some app icons (new or updated apps): swap the
+      // palette's copies for the new set, then let the rows on screen redraw
       listen("app-icons-changed", () => {
-        appIconCache.clear();
-        void loadAppIcons().finally(() => setIconEpoch((n) => n + 1));
+        void loadAppIcons(true).finally(() => setIconEpoch((n) => n + 1));
       }),
       // the selection-search chord: the backend copied the selected text and
       // is about to summon the palette; make that text the query
@@ -5086,10 +5085,15 @@ function BrowserIcons({ names }: { names: string[] }) {
 
 /// Every icon the backend already holds, into the palette's cache, so an app
 /// row paints with its icon in its first frame instead of flashing the
-/// monogram while it asks. Once at start and after `app-icons-changed`.
-function loadAppIcons(): Promise<void> {
+/// monogram while it asks. Once at start and after `app-icons-changed`, when
+/// the new set replaces the old one in a single step: clearing first left a
+/// gap in which rows rendered with the monogram though every icon was known.
+function loadAppIcons(replace = false): Promise<void> {
   return invoke<Record<string, string | null>>("cached_app_icons")
     .then((m) => {
+      if (replace) {
+        for (const target of [...appIconCache.keys()]) if (!(target in m)) appIconCache.delete(target);
+      }
       for (const [target, url] of Object.entries(m)) appIconCache.set(target, url);
     })
     .catch(() => {});
