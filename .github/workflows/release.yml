@@ -37,9 +37,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # keyed by the image: C objects built against one glibc's headers do
+      # not link against an older one (24.04's cache broke the 22.04 build)
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+          key: ${{ matrix.platform }}
 
       - uses: pnpm/action-setup@v4
         with:

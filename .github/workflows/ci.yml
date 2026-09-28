@@ -27,9 +27,12 @@ jobs:
         with:
           components: clippy
 
+      # keyed by the image: C objects built against 24.04's glibc headers
+      # (e.g. __isoc23_sscanf) do not link on 22.04
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+          key: ubuntu-22.04
 
       - name: Core tests
         run: cargo test -p magpie-core
