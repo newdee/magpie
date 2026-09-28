@@ -61,6 +61,7 @@ impl Siglip {
         threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
+        crate::onnx::ensure_runtime()?;
         let paths = match Self::hf_hub_paths(cache_dir) {
             Ok(p) => p,
             Err(primary) => Self::direct_paths(cache_dir, progress)
@@ -76,6 +77,7 @@ impl Siglip {
         threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
+        crate::onnx::ensure_runtime()?;
         let paths = Self::direct_paths(cache_dir, progress)?;
         progress("loading".to_string());
         Self::from_paths(paths, threads)

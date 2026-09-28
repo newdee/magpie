@@ -7,9 +7,14 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    # the oldest supported LTS, which the Linux release is built on
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      # the Linux bundles ship it as a resource, which the tauri build checks
+      - name: ONNX Runtime for the Linux bundles
+        run: scripts/fetch-onnxruntime.sh
 
       - name: Install Linux dependencies
         run: |

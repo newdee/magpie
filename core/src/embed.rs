@@ -36,6 +36,7 @@ impl Embedder {
     }
 
     fn new_hub(cache_dir: &Path, threads: usize) -> Result<Self> {
+        crate::onnx::ensure_runtime()?;
         let model = TextEmbedding::try_new(
             TextInitOptions::new(EmbeddingModel::MultilingualE5Small)
                 .with_cache_dir(cache_dir.to_path_buf())
@@ -56,6 +57,8 @@ impl Embedder {
         threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
+        // no runtime: say so, instead of downloading files it cannot load
+        crate::onnx::ensure_runtime()?;
         let primary = match Self::new_hub(cache_dir, threads) {
             Ok(s) => return Ok(s),
             Err(e) => e,
@@ -70,6 +73,7 @@ impl Embedder {
         threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
+        crate::onnx::ensure_runtime()?;
         let manual = cache_dir.join("manual-e5");
         let endpoint = download::hf_endpoint();
         for (remote, local) in E5_FILES {

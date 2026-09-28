@@ -63,6 +63,12 @@ regex = "1"
 name = "app_icons_main"
 harness = false
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux loads Microsoft's libonnxruntime at run time instead of linking ort's
+# prebuilt, which needs glibc 2.38 (see onnx.rs). Unifies with the ort above
+# and fastembed's, so the whole tree loads dynamically on Linux only.
+ort = { version = "=2.0.0-rc.13", features = ["load-dynamic"] }
+
 [target."cfg(windows)".dependencies]
 clipboard-win = "5.4.1"
 # app icons (apps.rs): the shell's own image for a Start Menu shortcut.

@@ -444,6 +444,8 @@ client reaches the server directly.
 
 Grab the latest build from [Releases](https://github.com/newdee/magpie/releases):
 Windows NSIS installer, macOS dmg (Apple Silicon), Linux AppImage/deb/rpm.
+The Linux builds run on Ubuntu 22.04 or newer and other distributions with
+glibc 2.35+; they carry Microsoft's ONNX Runtime library for semantic search.
 
 On a Mac, Homebrew works too:
 
@@ -466,6 +468,10 @@ pnpm tauri dev      # development
 pnpm tauri build    # release bundle
 cargo test -p magpie-core    # core tests
 ```
+
+On Linux, run `scripts/fetch-onnxruntime.sh` once first: it puts Microsoft's
+ONNX Runtime library where the bundles pick it up. A dev build finds it
+through `ORT_DYLIB_PATH="$PWD/src-tauri/lib/libonnxruntime.so" pnpm tauri dev`.
 
 Requires Rust, Node + pnpm, and a WebView2/WebKit runtime (bundled on
 Windows 11 and macOS).

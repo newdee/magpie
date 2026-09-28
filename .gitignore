@@ -25,6 +25,8 @@ dist-ssr
 
 # Rust workspace build output
 /target
+# Microsoft's ONNX Runtime for the Linux bundles (scripts/fetch-onnxruntime.sh)
+/src-tauri/lib/
 /mac-img
 /test.png
 

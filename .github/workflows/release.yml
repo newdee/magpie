@@ -18,7 +18,9 @@ jobs:
             args: ""
           - platform: macos-latest # Apple Silicon; ort has no x86_64 cross-link
             args: ""
-          - platform: ubuntu-24.04
+          # the oldest supported LTS: what is built here runs there and later
+          # (ONNX Runtime comes from Microsoft's build, see onnx.rs)
+          - platform: ubuntu-22.04
             args: ""
 
     runs-on: ${{ matrix.platform }}
@@ -26,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-24.04'
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
@@ -76,12 +78,16 @@ jobs:
       # fails with "Permission denied" (tauri-apps/tauri#16155). It skips the
       # download when the file is already cached, so seed it 0755.
       - name: Seed AppRun executable for everyone
-        if: matrix.platform == 'ubuntu-24.04'
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           mkdir -p ~/.cache/tauri
           curl -fsSL -o ~/.cache/tauri/AppRun-x86_64 \
             https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
           chmod 755 ~/.cache/tauri/AppRun-x86_64
+
+      - name: ONNX Runtime for the Linux bundles
+        if: matrix.platform == 'ubuntu-22.04'
+        run: scripts/fetch-onnxruntime.sh
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -104,7 +110,7 @@ jobs:
       # The draft is already uploaded by now; failing here fails the run, and
       # a failed run is not published. Catches the seed above going stale.
       - name: Check every program in the AppImage runs for any user
-        if: matrix.platform == 'ubuntu-24.04'
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           set -euo pipefail
           img=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
@@ -117,6 +123,24 @@ jobs:
             exit 1
           fi
           echo "every program in the AppImage is executable by everyone"
+
+      # Ubuntu 22.04 has glibc 2.35: nothing inside may ask for more, and the
+      # ONNX Runtime the app loads must be there
+      - name: Check the AppImage runs on Ubuntu 22.04
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          set -euo pipefail
+          img=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
+          cd "$(mktemp -d)"
+          "$img" --appimage-extract >/dev/null
+          test -f squashfs-root/usr/lib/magpie/libonnxruntime.so
+          newest=$(find squashfs-root -type f -exec sh -c 'file -b "$1" | grep -q ^ELF && objdump -T "$1" 2>/dev/null' _ {} \; \
+            | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "newest glibc symbol in the AppImage: $newest"
+          if [ "$(printf '%s\nGLIBC_2.35\n' "$newest" | sort -V | tail -1)" != "GLIBC_2.35" ]; then
+            echo "::error::the AppImage needs $newest, newer than Ubuntu 22.04's glibc 2.35"
+            exit 1
+          fi
 
   test:
     # PR / push safety net without producing a release

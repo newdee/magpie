@@ -16,6 +16,7 @@ pub mod handy;
 pub mod history;
 pub mod launch;
 pub mod ocr;
+pub mod onnx;
 pub mod search;
 pub mod secrets;
 pub mod frecency;

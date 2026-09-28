@@ -351,7 +351,9 @@ claude mcp add --transport http magpie http://127.0.0.1:端口/mcp --header "Aut
 ## 安装
 
 从 [Releases](https://github.com/newdee/magpie/releases) 下载：Windows NSIS
-安装包、macOS dmg（Apple Silicon）、Linux AppImage/deb/rpm。
+安装包、macOS dmg（Apple Silicon）、Linux AppImage/deb/rpm。Linux 版在
+Ubuntu 22.04 及以上、以及 glibc 2.35+ 的其他发行版上可用，语义搜索用的是随包
+附带的微软官方 ONNX Runtime 库。
 
 Mac 上也可以用 Homebrew：
 
@@ -373,6 +375,10 @@ pnpm tauri dev      # 开发
 pnpm tauri build    # 发布构建
 cargo test -p magpie-core    # 核心测试
 ```
+
+Linux 上先运行一次 `scripts/fetch-onnxruntime.sh`，它会把微软的 ONNX Runtime
+库放到打包时取用的位置。开发版用
+`ORT_DYLIB_PATH="$PWD/src-tauri/lib/libonnxruntime.so" pnpm tauri dev` 找到它。
 
 需要 Rust、Node + pnpm、WebView2/WebKit 运行时（Windows 11 与 macOS 自带）。
 

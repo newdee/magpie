@@ -125,6 +125,7 @@ impl Ocr {
         threads: usize,
         progress: &mut dyn FnMut(String),
     ) -> Result<Self> {
+        crate::onnx::ensure_runtime()?;
         let spec = model_spec(model_id)?;
         let manual = cache_dir.join(spec.dir);
         let endpoint = crate::download::hf_endpoint();
