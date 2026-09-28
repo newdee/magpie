@@ -4865,7 +4865,8 @@ pub fn run() {
                     .unwrap_or_else(|| "en".into())
             };
             let menu = build_tray_menu(app.handle(), &ui_lang, "")?;
-            TrayIconBuilder::with_id("main")
+            #[allow(unused_mut)]
+            let mut tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -4877,8 +4878,20 @@ pub fn run() {
                     }
                     "quit" => app.exit(0),
                     _ => {}
-                })
-                .build(app)?;
+                });
+            // Linux writes the tray image to disk: $XDG_RUNTIME_DIR/tray-icon,
+            // or without it a /tmp/tray-icon shared by every user, where the
+            // second user to start magpie got "Permission denied" and the app
+            // died in setup. The app's own cache folder is per user.
+            #[cfg(target_os = "linux")]
+            if let Ok(dir) = app.path().app_cache_dir() {
+                tray = tray.temp_dir_path(dir.join("tray-icon"));
+            }
+            // no tray (a desktop without one, or one that refuses) leaves the
+            // hotkey working; it must not stop the app from starting
+            if let Err(e) = tray.build(app) {
+                log::warn!("tray icon unavailable: {e}");
+            }
 
             // register the stored (or default) summon hotkey. Registration can
             // fail when another launcher owns the chord — degrade to tray-only
