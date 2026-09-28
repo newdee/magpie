@@ -64,6 +64,9 @@ struct AppState {
     model_reinit: Arc<AtomicBool>,
     siglip_initing: Arc<AtomicBool>,
     siglip_reinit: Arc<AtomicBool>,
+    /// Semantic search paused to free the models' memory (tray / settings,
+    /// issue #8): no model loads until it is resumed or magpie restarts.
+    models_paused: Arc<AtomicBool>,
     /// Installed-app list, enumerated once at startup, refreshable on demand.
     apps: Arc<StdMutex<Vec<magpie_core::apps::AppEntry>>>,
     /// App icons as data URLs, by launch target; None = the OS had none.
@@ -263,6 +266,7 @@ const EXPORTABLE_META: &[&str] = &[
     "index_threads",
     "watch_enabled",
     "rescan_minutes",
+    magpie_core::semantic::META_KEY,
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -330,6 +334,12 @@ async fn import_settings(
     }
     if imported.contains(&"skip_worktrees") {
         spawn_local_index(app.clone());
+    }
+    // semantic search on or off takes effect as the settings switch does
+    if imported.contains(&magpie_core::semantic::META_KEY) {
+        let on = semantic_choice(&state) == magpie_core::semantic::Choice::On;
+        let app2 = app.clone();
+        tauri::async_runtime::spawn_blocking(move || apply_semantic(&app2, on));
     }
     Ok(doc.get("frontend").cloned().unwrap_or(json!({})))
 }
@@ -455,6 +465,13 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
         "username": username,
         "has_token": has_token,
         "model": state.model_status.lock().unwrap().clone(),
+        "semantic": magpie_core::semantic::choice(&conn, &state.model_dir)
+            .map(|c| c.as_str())
+            .unwrap_or("on"),
+        "semantic_paused": state.models_paused.load(Ordering::SeqCst),
+        // which models sit in memory right now (a busy lock counts as yes)
+        "text_model_loaded": state.embedder.try_lock().map(|g| g.is_some()).unwrap_or(true),
+        "image_model_loaded": state.siglip.try_lock().map(|g| g.is_some()).unwrap_or(true),
         "image_model": state.siglip_status.lock().unwrap().clone(),
         "ocr_enabled": db::meta_get(&conn, "ocr_enabled")
             .map_err(err_str)?
@@ -669,6 +686,12 @@ async fn search_by_image(
     limit: Option<usize>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let limit = limit.unwrap_or(30).min(100);
+    if semantic_choice(&state) != magpie_core::semantic::Choice::On {
+        return Err("searching by image needs semantic search; turn it on in settings".into());
+    }
+    if state.models_paused.load(Ordering::SeqCst) {
+        return Err("semantic search is paused; resume it in the tray menu or settings".into());
+    }
     if *state.siglip_status.lock().unwrap() == IMAGE_MODEL_IDLE {
         // idle means no image, video or image clip is indexed, so there is
         // nothing to match against; if that just changed, start the load
@@ -1600,6 +1623,13 @@ fn set_app_aliases(app: AppHandle, state: State<'_, AppState>, text: String) -> 
 /// degrades to "busy indexing" exactly like bulk image embedding does).
 fn spawn_video_index(app: AppHandle) {
     let state = app.state::<AppState>();
+    // shots are found through the image model: without it, decoding (and
+    // fetching ffmpeg, ~80 MB) buys nothing. It runs again once the model
+    // is up (see spawn_siglip_init), so semantic search off or paused costs
+    // nothing here (#8)
+    if state.siglip.lock().unwrap().is_none() {
+        return;
+    }
     if state.video_indexing.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -1695,6 +1725,10 @@ fn spawn_video_index(app: AppHandle) {
 /// ready before the first index pass. Progress lands in ffmpeg_status.
 fn spawn_ffmpeg_check(app: AppHandle) {
     let state = app.state::<AppState>();
+    // videos are only searchable with semantic search on (#8)
+    if !models_allowed(&state) {
+        return;
+    }
     let db_path = state.db_path.clone();
     let model_dir = state.model_dir.clone();
     let status = state.ffmpeg_status.clone();
@@ -3167,9 +3201,123 @@ async fn run_sync(
     Ok(json!({ "report": report, "embedded": embedded }))
 }
 
+/// Text model status while semantic search is off or not chosen yet (#8).
+const MODEL_OFF: &str = "off";
+/// Text model status while semantic search is paused to free memory.
+const MODEL_PAUSED: &str = "paused";
+
+/// Semantic search on, off, or not chosen yet (a fresh install before the
+/// welcome screen). Read each time: a switch in settings applies at once.
+fn semantic_choice(state: &AppState) -> magpie_core::semantic::Choice {
+    db::open(&state.db_path)
+        .ok()
+        .and_then(|c| magpie_core::semantic::choice(&c, &state.model_dir).ok())
+        .unwrap_or(magpie_core::semantic::Choice::On)
+}
+
+/// May a model load now? Not while semantic search is off, undecided or
+/// paused.
+fn models_allowed(state: &AppState) -> bool {
+    !state.models_paused.load(Ordering::SeqCst)
+        && semantic_choice(state) == magpie_core::semantic::Choice::On
+}
+
+/// The text model's status when it may not load, for the settings row.
+fn blocked_status(state: &AppState) -> &'static str {
+    if state.models_paused.load(Ordering::SeqCst) {
+        MODEL_PAUSED
+    } else {
+        MODEL_OFF
+    }
+}
+
+/// Drop both models from memory. Passes holding one end at their next item
+/// (the stop flags) so the lock comes free; after a reload their catch-up
+/// carries on where they stopped.
+fn unload_models(state: &AppState) {
+    use magpie_core::threads::{self as th, Model};
+    th::stop(Model::Text);
+    th::stop(Model::Image);
+    let text = lock_model(&state.embedder, Model::Text).take();
+    let image = lock_model(&state.siglip, Model::Image).take();
+    th::resume(Model::Text);
+    th::resume(Model::Image);
+    drop((text, image));
+}
+
+/// Pause semantic search and free the models' memory (#8), for a game or
+/// another program that needs it; or resume, loading them again. Search
+/// runs on keywords while paused. Not remembered: a restart resumes. Not
+/// resumed by a search either: launching the game from the box would load
+/// the models straight back. Blocking: a pause waits for a pass that holds
+/// a model to reach its next item.
+fn pause_models_now(app: &AppHandle, pause: bool) {
+    let state = app.state::<AppState>();
+    if semantic_choice(&state) != magpie_core::semantic::Choice::On {
+        return; // off or undecided: nothing is loaded, nothing to resume
+    }
+    if pause {
+        state.models_paused.store(true, Ordering::SeqCst);
+        unload_models(&state);
+        *state.model_status.lock().unwrap() = MODEL_PAUSED.into();
+        *state.siglip_status.lock().unwrap() = IMAGE_MODEL_IDLE.into();
+        let _ = app.emit("model-status", MODEL_PAUSED);
+        log::info!("semantic search paused; models unloaded");
+    } else if state.models_paused.swap(false, Ordering::SeqCst) {
+        log::info!("semantic search resumed");
+        spawn_model_init(app.clone());
+        ensure_image_model(app);
+    }
+    refresh_tray(app);
+}
+
+#[tauri::command(async)]
+fn pause_semantic(app: AppHandle, pause: bool) -> Result<(), String> {
+    pause_models_now(&app, pause);
+    Ok(())
+}
+
+/// Turn semantic search on or off (settings, the welcome screen). Off frees
+/// the models and keeps them from downloading or loading; on loads the text
+/// model (downloading it the first time) and the image model if anything
+/// needs it.
+#[tauri::command(async)]
+fn set_semantic(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    {
+        let conn = db::open(&state.db_path).map_err(err_str)?;
+        magpie_core::semantic::set(&conn, enabled).map_err(err_str)?;
+    }
+    apply_semantic(&app, enabled);
+    Ok(())
+}
+
+/// Make the stored semantic choice real: load, or unload and keep off.
+/// Blocking when it unloads (a pass holding a model finishes its item).
+fn apply_semantic(app: &AppHandle, enabled: bool) {
+    let state = app.state::<AppState>();
+    log::info!("semantic search {}", if enabled { "on" } else { "off" });
+    state.models_paused.store(false, Ordering::SeqCst);
+    if enabled {
+        spawn_model_init(app.clone());
+        ensure_image_model(app);
+    } else {
+        unload_models(&state);
+        *state.model_status.lock().unwrap() = MODEL_OFF.into();
+        *state.siglip_status.lock().unwrap() = IMAGE_MODEL_IDLE.into();
+        let _ = app.emit("model-status", MODEL_OFF);
+    }
+    refresh_tray(app);
+}
+
 /// Load the embedding model in the background, then embed anything pending.
 fn spawn_model_init(app: AppHandle) {
     let state = app.state::<AppState>();
+    if !models_allowed(&state) {
+        let s = blocked_status(&state);
+        *state.model_status.lock().unwrap() = s.into();
+        let _ = app.emit("model-status", s);
+        return;
+    }
     if state.model_initing.swap(true, Ordering::SeqCst) {
         return; // an init is already running; model_reinit may queue a rerun
     }
@@ -3201,9 +3349,33 @@ fn spawn_model_init(app: AppHandle) {
             }
         })
         .await;
-        match init {
+        // Store it under the model's lock, checking under that same lock that
+        // it may still load: a pause sets its flag first and then takes this
+        // lock to unload, so it either sees the model stored or this sees the
+        // flag. Checked before taking the lock, a pause landing in between
+        // found nothing to unload and the model stayed in memory (T34).
+        let kept = match init {
             Ok(Ok(e)) => {
-                *embedder.lock().unwrap() = Some(e);
+                let mut slot = embedder.lock().unwrap();
+                if models_allowed(&app.state::<AppState>()) {
+                    *slot = Some(e);
+                    Ok(Ok(true))
+                } else {
+                    Ok(Ok(false)) // switched off or paused while it loaded
+                }
+            }
+            Ok(Err(e)) => Ok(Err(e)),
+            Err(e) => Err(e),
+        };
+        match kept {
+            Ok(Ok(false)) => {
+                let s = blocked_status(&app.state::<AppState>());
+                *status.lock().unwrap() = s.into();
+                let _ = app.emit("model-status", s);
+                reinit.store(false, Ordering::SeqCst);
+                initing.store(false, Ordering::SeqCst);
+            }
+            Ok(Ok(true)) => {
                 *status.lock().unwrap() = "ready".into();
                 log::info!("semantic model ready ({threads} threads)");
                 let _ = app.emit("model-status", "ready");
@@ -3518,7 +3690,7 @@ const IMAGE_MODEL_IDLE: &str = "idle";
 /// by an image. A model that is loading, ready or failed is left alone.
 fn ensure_image_model(app: &AppHandle) -> bool {
     let state = app.state::<AppState>();
-    if *state.siglip_status.lock().unwrap() != IMAGE_MODEL_IDLE {
+    if !models_allowed(&state) || *state.siglip_status.lock().unwrap() != IMAGE_MODEL_IDLE {
         return false;
     }
     let needed = db::open(&state.db_path)
@@ -3535,6 +3707,12 @@ fn ensure_image_model(app: &AppHandle) -> bool {
 /// Load SigLIP in the background, then embed any images that are waiting.
 fn spawn_siglip_init(app: AppHandle) {
     let state = app.state::<AppState>();
+    if !models_allowed(&state) {
+        // off, undecided or freed: idle, so ensure_image_model can bring it
+        // back once semantic search is on and something needs it
+        *state.siglip_status.lock().unwrap() = IMAGE_MODEL_IDLE.into();
+        return;
+    }
     if state.siglip_initing.swap(true, Ordering::SeqCst) {
         return; // an init is already running; siglip_reinit may queue a rerun
     }
@@ -3564,9 +3742,27 @@ fn spawn_siglip_init(app: AppHandle) {
             }
         })
         .await;
-        match init {
+        // stored under the model's lock, checked under it (see spawn_model_init)
+        let kept = match init {
             Ok(Ok(s)) => {
-                *siglip.lock().unwrap() = Some(s);
+                let mut slot = siglip.lock().unwrap();
+                if models_allowed(&app.state::<AppState>()) {
+                    *slot = Some(s);
+                    Ok(Ok(true))
+                } else {
+                    Ok(Ok(false)) // switched off or paused while it loaded
+                }
+            }
+            Ok(Err(e)) => Ok(Err(e)),
+            Err(e) => Err(e),
+        };
+        match kept {
+            Ok(Ok(false)) => {
+                *status.lock().unwrap() = IMAGE_MODEL_IDLE.into();
+                reinit.store(false, Ordering::SeqCst);
+                initing.store(false, Ordering::SeqCst);
+            }
+            Ok(Ok(true)) => {
                 *status.lock().unwrap() = "ready".into();
                 let _ = app.emit("model-status", "image-ready");
                 initing.store(false, Ordering::SeqCst);
@@ -3675,8 +3871,27 @@ fn build_tray_menu(
     let sync_item = MenuItem::with_id(app, "sync", l[1], true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", l[2], true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", l[3], true, None::<&str>)?;
+    // pause / resume semantic search (#8), only while it is switched on
+    let state = app.state::<AppState>();
+    let pause = if semantic_choice(&state) == magpie_core::semantic::Choice::On {
+        let paused = state.models_paused.load(Ordering::SeqCst);
+        let (id, label) = match (paused, lang == "zh") {
+            (false, true) => ("pause", "暂停语义搜索（释放内存）"),
+            (false, false) => ("pause", "Pause semantic search (free memory)"),
+            (true, true) => ("resume", "恢复语义搜索"),
+            (true, false) => ("resume", "Resume semantic search"),
+        };
+        Some(MenuItem::with_id(app, id, label, true, None::<&str>)?)
+    } else {
+        None
+    };
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![&show, &sync_item, &settings_item];
+    if let Some(p) = &pause {
+        items.push(p);
+    }
+    items.push(&quit);
     if update_version.is_empty() {
-        Menu::with_items(app, &[&show, &sync_item, &settings_item, &quit])
+        Menu::with_items(app, &items)
     } else {
         let label = if lang == "zh" {
             format!("有新版本 v{update_version}…")
@@ -3684,7 +3899,8 @@ fn build_tray_menu(
             format!("Update available: v{update_version}…")
         };
         let upd = MenuItem::with_id(app, "update", &label, true, None::<&str>)?;
-        Menu::with_items(app, &[&upd, &show, &sync_item, &settings_item, &quit])
+        items.insert(0, &upd);
+        Menu::with_items(app, &items)
     }
 }
 
@@ -4085,6 +4301,16 @@ fn open_log_dir(app: AppHandle) -> Result<(), String> {
     let dir = app.path().app_log_dir().map_err(err_str)?;
     std::fs::create_dir_all(&dir).map_err(err_str)?;
     tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(err_str)
+}
+
+/// Rebuild the tray menu in the stored UI language (after a pause, resume or
+/// the semantic switch changed which items it offers).
+fn refresh_tray(app: &AppHandle) {
+    let lang = db::open(&app.state::<AppState>().db_path)
+        .ok()
+        .and_then(|c| db::meta_get(&c, "ui_lang").ok().flatten())
+        .unwrap_or_else(|| "en".into());
+    let _ = refresh_tray_menu(app, &lang);
 }
 
 /// Retitle the tray menu with the stored language + current badge state.
@@ -4812,6 +5038,7 @@ pub fn run() {
                 model_reinit: Arc::new(AtomicBool::new(false)),
                 siglip_initing: Arc::new(AtomicBool::new(false)),
                 siglip_reinit: Arc::new(AtomicBool::new(false)),
+                models_paused: Arc::new(AtomicBool::new(false)),
                 apps: Arc::new(StdMutex::new(Vec::new())),
                 app_icons: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 icon_stamps: Arc::new(StdMutex::new(std::collections::HashMap::new())),
@@ -4877,6 +5104,11 @@ pub fn run() {
                         let _ = app.emit("open-settings", ());
                     }
                     "quit" => app.exit(0),
+                    // off the main thread: a pause waits for a pass to let go
+                    "pause" | "resume" => {
+                        let (app, pause) = (app.clone(), event.id.as_ref() == "pause");
+                        std::thread::spawn(move || pause_models_now(&app, pause));
+                    }
                     _ => {}
                 });
             // Linux writes the tray image to disk: $XDG_RUNTIME_DIR/tray-icon,
@@ -4916,6 +5148,12 @@ pub fn run() {
             }
 
             spawn_model_init(app.handle().clone());
+            // a fresh install: open on the welcome screen, which asks about
+            // semantic search before anything is downloaded (#8)
+            if semantic_choice(&app.state::<AppState>()) == magpie_core::semantic::Choice::Undecided {
+                log::info!("first start: showing the welcome screen");
+                show_window(app.handle());
+            }
             // the image model only when something already needs it; an index
             // pass or a copied image loads it later if that changes
             {
@@ -5010,6 +5248,8 @@ pub fn run() {
             rebuild_stars,
             disconnect_github,
             set_app_folder,
+            set_semantic,
+            pause_semantic,
             search_web,
             search_apps,
             launch_app,

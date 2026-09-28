@@ -295,6 +295,9 @@ interface Status {
   local_indexing: boolean;
   max_file_mb: number;
   hotkey: string;
+  /// semantic search (#8): "undecided" = a fresh install before the welcome screen
+  semantic: "on" | "off" | "undecided";
+  semantic_paused: boolean;
   /// the effective selection-search chord; empty when the user removed it
   hotkey_selection: string;
   hotkey_selection_default: string;
@@ -2639,6 +2642,8 @@ export default function App() {
     ? tf("error: {e}", { e: lastError })
     : modelFailed
       ? t("model download failed, keyword search only (set a mirror in settings)")
+      : status?.semantic_paused
+        ? t("semantic search paused, keyword search only")
       : modelWarming
         ? t("preparing semantic model (first run downloads ~500 MB)")
         : source === "local" && status?.image_model === "loading"
@@ -2732,6 +2737,25 @@ export default function App() {
       setFontsTick((n) => n + 1);
     });
   }, []);
+
+  // a fresh install opens here: what magpie does, then whether to download
+  // the semantic model (#8). Nothing is downloaded before this is answered.
+  if (status?.semantic === "undecided") {
+    return (
+      <Welcome
+        panelRef={panelRef}
+        hotkey={status.hotkey}
+        onChoose={async (on) => {
+          try {
+            await invoke("set_semantic", { enabled: on });
+          } catch (e) {
+            setLastError(String(e));
+          }
+          await refreshStatus();
+        }}
+      />
+    );
+  }
 
   return (
     <div
@@ -3439,6 +3463,59 @@ export default function App() {
                   <div className="set-row stack">
                     <div className="set-head">
                       <div className="set-label">
+                        <span className="set-name">{t("Semantic search")}</span>
+                        <span className="set-desc">
+                          {t(
+                            "Finds things by meaning with a model that runs on this computer (~500 MB download, some memory while running). Off: search matches words; apps and tools work the same.",
+                          )}
+                        </span>
+                      </div>
+                      <div className="pill-row">
+                        {[
+                          { label: "off", on: false },
+                          { label: "on", on: true },
+                        ].map((o) => (
+                          <button
+                            key={o.label}
+                            className={`source ${(status?.semantic === "on") === o.on ? "active" : ""}`}
+                            onClick={async () => {
+                              try {
+                                await invoke("set_semantic", { enabled: o.on });
+                                await refreshStatus();
+                              } catch (e) {
+                                setLastError(String(e));
+                              }
+                            }}
+                          >
+                            {t(o.label)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {status?.semantic === "on" && (
+                      <div className="set-links">
+                        <button
+                          className="link-btn"
+                          onClick={async () => {
+                            try {
+                              await invoke("pause_semantic", { pause: !status.semantic_paused });
+                              await refreshStatus();
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {status.semantic_paused
+                            ? t("Resume semantic search")
+                            : t("Pause it to free memory, e.g. for a game")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
                         <span className="set-name">{t("Model download source")}</span>
                         <span className="set-desc">
                           {t("Pick the mirror if huggingface.co is unreachable from your network.")}
@@ -3471,7 +3548,11 @@ export default function App() {
                           ? t("ready")
                           : status?.model === "loading"
                             ? t("downloading (~500 MB, first run)…")
-                            : (status?.model ?? "…")}
+                            : status?.model === "off"
+                              ? t("off")
+                              : status?.model === "paused"
+                                ? t("paused, memory freed")
+                                : (status?.model ?? "…")}
                       </span>
                       <span>
                         <span className={`status-dot ${status?.image_model === "ready" ? "ok" : ""}`} />
@@ -3480,9 +3561,13 @@ export default function App() {
                           ? t("ready")
                           : status?.image_model === "loading"
                             ? t("downloading (~200 MB, first run)…")
-                            : status?.image_model === "idle"
-                              ? t("not loaded; loads once an image, video or image clip is indexed")
-                              : (status?.image_model ?? "…")}
+                            : status?.semantic !== "on"
+                              ? t("off")
+                              : status?.semantic_paused
+                                ? t("paused, memory freed")
+                                : status?.image_model === "idle"
+                                  ? t("not loaded; loads once an image, video or image clip is indexed")
+                                  : (status?.image_model ?? "…")}
                       </span>
                     </div>
                   </div>
@@ -4996,6 +5081,120 @@ function highlightQuery(text: string, query: string): React.ReactNode[] {
 /// App icons by launch target, for the whole session: the backend caches
 /// too, this just saves the round trip on every re-render and keystroke.
 const appIconCache = new Map<string, string | null>();
+
+/// First start (#8): three short pages, then the one real question, whether
+/// to download the semantic model. Enter moves on, Esc hides the window
+/// (the welcome comes back next time until it is answered).
+function Welcome({
+  panelRef,
+  hotkey,
+  onChoose,
+}: {
+  panelRef: React.RefObject<HTMLDivElement | null>;
+  hotkey: string;
+  onChoose: (on: boolean) => Promise<void>;
+}) {
+  const [step, setStep] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const last = 2;
+  const choose = async (on: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    await onChoose(on);
+    setBusy(false);
+  };
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, [panelRef, step]);
+  return (
+    <div
+      className="panel welcome"
+      ref={panelRef}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          void getCurrentWindow().hide();
+        } else if (e.key === "Enter" && step < last) {
+          e.preventDefault();
+          setStep(step + 1);
+        } else if (e.key === "ArrowLeft" && step > 0) {
+          setStep(step - 1);
+        } else if (e.key === "ArrowRight" && step < last) {
+          setStep(step + 1);
+        }
+      }}
+    >
+      <div className="welcome-body" data-tauri-drag-region>
+        {step === 0 && (
+          <>
+            <p className="welcome-title">{t("Welcome to magpie")}</p>
+            <p className="welcome-text">
+              {t("One search box for your apps, files, bookmarks, starred repos and clipboard. Everything stays on this computer.")}
+            </p>
+            <p className="welcome-text">
+              {t("Open it from anywhere with")} <kbd>{hotkey}</kbd>
+              {t(", type, and press Enter.")}
+            </p>
+          </>
+        )}
+        {step === 1 && (
+          <>
+            <p className="welcome-title">{t("What it finds")}</p>
+            <ul className="welcome-list">
+              <li>{t("Apps, by name, initials or pinyin: vsc, wx")}</li>
+              <li>{t("Files in the folders you add in settings, text and images alike")}</li>
+              <li>{t("Bookmarks and history from your browsers")}</li>
+              <li>{t("Your starred GitHub repos, once you connect")}</li>
+              <li>{t("What you copy, if you turn the clipboard history on")}</li>
+            </ul>
+            <p className="welcome-text">
+              <kbd>tab</kbd> {t("switches between them. The box is also a calculator, a unit converter and more; the tips below it show how.")}
+            </p>
+          </>
+        )}
+        {step === 2 && (
+          <>
+            <p className="welcome-title">{t("Search by meaning?")}</p>
+            <p className="welcome-text">
+              {t("With semantic search, “unpaid bill from the plumber” finds the plumbing invoice even when no word matches. It runs a model on this computer: about 500 MB to download once, and some memory while magpie runs.")}
+            </p>
+            <p className="welcome-text">
+              {t("Without it, search matches words, and apps, tools and everything else work the same. You can change this any time in Settings → General.")}
+            </p>
+            <div className="welcome-choice">
+              <button className="primary-btn" disabled={busy} onClick={() => void choose(true)}>
+                {t("Turn it on (downloads ~500 MB)")}
+              </button>
+              <button className="ghost-btn" disabled={busy} onClick={() => void choose(false)}>
+                {t("Not now")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      <div className="welcome-foot">
+        <span className="welcome-dots">
+          {[0, 1, 2].map((i) => (
+            <i key={i} className={i === step ? "on" : ""} />
+          ))}
+        </span>
+        <span className="welcome-nav">
+          {step > 0 && (
+            <button className="link-btn" onClick={() => setStep(step - 1)}>
+              {t("Back")}
+            </button>
+          )}
+          {step < last && (
+            <button className="primary-btn" onClick={() => setStep(step + 1)}>
+              {t("Next")}
+            </button>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /// A key combination, modifier and key apart so "⌘K" does not read as one
 /// glyph and "Ctrl" does not run into its key (#5).

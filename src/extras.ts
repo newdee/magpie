@@ -148,6 +148,7 @@ export const TIPS: string[] = [
   "Ctrl+Alt+Space looks up the text you have selected in any app — Option+Shift+Space on a Mac",
   "Passwords and keys in the clipboard history show starred; Show on the row reveals one",
   "Apps on an external drive: add their folder in Settings → Local Files → App folders",
+  "Before a game, pause semantic search from the tray to free its memory",
 ];
 
 export function tipsEnabled(): boolean {

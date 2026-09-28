@@ -456,9 +456,16 @@ brew install --cask newdee/tap/magpie
 macOS builds are Developer ID signed and notarized (since v0.1.24), so they
 open like any other app and folder-permission grants survive updates.
 
-First launch downloads the text embedding model (~500 MB); keyword search
-works immediately while it warms up. The image model (~200 MB) follows once
-an image, a video or an image clip is indexed.
+The first start opens on a short welcome and asks whether to turn on
+semantic search. Nothing is downloaded until you say yes; then the text
+model (~500 MB) comes down once, with keyword search working meanwhile, and
+the image model (~200 MB) follows once an image, a video or an image clip is
+indexed. Without it, search matches words (videos are listed by name, not
+split into scenes) and everything else works the same. Settings → General switches it on or off, and can pause it to free
+the models' memory (about 0.8 GB on Windows) for a game or another heavy
+program; the tray menu can too. A paused search runs on keywords until you
+resume it or restart magpie. Installs from before this keep semantic search
+on.
 
 ## Build from source
 

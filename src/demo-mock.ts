@@ -76,6 +76,9 @@ const status = {
   last_sync: new Date().toISOString(),
   username: "newdee",
   has_token: true,
+  // ?welcome=1 opens on the first-start screen
+  semantic: (new URLSearchParams(location.search).has("welcome") ? "undecided" : "on") as string,
+  semantic_paused: false,
   model: "ready",
   image_model: "ready",
   ocr_enabled: false,
@@ -574,6 +577,21 @@ mockIPC((cmd, args) => {
       const list = status.app_folders.filter((p) => p !== a.path);
       status.app_folders = a.add ? [...list, a.path] : list;
       return status.app_folders;
+    }
+    case "set_semantic": {
+      const on = (args as { enabled: boolean }).enabled;
+      status.semantic = on ? "on" : "off";
+      status.semantic_paused = false;
+      status.model = on ? "ready" : "off";
+      status.image_model = on ? "ready" : "idle";
+      return null;
+    }
+    case "pause_semantic": {
+      const pause = (args as { pause: boolean }).pause;
+      status.semantic_paused = pause;
+      status.model = pause ? "paused" : "ready";
+      status.image_model = pause ? "idle" : "ready";
+      return null;
     }
     case "disconnect_github":
       status.has_token = false;
