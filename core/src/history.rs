@@ -130,7 +130,7 @@ pub fn sync_history(conn: &Connection) -> Result<HistoryReport> {
         }
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = crate::db::write_tx(conn)?;
     let mut seen = Vec::new();
     for h in &raw {
         tx.execute(

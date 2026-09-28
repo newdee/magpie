@@ -376,6 +376,14 @@ fn ensure_column(conn: &Connection, table: &str, col: &str, ddl: &str) -> Result
 
 // ---------- meta ----------
 
+/// A transaction that takes the write lock at BEGIN (IMMEDIATE), where the
+/// busy timeout covers the wait. A deferred one that writes after another
+/// connection committed fails at once with SQLITE_BUSY_SNAPSHOT (517), no
+/// waiting: the bookmark sync hit that during first-start indexing.
+pub fn write_tx(conn: &Connection) -> Result<rusqlite::Transaction<'_>> {
+    Ok(rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?)
+}
+
 pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| {
@@ -397,7 +405,7 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
 /// index with its READMEs and vectors, and which repos were opened. One
 /// transaction, so a crash leaves either the old account or none.
 pub fn forget_github(conn: &mut Connection) -> Result<()> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM meta WHERE key IN ('token', 'username', 'last_sync')", [])?;
     tx.execute("DELETE FROM repos", [])?; // chunks and FTS rows follow (cascade, trigger)
     tx.execute("DELETE FROM hit_stats WHERE kind = 'repo'", [])?;
@@ -447,7 +455,7 @@ pub fn upsert_repo(conn: &Connection, repo: &Repo) -> Result<()> {
 
 /// Delete repos whose id is NOT in `keep` (unstarred). Returns number removed.
 pub fn delete_repos_not_in(conn: &mut Connection, keep: &[i64]) -> Result<usize> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("CREATE TEMP TABLE IF NOT EXISTS keep_ids (id INTEGER PRIMARY KEY)", [])?;
     tx.execute("DELETE FROM keep_ids", [])?;
     {
@@ -606,7 +614,7 @@ pub fn put_repo_chunks(
     doc_hash: &str,
     vecs: &[Vec<f32>],
 ) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    let tx = write_tx(conn)?;
     tx.execute("DELETE FROM repo_chunks WHERE repo_id = ?1", [repo_id])?;
     for (idx, vec) in vecs.iter().enumerate() {
         let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();

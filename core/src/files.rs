@@ -738,7 +738,7 @@ pub fn embed_pending_files(
         }
         // one transaction per file: a crash mid-write must never leave a file
         // with the new hash but only some of its chunks (it would never heal)
-        let tx = conn.unchecked_transaction()?;
+        let tx = crate::db::write_tx(conn)?;
         tx.execute("DELETE FROM file_chunks WHERE file_id = ?1", [id])?;
         for (idx, vec) in vecs.iter().enumerate() {
             let bytes: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();

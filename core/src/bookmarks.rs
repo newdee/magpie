@@ -187,7 +187,7 @@ pub fn sync_bookmarks(conn: &Connection) -> Result<BookmarkReport> {
         }
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = crate::db::write_tx(conn)?;
     let mut seen = Vec::new();
     for b in &raw {
         tx.execute(
