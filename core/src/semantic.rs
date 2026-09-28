@@ -102,6 +102,24 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_stored_value_counts_as_none() {
+        // fresh: still undecided, the bad value left for the welcome to replace
+        let conn = db::open_in_memory().unwrap();
+        db::meta_set(&conn, META_KEY, "yes").unwrap();
+        assert_eq!(choice(&conn, &tmp("bad-fresh")).unwrap(), Choice::Undecided);
+        // used before: on, and the bad value replaced by "1"
+        conn.execute("INSERT INTO folders(path) VALUES ('/x')", []).unwrap();
+        assert_eq!(choice(&conn, &tmp("bad-used")).unwrap(), Choice::On);
+        assert_eq!(db::meta_get(&conn, META_KEY).unwrap().as_deref(), Some("1"));
+        // empty string, whitespace: the same
+        for bad in ["", " 1", "1 ", "true"] {
+            let conn = db::open_in_memory().unwrap();
+            db::meta_set(&conn, META_KEY, bad).unwrap();
+            assert_eq!(choice(&conn, &tmp("bad-x")).unwrap(), Choice::Undecided, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn an_install_used_before_stays_on() {
         // a downloaded model
         let conn = db::open_in_memory().unwrap();
