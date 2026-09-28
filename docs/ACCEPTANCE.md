@@ -1,3 +1,57 @@
+# 验收记录 2026-09-28（Linux 支持 Ubuntu 22.04）
+
+## 实现
+
+- `ort` 在 Linux 目标上加 `load-dynamic`（只影响 Linux；它带的 `ort-sys/disable-linking` 让构建脚本跳过静态链接，即使
+  fastembed 开着 `download-binaries`）。
+- `core/src/onnx.rs`：`ensure_runtime()` 只加载一次；查找顺序 `ORT_DYLIB_PATH` → 程序旁的 `../lib/magpie/libonnxruntime.so`
+  （deb / rpm 的 `/usr/lib/magpie/`，AppImage 内同构）→ 程序同目录；找不到返回列出路径的错误。三个模型（e5、SigLIP、OCR）
+  的每个构造入口先调用它；非 Linux 为空操作。
+- `scripts/fetch-onnxruntime.sh`：下载微软官方 onnxruntime-linux-x64-1.28.2（与 Windows / macOS 静态链接的 1.28.0 同代），
+  sha256 固定校验，放到 `src-tauri/lib/`（不入库）；`tauri.linux.conf.json` 把它作为资源装进 Linux 包。
+- CI 与 release 的 Linux 任务换到 ubuntu-22.04；release 构建后新增检查：AppImage 内所有 ELF 要求的 glibc 不超过 2.35，
+  且带着 `usr/lib/magpie/libonnxruntime.so`。
+- README 双语：Linux 版要求 Ubuntu 22.04+ / glibc 2.35+；源码构建说明 Linux 先运行取库脚本、开发版用 `ORT_DYLIB_PATH`。
+
+## 发现并修复
+
+| # | 阶段 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 验证脚本 | 语义查询只放 1 个文件，无关查询也返回它，分不出按意思命中 | 改为 3 个不同主题的文件，看排序 |
+| 2 | 验证脚本 | 首次启动等数据库只等 25 s，WSL 里门户服务超时让首启超过它，误报"没建库" | 改为最多等 90 s，记录实际等待 |
+| 3 | 验证脚本 | 缺库时"应用是否还活着"用 `pgrep` 匹配路径，进程名其实是 `magpie`，误报已退出 | 改为列出进程；实际在运行 |
+| 4 | CI | 22.04 测试任务链接失败 `__isoc23_sscanf`：rust-cache 键不分 Ubuntu 版本，复用了 24.04 按新 glibc 头编的 C 目标文件 | CI 与 release 的缓存键加上 runner 镜像名；重跑全绿 |
+| 5 | 真机回归 | T20「cached icons paint with the rows」在新构建首跑偶发 mono：测试准备直接调后端 `app_icon`，前端图标表要等启动时的图标预取发事件才更新，冷启动时事件晚于唤出 | 测试改为等本次启动的图标预取日志（读取 ≥ 2）后再唤出；产品行为不变 |
+
+## 22.04 实测（WSL Ubuntu 22.04.5，glibc 2.35，tester 用户，xvfb）
+
+- 原生构建：release 编译链接成功，deb 与 AppImage 打包成功；core 测试 175 过。
+- release 的两道检查逐字在本地跑：权限通过；AppImage 内最高 `GLIBC_2.35`；带 `libonnxruntime.so`；主程序不再导出
+  `OrtGetApiBase`（0，即运行时加载）。反向对照：0.4.7 的 AppImage 过同一检查报"需要 GLIBC_2.39"。
+- 微软库本身：最高 `GLIBC_2.27` / `GLIBCXX_3.4.21`，dlopen 成功，版本 1.28.2，sha256 校验通过。
+- AppImage（root 所有、tester 运行）与 deb（apt 安装）各一轮：从包内路径加载 ONNX Runtime，e5 就绪，3 个文件嵌入；
+  MCP 语义查询「unpaid bill from the plumber」首位 house.txt，「cooking pasta for dinner」首位 recipe.txt（与文件无共同
+  关键词）。
+- 缺库：模型状态报「ONNX Runtime library not found (looked in …)」，stderr 无 panic，应用继续运行（文件监控、MCP、图标照常）。
+- `ORT_DYLIB_PATH` 绝对路径：从指定位置加载；不设：报缺库并列出两处查找位置。
+
+## 连续三轮干净（修 #4、#5 之后）
+
+- R1（机制）：Windows 真机 T20 15/15（排第一个跑）、T13 5/5、T15 18/18、T9 30/30、T22 11/11、T23 6/6、T26 6/6、
+  T29 15/15、T31 27/27、T33 25/25，日志窗口启动 14 次、托盘警告 0；CI（ubuntu-22.04：取库、core 测试、clippy、前端构建；
+  macOS clippy）全绿。
+- R2（静态 + 一致性）：clippy 0、tsc 0、a1 / a3 / docs-parity 0 FAIL、YAML / JSON 可解析；核对"任何 ort 使用前先
+  ensure_runtime"：直接建会话的只有 siglip、ocr，都只经已加检查的构造函数进入；README 的两处说法均已在 22.04 实测。
+- R3（可复现）：22.04 运行验证 ×2，各 39 行，去时间戳后逐行一致（语义分数逐位相同）；Windows cargo test ×2 各 242 行
+  一致（1D6699FDF3AFD35C）。
+
+## 遗留
+
+- rpm 包是否同样带上库：资源配置对 deb / rpm / AppImage 通用，本地只打了 deb 与 AppImage，rpm 待发版后从产物核对。
+- WSL 里首次启动受门户服务超时拖慢（约 30 s），属测试环境缺完整桌面门户，真实桌面不应出现。
+
+---
+
 # 验收记录 2026-09-28（Linux 修复，0.4.8）
 
 起因：AppImage 目录的机器人把 magpie 收进 PR（AppImage/appimage.github.io#6015），它在 Ubuntu 22.04 上的测试报
