@@ -70,6 +70,19 @@ jobs:
             echo "notarization credentials not set; signing only"
           fi
 
+      # The bundler caches AppRun with mode 0770 and copies it, mode and all,
+      # into the AppImage as AppRun.wrapped; mounted under another owner
+      # (firejail, the AppImage catalog's test, shared installs) it then
+      # fails with "Permission denied" (tauri-apps/tauri#16155). It skips the
+      # download when the file is already cached, so seed it 0755.
+      - name: Seed AppRun executable for everyone
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          mkdir -p ~/.cache/tauri
+          curl -fsSL -o ~/.cache/tauri/AppRun-x86_64 \
+            https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
+          chmod 755 ~/.cache/tauri/AppRun-x86_64
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,6 +100,23 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # The draft is already uploaded by now; failing here fails the run, and
+      # a failed run is not published. Catches the seed above going stale.
+      - name: Check every program in the AppImage runs for any user
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          set -euo pipefail
+          img=$(ls "$PWD"/target/release/bundle/appimage/*.AppImage)
+          cd "$(mktemp -d)"
+          "$img" --appimage-extract >/dev/null
+          test -x squashfs-root/AppRun.wrapped
+          bad=$(find squashfs-root -type f -perm -u+x ! -perm -o+x)
+          if [ -n "$bad" ]; then
+            echo "::error::executable for its owner only: $bad"
+            exit 1
+          fi
+          echo "every program in the AppImage is executable by everyone"
 
   test:
     # PR / push safety net without producing a release
