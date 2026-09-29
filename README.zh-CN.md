@@ -414,6 +414,22 @@ src/        React 浮窗 UI（单窗口）
 
 - Twitter/X 点赞源（通过数据导出档案，不依赖付费 API）
 
+## 致谢
+
+感谢 [@Tikas](https://github.com/Tikas)。Tikas 很早就开始用 magpie，一直认真地写
+长长的 issue，提了很多很好的建议。这份 README 里有不少功能就是这么来的：
+
+- [#4](https://github.com/newdee/magpie/issues/4)：点别处自动收起、`Ctrl+1` … `Ctrl+9`
+  切换标签页、开机启动、应用显示自己的图标、Homebrew 安装，以及空闲时内存大幅下降。
+- [#5](https://github.com/newdee/magpie/issues/5)：同时搜索多个浏览器的网页记录。
+- [#6](https://github.com/newdee/magpie/issues/6)：设置分页、剪贴板历史里的密钥打星号、
+  其他磁盘上的应用文件夹，以及断开 GitHub 连接。
+- [#7](https://github.com/newdee/magpie/issues/7)：选中项会跳到最后一条结果的问题。
+- [#8](https://github.com/newdee/magpie/issues/8)：语义搜索由你决定开不开、首次启动的
+  欢迎页，以及暂停语义搜索来让出内存。
+
+欢迎在 [Issues](https://github.com/newdee/magpie/issues) 里继续提想法和问题。
+
 ## 协议
 
 [MIT](LICENSE)
