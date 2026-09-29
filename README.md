@@ -536,25 +536,12 @@ file.
 
 ## Thanks
 
-Thanks to [@Tikas](https://github.com/Tikas), who started using magpie early
-and keeps writing long, careful issues full of good ideas. A good part of this
-README is there because of them:
+To everyone who has reported a bug or suggested an idea in
+[Issues](https://github.com/newdee/magpie/issues):
 
-- [#4](https://github.com/newdee/magpie/issues/4): hiding on click-out,
-  `Ctrl+1` … `Ctrl+9` for tabs, launch at login, apps with their own icons,
-  the Homebrew cask, and much less memory at idle.
-- [#5](https://github.com/newdee/magpie/issues/5): web search across several
-  browsers at once.
-- [#6](https://github.com/newdee/magpie/issues/6): settings in pages, secrets
-  starred in clipboard history, app folders on other drives, and a way to
-  disconnect GitHub.
-- [#7](https://github.com/newdee/magpie/issues/7): the selection jumping to
-  the last result.
-- [#8](https://github.com/newdee/magpie/issues/8): semantic search as your
-  choice, the first-start welcome, and a pause that frees its memory.
-
-Ideas and bug reports are always welcome in
-[Issues](https://github.com/newdee/magpie/issues).
+<a href="https://github.com/Tikas"><img src="https://github.com/Tikas.png" width="40" height="40" alt="Tikas" title="Tikas"/></a>
+<a href="https://github.com/Hyphen-H"><img src="https://github.com/Hyphen-H.png" width="40" height="40" alt="Hyphen-H" title="Hyphen-H"/></a>
+<a href="https://github.com/qczlight"><img src="https://github.com/qczlight.png" width="40" height="40" alt="qczlight" title="qczlight"/></a>
 
 ## License
 
