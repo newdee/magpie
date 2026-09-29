@@ -132,6 +132,10 @@ interface CalcHit {
   timerIds?: number[];
   /// `diff`: the last two copies, line by line ("+", "-" or " ", text)
   diff?: [string, string][];
+  /// what Enter does instead of copying: `open:<path>`, `volume:<n>`, `mute:<bool>`
+  action?: string | null;
+  /// the query this answers; an action is only taken while it is still typed
+  forQuery?: string;
 }
 
 /// Labels the backend gives calculator / transform rows, translated when
@@ -149,13 +153,36 @@ const CALC_LABELS = [
   "dice",
   "system",
   "QR code in the copied image",
+  "open folder",
+  "show file in folder",
+  "volume",
+  "set volume",
+  "mute",
+  "unmute",
+  "already muted",
+  "not muted",
 ];
+
+/// Rows that only show something (the volume now, "already muted"): Enter
+/// does nothing there, rather than copy "🔊 38%".
+const INFO_LABELS = ["volume", "already muted", "not muted"];
+function isInfoRow(c: CalcHit): boolean {
+  return !c.action && !c.error && INFO_LABELS.includes(c.alt ?? "");
+}
+
+/// What Enter does on a row with an action, for its sub line.
+const ACTION_HINTS: Record<string, string> = {
+  open: "Enter opens it",
+  volume: "Enter sets it",
+  mute: "Enter does it",
+};
 /// Messages rows answer with when they cannot do their job; translated too.
 const CALC_MESSAGES = [
   "Turn on clipboard history to compare the last two things you copied",
   "Copy two pieces of text first; diff compares the last two",
   "The last two copies are the same",
   "No QR code found in the copied image",
+  "No audio output device found",
 ];
 
 function calcLabel(alt: string | null | undefined): string {
@@ -192,6 +219,10 @@ interface ProcessHit {
   exe: string | null;
   /** port search: the sockets it listens on ("TCP 0.0.0.0:3000") */
   listen?: string;
+  /** `cpu`: share of the whole machine, 0–100 */
+  cpu?: number;
+  /** `top` / `cpu`: every process of this name together */
+  group?: { count: number; memory: number };
 }
 
 type Hit =
@@ -382,6 +413,25 @@ const COMMAND_LABELS: Record<string, string> = {
   shutdown: "Shut Down",
   empty_trash: IS_WIN ? "Empty Recycle Bin" : "Empty Trash",
   dark_mode: "Toggle Dark Mode",
+  // system settings pages (syscmd.rs PANES)
+  settings_wifi: "Wi-Fi Settings",
+  settings_bluetooth: "Bluetooth Settings",
+  settings_network: "Network Settings",
+  settings_display: "Display Settings",
+  settings_sound: "Sound Settings",
+  settings_power: IS_WIN ? "Power & Battery" : "Battery",
+  settings_default_apps: "Default Apps",
+  settings_apps: "Installed Apps",
+  settings_keyboard: "Keyboard Settings",
+  settings_mouse: IS_MAC ? "Trackpad Settings" : "Mouse & Touchpad",
+  settings_notifications: "Notification Settings",
+  settings_datetime: "Date & Time Settings",
+  settings_language: "Language & Region",
+  settings_update: IS_WIN ? "Windows Update" : "Software Update",
+  settings_privacy: "Privacy & Security",
+  settings_printers: "Printers",
+  settings_wallpaper: "Wallpaper",
+  settings_storage: "Storage",
 };
 const COMMAND_GLYPHS: Record<string, string> = {
   lock: "🔒",
@@ -390,6 +440,24 @@ const COMMAND_GLYPHS: Record<string, string> = {
   shutdown: "⏻",
   empty_trash: "🗑️",
   dark_mode: "🌓",
+  settings_wifi: "📶",
+  settings_bluetooth: "🔵",
+  settings_network: "🌐",
+  settings_display: "🖥️",
+  settings_sound: "🔊",
+  settings_power: "🔋",
+  settings_default_apps: "⭐",
+  settings_apps: "📦",
+  settings_keyboard: "⌨️",
+  settings_mouse: "🖱️",
+  settings_notifications: "🔔",
+  settings_datetime: "🕒",
+  settings_language: "🌏",
+  settings_update: "⬆️",
+  settings_privacy: "🛡️",
+  settings_printers: "🖨️",
+  settings_wallpaper: "🖼️",
+  settings_storage: "💾",
 };
 
 /// One entry of a row's action menu (Ctrl/Cmd+K). `risky` actions go
@@ -1032,6 +1100,24 @@ export default function App() {
       }
       return;
     }
+    // `top` / `内存` (by memory) and `cpu` (by CPU): the heaviest processes,
+    // from any tab; Enter twice ends one, as with `kill`. Only the words
+    // the docs name: each one takes that search away from files
+    const topQ = /^(top|内存|cpu)$/i.exec(q.trim());
+    if (topQ) {
+      try {
+        const by = /^cpu$/i.test(topQ[1]) ? "cpu" : "memory";
+        const ps = await invoke<Omit<ProcessHit, "kind">[]>("top_processes", { by });
+        if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
+          setResults(ps.map((p) => ({ ...p, kind: "process" as const })));
+          setSelected(0);
+          setSelAnchor(null);
+        }
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return;
+    }
     // `kill <name>` lists running processes, from any tab
     const killQ = matchKill(q);
     if (killQ) {
@@ -1274,9 +1360,16 @@ export default function App() {
       };
     }
     if (q.length >= 2) {
+      // answers take different times (a network path, the audio device):
+      // a late one for an older query must not replace the current row,
+      // or Enter would act on what is no longer typed
+      let live = true;
       invoke<CalcHit | null>("calc_query", { query: q })
-        .then((r) => setCalcHit(r ?? null))
-        .catch(() => setCalcHit(null));
+        .then((r) => live && setCalcHit(r ? { ...r, forQuery: q } : null))
+        .catch(() => live && setCalcHit(null));
+      return () => {
+        live = false;
+      };
     } else {
       setCalcHit(null);
     }
@@ -1569,8 +1662,20 @@ export default function App() {
   /// (a QR code) or the value (a color's hex); an error copies nothing.
   const takeCalc = useCallback(
     async (c: CalcHit) => {
-      if (c.error) return;
+      if (c.error || isInfoRow(c)) return;
       try {
+        if (c.action) {
+          // typed on before this row caught up (vol 4 → vol 40): not yet
+          if (c.forQuery !== undefined && c.forQuery !== queryRef.current.trim()) return;
+          // a typed path opens (the backend hides the palette); the volume
+          // changes and the footer says to what
+          await invoke<string>("run_action", { action: c.action });
+          const [kind, arg] = [c.action.split(":")[0], c.action.slice(c.action.indexOf(":") + 1)];
+          if (kind === "volume") setNotice(tf("Volume set to {n}%", { n: arg }));
+          else if (kind === "mute") setNotice(arg === "true" ? t("Sound muted") : t("Sound on"));
+          await finishAction();
+          return;
+        }
         if (c.timer) {
           // a countdown: the app keeps the clock, a notification says when
           await invoke("start_timer", { seconds: c.timer, label: c.value });
@@ -4678,7 +4783,7 @@ export default function App() {
                       ? `⏲ ${clock(calcHit.timer)} · ${calcHit.value}`
                       : calcHit.diff
                         ? t("Last two copies compared")
-                        : calcHit.swatch || calcHit.error || calcHit.image || calcHit.timerIds
+                        : calcHit.swatch || calcHit.error || calcHit.image || calcHit.timerIds || calcHit.action || isInfoRow(calcHit)
                           ? calcHit.value
                           : // a multi-line result (pretty JSON) previews as one line
                             `= ${oneLine(calcHit.value)}`}
@@ -4696,17 +4801,32 @@ export default function App() {
                   <span className="row-sub">
                     {calcHit.timer
                       ? t("Enter starts the timer; a notification comes when it ends")
-                      : `${calcLabel(calcHit.alt)}${calcHit.alt && !calcHit.error && !calcHit.timerIds ? " · " : ""}${
-                          calcHit.error || calcHit.timerIds
-                            ? ""
-                            : calcHit.image
-                              ? t("Enter copies the image")
-                              : t("Enter copies the result")
-                        }`}
+                      : calcHit.action
+                        ? `${calcLabel(calcHit.alt)} · ${t(
+                            // a file is only shown in its folder, never opened
+                            calcHit.alt === "show file in folder"
+                              ? "Enter does it"
+                              : (ACTION_HINTS[calcHit.action.split(":")[0]] ?? "Enter does it"),
+                          )}`
+                        : isInfoRow(calcHit)
+                          ? calcLabel(calcHit.alt)
+                          : `${calcLabel(calcHit.alt)}${calcHit.alt && !calcHit.error && !calcHit.timerIds ? " · " : ""}${
+                              calcHit.error || calcHit.timerIds
+                                ? ""
+                                : calcHit.image
+                                  ? t("Enter copies the image")
+                                  : t("Enter copies the result")
+                            }`}
                   </span>
                 </div>
                 </div>
-                <span className="badge">{t("calc")}</span>
+                <span className="badge">
+                  {calcHit.action?.startsWith("open:")
+                    ? t("Path")
+                    : calcHit.action || isInfoRow(calcHit) || (calcHit.error && calcHit.alt === "volume")
+                      ? t("Sound")
+                      : t("calc")}
+                </span>
               </div>
             )}
             {results.map((r, i) => (
@@ -4730,7 +4850,11 @@ export default function App() {
                       <div className="row-main">
                         <span className="row-title">{t(COMMAND_LABELS[r.id] ?? r.id)}</span>
                         <span className="row-sub">
-                          {armed === hitKey(r) ? t("Press Enter again to confirm") : t("System command")}
+                          {armed === hitKey(r)
+                            ? t("Press Enter again to confirm")
+                            : r.id.startsWith("settings_")
+                              ? t("System settings")
+                              : t("System command")}
                         </span>
                       </div>
                     </div>
@@ -4745,7 +4869,9 @@ export default function App() {
                       <span className="row-sub">
                         {armed === hitKey(r)
                           ? t("Press Enter again to end this process")
-                          : `${r.listen ? `${r.listen} · ` : ""}PID ${r.pid} · ${formatSize(r.memory)}${r.exe ? ` · ${r.exe}` : ""}`}
+                          : `${r.cpu != null ? `CPU ${r.cpu.toFixed(1)}% · ` : ""}${r.listen ? `${r.listen} · ` : ""}PID ${r.pid} · ${formatSize(r.memory)}${
+                              r.group ? ` · ${tf("{n} of them, {size} in all", { n: r.group.count, size: formatSize(r.group.memory) })}` : ""
+                            }${r.exe ? ` · ${r.exe}` : ""}`}
                       </span>
                     </div>
                     <div className="row-meta">

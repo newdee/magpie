@@ -743,17 +743,21 @@ mod tests {
         // write_tx takes the lock at BEGIN, so the busy timeout covers the
         // wait: another writer holds the lock for 300 ms, this one waits and
         // then succeeds instead of failing
+        // (a signal, not a sleep: under load opening the connection alone can
+        // take longer than any fixed head start)
+        let (locked, is_locked) = std::sync::mpsc::channel();
         let holder = std::thread::spawn({
             let path = path.clone();
             move || {
                 let c = open(&path).unwrap();
                 let t = write_tx(&c).unwrap();
                 t.execute("UPDATE meta SET value = '3' WHERE key = 'k'", []).unwrap();
+                locked.send(()).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(300));
                 t.commit().unwrap();
             }
         });
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        is_locked.recv().unwrap();
         let t0 = std::time::Instant::now();
         let tx = write_tx(&a).unwrap();
         let _: i64 = tx.query_row("SELECT count(*) FROM meta", [], |r| r.get(0)).unwrap();

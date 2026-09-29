@@ -51,6 +51,54 @@ const COMMANDS: &[Command] = &[
     },
 ];
 
+/// A page of the system settings, opened straight from the box: `wifi`,
+/// `蓝牙`, `display`. Windows opens `ms-settings:` pages; macOS the pane
+/// bundle under /System/Library/PreferencePanes, offered only when it is
+/// there; Linux a GNOME Settings panel, offered only with
+/// gnome-control-center installed.
+struct Pane {
+    id: &'static str,
+    names: &'static [&'static str],
+    windows: &'static str,
+    mac: Option<&'static str>,
+    linux: Option<&'static str>,
+}
+
+const PANES: &[Pane] = &[
+    Pane { id: "settings_wifi", names: &["Wi-Fi Settings", "WLAN 设置", "wifi", "wlan", "无线网络", "无线"], windows: "ms-settings:network-wifi", mac: Some("Network"), linux: Some("wifi") },
+    Pane { id: "settings_bluetooth", names: &["Bluetooth Settings", "蓝牙设置", "bluetooth", "蓝牙"], windows: "ms-settings:bluetooth", mac: Some("Bluetooth"), linux: Some("bluetooth") },
+    Pane { id: "settings_network", names: &["Network Settings", "网络设置", "network", "ethernet", "vpn", "网络"], windows: "ms-settings:network-status", mac: Some("Network"), linux: Some("network") },
+    Pane { id: "settings_display", names: &["Display Settings", "显示设置", "display", "monitor", "resolution", "显示器", "分辨率", "屏幕"], windows: "ms-settings:display", mac: Some("Displays"), linux: Some("display") },
+    Pane { id: "settings_sound", names: &["Sound Settings", "声音设置", "sound", "audio", "声音", "音频"], windows: "ms-settings:sound", mac: Some("Sound"), linux: Some("sound") },
+    Pane { id: "settings_power", names: &["Power & Battery", "电源和电池", "power", "battery", "电源", "电池"], windows: "ms-settings:powersleep", mac: Some("Battery"), linux: Some("power") },
+    Pane { id: "settings_default_apps", names: &["Default Apps", "默认应用", "default apps", "默认程序"], windows: "ms-settings:defaultapps", mac: None, linux: Some("default-apps") },
+    Pane { id: "settings_apps", names: &["Installed Apps", "卸载程序", "uninstall", "apps and features", "卸载", "应用和功能"], windows: "ms-settings:appsfeatures", mac: None, linux: None },
+    Pane { id: "settings_keyboard", names: &["Keyboard Settings", "键盘设置", "keyboard", "键盘"], windows: "ms-settings:typing", mac: Some("Keyboard"), linux: Some("keyboard") },
+    Pane { id: "settings_mouse", names: &["Mouse & Touchpad", "鼠标和触摸板", "mouse", "touchpad", "trackpad", "鼠标", "触摸板"], windows: "ms-settings:mousetouchpad", mac: Some("Trackpad"), linux: Some("mouse") },
+    Pane { id: "settings_notifications", names: &["Notification Settings", "通知设置", "notifications", "通知"], windows: "ms-settings:notifications", mac: Some("Notifications"), linux: Some("notifications") },
+    Pane { id: "settings_datetime", names: &["Date & Time Settings", "日期和时间", "date and time", "clock", "日期时间"], windows: "ms-settings:dateandtime", mac: Some("DateAndTime"), linux: Some("datetime") },
+    Pane { id: "settings_language", names: &["Language & Region", "语言和区域", "language", "region", "input method", "语言", "输入法"], windows: "ms-settings:regionlanguage", mac: Some("Localization"), linux: Some("region") },
+    Pane { id: "settings_update", names: &["System Update", "系统更新", "windows update", "software update", "系统升级"], windows: "ms-settings:windowsupdate", mac: Some("SoftwareUpdate"), linux: None },
+    Pane { id: "settings_privacy", names: &["Privacy & Security", "隐私和安全", "privacy", "security", "隐私"], windows: "ms-settings:privacy", mac: Some("Security"), linux: Some("privacy") },
+    Pane { id: "settings_printers", names: &["Printers", "打印机", "printer", "scanner", "打印"], windows: "ms-settings:printers", mac: Some("PrintAndFax"), linux: Some("printers") },
+    Pane { id: "settings_wallpaper", names: &["Wallpaper", "桌面壁纸", "wallpaper", "background", "壁纸", "个性化"], windows: "ms-settings:personalization-background", mac: Some("DesktopScreenEffectsPref"), linux: Some("background") },
+    Pane { id: "settings_storage", names: &["Storage", "存储空间", "storage", "disk space", "存储", "磁盘空间"], windows: "ms-settings:storagesense", mac: None, linux: None },
+];
+
+/// The pane bundle a macOS page opens.
+fn mac_pane_path(name: &str) -> String {
+    format!("/System/Library/PreferencePanes/{name}.prefPane")
+}
+
+/// Is this settings page there to open on this machine?
+fn pane_available(p: &Pane) -> bool {
+    match CURRENT {
+        Os::Windows => true,
+        Os::Mac => p.mac.is_some_and(|m| std::path::Path::new(&mac_pane_path(m)).exists()),
+        Os::Linux => p.linux.is_some() && crate::launch::which("gnome-control-center").is_some(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandHit {
     pub id: &'static str,
@@ -65,36 +113,46 @@ pub fn match_commands(query: &str) -> Vec<CommandHit> {
     if query.trim().chars().count() < 2 {
         return Vec::new();
     }
+    let entry = |id: &str, names: &[&str]| AppEntry {
+        name: names[0].to_string(),
+        target: id.to_string(),
+        aliases: names[1..].iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
     let entries: Vec<AppEntry> = COMMANDS
         .iter()
-        .map(|c| AppEntry {
-            name: c.names[0].to_string(),
-            target: c.id.to_string(),
-            aliases: c.names[1..].iter().map(|s| s.to_string()).collect(),
-            ..Default::default()
-        })
+        .map(|c| entry(c.id, c.names))
+        .chain(PANES.iter().filter(|p| pane_available(p)).map(|p| entry(p.id, p.names)))
         .collect();
-    match_apps(&entries, query, COMMANDS.len(), true)
+    match_apps(&entries, query, entries.len(), true)
         .into_iter()
         .filter(|e| e.score >= 0.65 || (e.score >= 0.5 && !query.trim().is_ascii()))
         .filter_map(|e| {
-            COMMANDS.iter().find(|c| c.id == e.target).map(|c| CommandHit {
-                id: c.id,
-                destructive: c.destructive,
-                score: e.score,
-            })
+            let id = COMMANDS.iter().map(|c| c.id).chain(PANES.iter().map(|p| p.id)).find(|id| *id == e.target)?;
+            Some(CommandHit { id, destructive: is_destructive(id).unwrap_or(false), score: e.score })
         })
         .collect()
 }
 
 pub fn is_destructive(id: &str) -> Option<bool> {
-    COMMANDS.iter().find(|c| c.id == id).map(|c| c.destructive)
+    COMMANDS
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.destructive)
+        .or_else(|| PANES.iter().any(|p| p.id == id).then_some(false))
 }
 
 /// What running `id` does on `os`, as one readable line. Pure: the tests pin
 /// every platform's mechanism from any machine, and a dry run reports it
 /// instead of acting.
 pub fn describe(id: &str, os: Os) -> Option<String> {
+    if let Some(p) = PANES.iter().find(|p| p.id == id) {
+        return match os {
+            Os::Windows => Some(format!("open {}", p.windows)),
+            Os::Mac => p.mac.map(|m| format!("open {}", mac_pane_path(m))),
+            Os::Linux => p.linux.map(|l| format!("gnome-control-center {l}")),
+        };
+    }
     let s = match (id, os) {
         ("lock", Os::Windows) => "user32 LockWorkStation",
         ("lock", Os::Mac) => "login.framework SACLockScreenImmediate",
@@ -126,8 +184,45 @@ pub fn run(id: &str) -> Result<String> {
     if std::env::var_os("MAGPIE_SYSCMD_DRYRUN").is_some() {
         return Ok(format!("dry run: {what}"));
     }
-    imp::run(id)?;
+    match PANES.iter().find(|p| p.id == id) {
+        Some(p) => open_pane(p)?,
+        None => imp::run(id)?,
+    }
     Ok(what)
+}
+
+/// Open a settings page (see [`Pane`]). Opening, not running: the shell's
+/// handler for the URI or pane bundle does the rest.
+fn open_pane(p: &Pane) -> Result<()> {
+    match CURRENT {
+        Os::Windows => {
+            #[cfg(windows)]
+            {
+                use windows::core::HSTRING;
+                use windows::Win32::UI::Shell::ShellExecuteW;
+                use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+                // SAFETY: open a URI with the shell; no window, no parameters
+                let r = unsafe { ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(p.windows), None, None, SW_SHOWNORMAL) };
+                if r.0 as isize <= 32 {
+                    return Err(anyhow!("could not open {} (code {})", p.windows, r.0 as isize));
+                }
+            }
+            Ok(())
+        }
+        Os::Mac => {
+            let m = p.mac.ok_or_else(|| anyhow!("no such settings page on macOS"))?;
+            spawn("open", &[&mac_pane_path(m)]).map(|_| ())
+        }
+        Os::Linux => {
+            let l = p.linux.ok_or_else(|| anyhow!("no such settings page here"))?;
+            // GNOME Settings stays open: start it, do not wait for it
+            std::process::Command::new("gnome-control-center")
+                .arg(l)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| anyhow!("gnome-control-center: {e}"))
+        }
+    }
 }
 
 /// A helper process without a console window flashing up on Windows.
@@ -333,9 +428,68 @@ mod tests {
     }
 
     #[test]
+    fn settings_pages_answer_to_english_chinese_and_pinyin() {
+        if CURRENT != Os::Windows {
+            return; // which pages exist depends on the machine elsewhere
+        }
+        for (q, want) in [
+            ("wifi", "settings_wifi"),
+            ("蓝牙", "settings_bluetooth"),
+            ("bluetooth", "settings_bluetooth"),
+            ("display", "settings_display"),
+            ("分辨率", "settings_display"),
+            ("sound", "settings_sound"),
+            ("声音", "settings_sound"),
+            ("卸载", "settings_apps"),
+            ("uninstall", "settings_apps"),
+            ("默认应用", "settings_default_apps"),
+            ("mryy", "settings_default_apps"),
+            ("壁纸", "settings_wallpaper"),
+            ("打印机", "settings_printers"),
+            ("电池", "settings_power"),
+            // every example README and the site give
+            ("显示", "settings_display"),
+            ("电源", "settings_power"),
+            ("power", "settings_power"),
+            ("default apps", "settings_default_apps"),
+            ("printer", "settings_printers"),
+            ("存储", "settings_storage"),
+            ("storage", "settings_storage"),
+        ] {
+            assert_eq!(ids(q).first().copied(), Some(want), "{q} -> {:?}", ids(q));
+        }
+        // the old commands still come first for their own words
+        assert_eq!(ids("dark")[0], "dark_mode");
+        assert_eq!(ids("lock")[0], "lock");
+        assert_eq!(ids("sp")[0], "lock");
+        assert_eq!(ids("sleep")[0], "sleep");
+        assert_eq!(ids("trash")[0], "empty_trash");
+    }
+
+    #[test]
+    fn every_settings_page_opens_on_windows_and_is_harmless() {
+        let mut seen = std::collections::HashSet::new();
+        for p in PANES {
+            assert!(seen.insert(p.id), "{} twice", p.id);
+            assert!(p.id.starts_with("settings_") && p.windows.starts_with("ms-settings:"), "{}", p.id);
+            assert_eq!(is_destructive(p.id), Some(false));
+            assert_eq!(describe(p.id, Os::Windows), Some(format!("open {}", p.windows)));
+            if let Some(m) = p.mac {
+                assert_eq!(describe(p.id, Os::Mac), Some(format!("open /System/Library/PreferencePanes/{m}.prefPane")));
+            } else {
+                assert_eq!(describe(p.id, Os::Mac), None);
+            }
+        }
+        std::env::set_var("MAGPIE_SYSCMD_DRYRUN", "1");
+        if CURRENT == Os::Windows {
+            assert_eq!(run("settings_wifi").unwrap(), "dry run: open ms-settings:network-wifi");
+        }
+    }
+
+    #[test]
     fn stray_letters_never_offer_a_command() {
         // one letter, and letters that sit inside a word without starting it
-        for q in ["s", "l", "ee", "ock", "tart", "ash", "vscode", "photoshop"] {
+        for q in ["s", "l", "ee", "ock", "tart", "ash", "vscode", "photoshop", "chrome", "wechat", "steam", "notepad"] {
             assert!(ids(q).is_empty(), "{q:?} offered {:?}", ids(q));
         }
     }

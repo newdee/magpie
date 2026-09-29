@@ -28,6 +28,7 @@ document.head.appendChild(style);
 
 // countdowns started in the demo (`timer 25m …`), for `timer` to list
 const demoTimers: { id: number; label: string; ends_at: number }[] = [];
+const demoVolume = { level: 38, muted: false };
 
 const folders = [
   { id: 1, path: "C:\\Users\\dfine\\Documents\\projects", file_count: 1284 },
@@ -431,6 +432,31 @@ mockIPC((cmd, args) => {
         const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAAAAABX3VL4AAAADklEQVR4nGNgYGBgAAAABQABXvMqGgAAAABJRU5ErkJggg==";
         return { value: q.slice(3), alt: `QR code · ${q.length - 3} chars`, swatch: null, image: png };
       }
+      // typed paths: a folder opens, a file is shown in its folder
+      if (/^(D:\\Projects|~\/Downloads)$/i.test(q)) return { value: q, alt: "open folder", action: `open:${q}` };
+      if (q === "~/Downloads/invoice-2026-09.pdf") return { value: q, alt: "show file in folder", action: `open:${q}` };
+      // volume: a stand-in output device at demoVolume
+      const speaker = (v: typeof demoVolume) => `${v.muted ? "🔇" : "🔊"} ${v.level}%`;
+      const vol = /^(?:vol|volume|音量)(?:\s+([+-]?)(\d{1,3})%?)?$/i.exec(q);
+      if (vol) {
+        if (!vol[2]) return { value: speaker(demoVolume), alt: "volume" };
+        // ?slowcalc: "vol 4" answers late, as a slow device or path can
+        if (q === "vol 4" && new URLSearchParams(location.search).has("slowcalc")) {
+          const late = { value: `${speaker(demoVolume)} → 4%`, alt: "set volume", action: "volume:4" };
+          return new Promise((r) => setTimeout(() => r(late), 800));
+        }
+        const n = Number(vol[2]);
+        const to = vol[1] === "+" ? demoVolume.level + n : vol[1] === "-" ? demoVolume.level - n : n;
+        if (!vol[1] && n > 100) return null;
+        const t = Math.max(0, Math.min(100, to));
+        return { value: `${speaker(demoVolume)} → ${t}%`, alt: "set volume", action: `volume:${t}` };
+      }
+      const mute = /^(mute|静音|unmute|取消静音)$/i.exec(q);
+      if (mute) {
+        const on = /^(mute|静音)$/i.test(q);
+        if (demoVolume.muted === on) return { value: speaker(demoVolume), alt: on ? "already muted" : "not muted" };
+        return { value: `${speaker(demoVolume)} → ${speaker({ ...demoVolume, muted: on })}`, alt: on ? "mute" : "unmute", action: `mute:${on}` };
+      }
       if (q.startsWith("json {") && !q.endsWith("}")) {
         return { value: "line 1 column 9: EOF while parsing an object", alt: "not valid JSON", swatch: null, error: true };
       }
@@ -492,12 +518,42 @@ mockIPC((cmd, args) => {
         ["shutdown", ["shut down", "shutdown", "关机"], true],
         ["empty_trash", ["empty trash", "trash", "清空回收站"], true],
         ["dark_mode", ["toggle dark mode", "dark mode", "深色模式"], false],
+        ["settings_wifi", ["wifi", "wlan", "无线网络"], false],
+        ["settings_bluetooth", ["bluetooth", "蓝牙"], false],
+        ["settings_display", ["display", "resolution", "显示器", "分辨率"], false],
+        ["settings_sound", ["sound", "audio", "声音"], false],
+        ["settings_apps", ["uninstall", "卸载"], false],
+        ["settings_storage", ["storage", "disk space", "存储"], false],
       ];
       return ql.length < 2
         ? []
         : table
             .filter(([, names]) => names.some((n) => n.startsWith(ql)))
-            .map(([id, , destructive]) => ({ id, destructive, score: 0.9 }));
+            .map(([id, , destructive]) => ({ id, destructive, score: id.startsWith("settings_") ? 0.85 : 0.9 }));
+    }
+    case "top_processes": {
+      // ?top: memory by default, cpu when asked; totals by name like the backend
+      const byCpu = (args as { by?: string }).by === "cpu";
+      const rows = [
+        { pid: 4312, name: "chrome.exe", memory: 412_000_000, cpu: 6.2, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", group: { count: 23, memory: 2_140_000_000 } },
+        { pid: 7788, name: "Code.exe", memory: 356_000_000, cpu: 3.1, exe: "C:\\Users\\dfine\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", group: { count: 9, memory: 1_020_000_000 } },
+        { pid: 9920, name: "WeChat.exe", memory: 298_000_000, cpu: 0.4, exe: "C:\\Program Files\\Tencent\\WeChat\\WeChat.exe" },
+        { pid: 18244, name: "node.exe", memory: 142_000_000, cpu: 12.8, exe: "C:\\Program Files\\nodejs\\node.exe" },
+      ];
+      // like the backend: a CPU share only when ranking by CPU
+      return byCpu ? [...rows].sort((a, b) => b.cpu - a.cpu) : rows.map(({ cpu: _, ...r }) => r);
+    }
+    case "run_action": {
+      const a = String((args as { action?: string }).action ?? "");
+      if (a.startsWith("volume:")) {
+        demoVolume.level = Number(a.slice(7));
+        return `dry run: volume ${demoVolume.level}%`;
+      }
+      if (a.startsWith("mute:")) {
+        demoVolume.muted = a === "mute:true";
+        return `dry run: mute ${demoVolume.muted}`;
+      }
+      return "dry run";
     }
     case "list_processes": {
       const procs = [

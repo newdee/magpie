@@ -1,3 +1,48 @@
+# 验收记录 2026-09-29（0.5.1：路径直达、系统设置直达、top / cpu、音量）
+
+## 实现
+
+- `core/src/typed_path.rs`：顶行识别盘符、UNC、`~`、`%VAR%` / `$VAR` / `${VAR}`（单遍展开，不会循环）、非 Windows 的 `/`；
+  只有真实存在才出行。文件夹打开，文件只在文件夹中显示，从不运行。`$HOME` 未设置时（Windows 常态）取主目录。
+- `core/src/syscmd.rs`：18 个系统设置面板（Windows `ms-settings:`，Mac 仅列本机存在的 `.prefPane`，Linux 需
+  `gnome-control-center`），不抢旧命令的词（`sp` 仍是锁屏）。
+- `core/src/procs.rs`：`top`（内存）/ `cpu`（两次采样、按核数折算），每行带同名进程合计。magpie 自己及其所有子孙
+  进程（WebView2）一律不列、不结束，`find` / `port` / `end` 同样执法。
+- `core/src/volume.rs`：Windows Core Audio、Mac osascript、Linux pactl（`LC_ALL=C`）；`MAGPIE_SYSCMD_DRYRUN` 下只报告。
+- 前端：`run_action`（`open:` / `volume:` / `mute:`）；信息行回车不动作；过期的 calc 结果丢弃，回车前核对该行对应的
+  仍是当前输入。README、网站、tips、i18n 同步；demo mock 与 T37。
+
+## 发现并修复
+
+| # | 来源 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | review | calc 结果无过期判断：`vol 4` 晚到会盖掉 `vol 40`，回车调到 4% | effect 清理丢弃过期结果；hit 记 `forQuery`，回车前比对。去掉修复后 T37 两条竞态检查均 FAIL |
+| 2 | review | Linux pactl 输出随 locale 翻译，中文环境静音读成未静音 | `LC_ALL=C`；假 pactl 实证：去掉后读成 `muted: false`，恢复后 `true` |
+| 3 | WSL 单测 | 无音频设备时 `vol knob` 也出错误行，挡住搜索（Windows 有声卡未暴露，CI 必挂） | 先校验参数再读设备 |
+| 4 | 单测 | `write_tx` 测试用 50 ms 固定领先，高负载下两写者顺序颠倒 | 改 channel 信号；8 路并发 × 5 轮 40/40 |
+| 5 | T38 数据 | `top` 首行是 magpie 自己的 msedgewebview2（1071 MB），可被结束，窗口失灵 | 按父进程链保护子孙（启动时间早于父进程的视为 PID 复用）；单测关保护可见、开保护隐藏；真机 7 个进程全排除，其他应用 12 个照常列出 |
+| 6 | 文档核对 | README 例子 `$HOME/.config` 在 Windows 无效（注册表无 HOME） | 未设置时取主目录；去掉 HOME 跑单测，无修复时 FAIL |
+| 7 | review | 未写进文档的 `mem`、`memory`、`占用` 会劫持同名文件搜索 | 只留 `top`、`cpu`、`内存` |
+| 8 | review | 无设备错误行的角标显示 calc | 显示「声音」 |
+
+另：demo mock 按内存排序时多给了 CPU 值（真后端没有），已对齐；文件路径行提示由「Enter 打开」改为「Enter 执行」。
+
+## 连续三轮干净（修 #8 之后，同一 exe）
+
+- R1（机制 / 真机，Session 1、隔离档案、打开与系统命令全 dry-run）：T38 44/44（路径 12 项、面板排名 10 词 + 18 面板全可达、
+  top 26 ms / cpu 306 ms、音量读真设备且未改变、12 个边界输入最慢 2 ms、`.exe` 路径只显示不运行、日志无输入内容）；
+  demo T37 42/42。档案还原 True。
+- R2（静态 + 全量）：clippy Windows / Linux 0；core 单测 Windows 188、Linux（22.04）188；tsc 0；a1 0 FAIL；a3 120 处 invoke
+  0 FAIL；文档对照 0 FAIL（站点 43/43、README 条目 74/74）；demo 回归 T36 10/10、T35 15/15、T24 12/12、T25 36 行。
+- R3（可复现）：T38 两遍 45 行去数值后 0 差异；T37 两遍逐字 0 差异；cargo test 两遍 212 行，去耗时后 0 差异
+  （3A12570457EBFD30）。
+
+## 遗留
+
+- Mac 面板文件名（如 `PrintAndFax`、`Battery`）未在真机核对，靠"文件存在才列出"兜底；Linux 面板未在 GNOME 桌面点开验证。
+- 真实改音量只在 core 忽略测试里做过"设成当前值"；Mac / Linux 的音量路径只验证了解析（Linux 用假 pactl）。
+
+---
 # 验收记录 2026-09-29（设置里「关于」页签的更新红点）
 
 - 实现：检测到新版本（可更新 / 下载中）时，设置页签行里「关于」带红点，悬停显示版本号；样式沿用页脚「设置」提示的红点。

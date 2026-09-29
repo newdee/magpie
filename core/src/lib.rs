@@ -29,5 +29,7 @@ pub mod sync;
 pub mod syscmd;
 pub mod threads;
 pub mod transform;
+pub mod typed_path;
 pub mod tz;
+pub mod volume;
 pub mod worktree;

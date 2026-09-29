@@ -149,6 +149,10 @@ export const TIPS: string[] = [
   "Passwords and keys in the clipboard history show starred; Show on the row reveals one",
   "Apps on an external drive: add their folder in Settings → Local Files → App folders",
   "Before a game, pause semantic search from the tray to free its memory",
+  "Type a path such as D:\\Projects or ~/Downloads: Enter opens the folder",
+  "wifi, 蓝牙, display or 卸载 jumps straight to that page of the system settings",
+  "top lists what uses the most memory, cpu what uses the most CPU; Enter twice ends one",
+  "vol 40 sets the volume, vol +10 turns it up, mute silences it",
 ];
 
 export function tipsEnabled(): boolean {

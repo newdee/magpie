@@ -20,10 +20,23 @@ pub struct TransformResult {
     /// `timer 25m`: seconds to count down; Enter starts the timer instead of
     /// copying, and `value` is what the reminder will say.
     pub timer: Option<u64>,
+    /// What Enter does instead of copying: `open:<path>` (a typed path),
+    /// `volume:<0–100>`, `mute:true|false`. The backend checks it again.
+    pub action: Option<String>,
 }
 
 pub fn transform(query: &str) -> Option<TransformResult> {
     let q = query.trim();
+    // a typed path wins: `C:\x` must not be read as the verb "c:\x"
+    if let Some((path, is_dir)) = crate::typed_path::resolve(q) {
+        let shown = path.to_string_lossy().into_owned();
+        return Some(TransformResult {
+            label: if is_dir { "open folder" } else { "show file in folder" }.into(),
+            action: Some(format!("open:{shown}")),
+            value: shown,
+            ..Default::default()
+        });
+    }
     let lower = q.to_lowercase();
     let (cmd, rest) = match lower.find(char::is_whitespace) {
         Some(i) => (&lower[..i], q[i..].trim()),
@@ -167,6 +180,9 @@ pub fn transform(query: &str) -> Option<TransformResult> {
             ..Default::default()
         }),
         "timer" | "倒计时" if !rest.is_empty() => timer_verb(rest),
+        "vol" | "volume" | "音量" => volume_verb(rest),
+        "mute" | "静音" if rest.is_empty() => mute_verb(true),
+        "unmute" | "取消静音" if rest.is_empty() => mute_verb(false),
         "json" => json_verb(rest),
         "md5" | "sha1" | "sha256" => hash_verb(cmd, rest),
         "jwt" => jwt_verb(rest),
@@ -175,6 +191,61 @@ pub fn transform(query: &str) -> Option<TransformResult> {
         | "kebab" | "title" => text_verb(cmd, rest),
         _ => color(q),
     }
+}
+
+fn speaker(v: &crate::volume::Volume) -> String {
+    format!("{} {}%", if v.muted { "🔇" } else { "🔊" }, v.level)
+}
+
+fn no_audio(e: anyhow::Error) -> TransformResult {
+    log::warn!("volume: {e:#}");
+    TransformResult { label: "volume".into(), value: "No audio output device found".into(), error: true, ..Default::default() }
+}
+
+/// `vol` shows the output volume; `vol 40`, `vol +10`, `vol -10` offer to
+/// set it (Enter does).
+fn volume_verb(rest: &str) -> Option<TransformResult> {
+    // not a level ("volume knob"): a search, whether or not there is a device
+    if !rest.is_empty() && crate::volume::parse_target(rest, 50).is_none() {
+        return None;
+    }
+    let now = match crate::volume::get() {
+        Ok(v) => v,
+        Err(e) => return Some(no_audio(e)),
+    };
+    if rest.is_empty() {
+        return Some(TransformResult { label: "volume".into(), value: speaker(&now), ..Default::default() });
+    }
+    let to = crate::volume::parse_target(rest, now.level)?;
+    Some(TransformResult {
+        label: "set volume".into(),
+        value: format!("{} → {to}%", speaker(&now)),
+        action: Some(format!("volume:{to}")),
+        ..Default::default()
+    })
+}
+
+/// `mute` / `unmute` (`静音` / `取消静音`): Enter does it. Muting what is
+/// already muted offers nothing to do.
+fn mute_verb(mute: bool) -> Option<TransformResult> {
+    let now = match crate::volume::get() {
+        Ok(v) => v,
+        Err(e) => return Some(no_audio(e)),
+    };
+    if now.muted == mute {
+        return Some(TransformResult {
+            label: if mute { "already muted" } else { "not muted" }.into(),
+            value: speaker(&now),
+            ..Default::default()
+        });
+    }
+    let after = crate::volume::Volume { muted: mute, ..now };
+    Some(TransformResult {
+        label: if mute { "mute" } else { "unmute" }.into(),
+        value: format!("{} → {}", speaker(&now), speaker(&after)),
+        action: Some(format!("mute:{mute}")),
+        ..Default::default()
+    })
 }
 
 /// `random` (1–100), `random 6`, `random 10 20`: a whole number, inclusive.
@@ -775,6 +846,39 @@ fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_typed_path_offers_to_open_it_and_a_missing_one_stays_quiet() {
+        let dir = std::env::temp_dir().join(format!("magpie-tf-path-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("n.txt"), "x").unwrap();
+        let d = dir.to_string_lossy().to_string();
+        let r = transform(&d).unwrap();
+        assert_eq!((r.label.as_str(), r.action.as_deref()), ("open folder", Some(format!("open:{d}").as_str())));
+        let f = format!("{d}{}n.txt", std::path::MAIN_SEPARATOR);
+        let r = transform(&f).unwrap();
+        assert_eq!(r.label, "show file in folder");
+        assert!(r.action.unwrap().ends_with("n.txt"));
+        assert!(transform(&format!("{d}{}nope", std::path::MAIN_SEPARATOR)).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With an output device (a desktop) the volume verbs offer an action;
+    /// without one (CI) they say so. Either way nothing is changed here.
+    #[test]
+    fn volume_verbs_offer_an_action_or_say_there_is_no_device() {
+        let v = transform("vol 40").unwrap();
+        match v.action.as_deref() {
+            Some(a) => assert_eq!((a, v.label.as_str()), ("volume:40", "set volume")),
+            None => assert!(v.error && v.value.contains("No audio output device"), "{v:?}"),
+        }
+        let now = transform("vol").unwrap();
+        assert!(now.action.is_none());
+        assert!(now.error || now.value.ends_with('%'), "{now:?}");
+        assert!(transform("vol loud").is_none(), "not a level: no row");
+        let m = transform("静音").unwrap();
+        assert!(m.error || m.action.as_deref() == Some("mute:true") || m.label == "already muted", "{m:?}");
+    }
 
     /// The local helpers reach the box: each verb answers, and the ones that
     /// would shadow a search (py on English words, a bare timer) stay quiet.

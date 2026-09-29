@@ -121,8 +121,23 @@ vaguely remember (or drop in an image), hit Enter.
 - **System commands**: lock the screen, sleep, restart, shut down, empty the
   trash, toggle dark mode, by name in either language (`lock`, `锁屏`,
   `sp`). Restart, shut down and emptying the trash take a second `Enter`.
+- **System settings, one step away**: `wifi`, `bluetooth`, `display`,
+  `sound`, `power`, `default apps`, `uninstall`, `printer` and a dozen more,
+  or the same in Chinese (`蓝牙`, `分辨率`, `卸载`), open that page of the
+  system settings. `uninstall` and `storage` are Windows only. On a Mac only
+  the panes that exist are offered; on Linux they need GNOME Settings.
+- **A path opens where you typed it**: `D:\Projects`, `~/Downloads`,
+  `%APPDATA%` or `$HOME/.config` (quotes from a paste are fine) offer to open
+  the folder, or to show a file in its folder; `Enter` does it. Only a path
+  that exists takes over the box, so a half-typed one never gets in the way.
+- **Volume**: `vol` shows the output volume, `vol 40` sets it, `vol +10` and
+  `vol -10` step it, `mute` and `unmute` (`静音`) do what they say. The row
+  shows before and after; `Enter` applies it.
 - **End a process**: `kill chrome` lists running processes by name with
-  their memory; `Enter` twice ends the selected one. `port 3000` (or
+  their memory; `Enter` twice ends the selected one. `top` (or `内存`) lists
+  what uses the most memory and `cpu` what uses the most CPU right now; each
+  row also shows the total for every process of the same name, so a browser's
+  twenty helpers do not hide behind small numbers. `port 3000` (or
   `kill :3000`) lists what is listening on that port instead. magpie and the
   system's own processes are never listed.
 - **Text in a copied image**: `ocr` alone reads the text in the image on your
@@ -198,8 +213,9 @@ vaguely remember (or drop in an image), hit Enter.
   attachment.
 - **Stays current on its own**: signed, verified in-place auto-updates from
   this version on, with no reinstalling. Checked at launch and every 24 h
-  while resident; a pending release shows a red dot on the tray icon and next
-  to the settings hint, plus a tray menu entry. Installing stays your call.
+  while resident; a pending release shows a red dot on the tray icon, next
+  to the settings hint and on the About tab in settings, plus a tray menu
+  entry. Installing stays your call.
 - **A preview pane, one keypress away**: `→` shows the selected result in
   place: file text with your terms highlighted, full-size images, a video's
   shot strip, README head for repos, complete clips. Confirm before you open.

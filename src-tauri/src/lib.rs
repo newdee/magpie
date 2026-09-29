@@ -3957,7 +3957,7 @@ fn calc_query(query: String) -> Option<serde_json::Value> {
         return Some(json!({ "value": r.value, "alt": r.alt }));
     }
     magpie_core::transform::transform(&query).map(|t| {
-        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image, "timer": t.timer })
+        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image, "timer": t.timer, "action": t.action })
     })
 }
 
@@ -4021,6 +4021,55 @@ fn installed_editors(state: State<'_, AppState>) -> Vec<serde_json::Value> {
         .filter_map(|name| magpie_core::apps::app_named(&apps, name))
         .map(|a| json!({ "name": a.name, "target": a.target }))
         .collect()
+}
+
+/// Enter on a top row that carries an action (a typed path, the volume).
+/// The action is parsed and checked again here, whatever the page sent: a
+/// path is opened only if it exists, and a file is shown in its folder,
+/// never run.
+#[tauri::command(async)]
+fn run_action(app: AppHandle, action: String) -> Result<String, String> {
+    if let Some(p) = action.strip_prefix("open:") {
+        let path = std::path::Path::new(p);
+        let meta = std::fs::metadata(path).map_err(|_| "that path is not there any more".to_string())?;
+        if open_dry_run() {
+            return Ok(format!("dry run: {} {p}", if meta.is_dir() { "open folder" } else { "show file" }));
+        }
+        if meta.is_dir() {
+            use tauri_plugin_opener::OpenerExt;
+            app.opener().open_path(p, None::<&str>).map_err(err_str)?;
+        } else {
+            tauri_plugin_opener::reveal_item_in_dir(path).map_err(err_str)?;
+        }
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.hide();
+        }
+        return Ok(format!("opened {p}"));
+    }
+    if let Some(n) = action.strip_prefix("volume:") {
+        let level: u8 = n.parse().map_err(|_| format!("not a volume: {n}"))?;
+        if level > 100 {
+            return Err(format!("not a volume: {n}"));
+        }
+        return magpie_core::volume::set_level(level).map_err(err_str);
+    }
+    if let Some(m) = action.strip_prefix("mute:") {
+        let muted = match m {
+            "true" => true,
+            "false" => false,
+            _ => return Err(format!("not a mute state: {m}")),
+        };
+        return magpie_core::volume::set_muted(muted).map_err(err_str);
+    }
+    Err(format!("unknown action {action:?}"))
+}
+
+/// `top` / `内存` (by memory) and `cpu` (by CPU, sampled over a moment):
+/// the heaviest processes, each with the total of its name.
+#[tauri::command(async)]
+fn top_processes(by: String) -> Vec<magpie_core::procs::ProcHit> {
+    use magpie_core::procs::TopBy;
+    magpie_core::procs::top(if by == "cpu" { TopBy::Cpu } else { TopBy::Memory }, 15)
 }
 
 /// Tests set `MAGPIE_OPEN_DRYRUN`: the openers below report what they would
@@ -5253,6 +5302,8 @@ pub fn run() {
             set_app_folder,
             set_semantic,
             pause_semantic,
+            run_action,
+            top_processes,
             search_web,
             search_apps,
             launch_app,
