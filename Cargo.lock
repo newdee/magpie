@@ -3425,6 +3425,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3754,6 +3760,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "trash",
+ "tyme4rs",
  "ureq",
  "windows 0.61.3",
  "zip 8.6.0",
@@ -7398,6 +7405,16 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+
+[[package]]
+name = "tyme4rs"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8a7e9021709b4a47db2fe1c5ee94f1ae9f50bbf96c9884be5dbb225297f4c84"
+dependencies = [
+ "lazy_static",
+ "regex",
+]
 
 [[package]]
 name = "typed-path"

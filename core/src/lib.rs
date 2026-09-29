@@ -5,6 +5,7 @@ pub mod badge;
 pub mod bookmarks;
 mod browsers;
 pub mod calc;
+pub mod chinese_calendar;
 pub mod clips;
 pub mod db;
 pub mod download;

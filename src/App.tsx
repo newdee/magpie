@@ -136,6 +136,8 @@ interface CalcHit {
   action?: string | null;
   /// the query this answers; an action is only taken while it is still typed
   forQuery?: string;
+  /// not a calculation: `calendar` (农历) shows without "=" under its own badge
+  badge?: string | null;
 }
 
 /// Labels the backend gives calculator / transform rows, translated when
@@ -4783,7 +4785,7 @@ export default function App() {
                       ? `⏲ ${clock(calcHit.timer)} · ${calcHit.value}`
                       : calcHit.diff
                         ? t("Last two copies compared")
-                        : calcHit.swatch || calcHit.error || calcHit.image || calcHit.timerIds || calcHit.action || isInfoRow(calcHit)
+                        : calcHit.swatch || calcHit.error || calcHit.image || calcHit.timerIds || calcHit.action || calcHit.badge || isInfoRow(calcHit)
                           ? calcHit.value
                           : // a multi-line result (pretty JSON) previews as one line
                             `= ${oneLine(calcHit.value)}`}
@@ -4821,7 +4823,9 @@ export default function App() {
                 </div>
                 </div>
                 <span className="badge">
-                  {calcHit.action?.startsWith("open:")
+                  {calcHit.badge === "calendar"
+                    ? t("Calendar")
+                    : calcHit.action?.startsWith("open:")
                     ? t("Path")
                     : calcHit.action || isInfoRow(calcHit) || (calcHit.error && calcHit.alt === "volume")
                       ? t("Sound")

@@ -153,6 +153,7 @@ export const TIPS: string[] = [
   "wifi, 蓝牙, display or 卸载 jumps straight to that page of the system settings",
   "top lists what uses the most memory, cpu what uses the most CPU; Enter twice ends one",
   "vol 40 sets the volume, vol +10 turns it up, mute silences it",
+  "农历 shows today in the Chinese calendar; 农历 中秋 or 农历 八月十五 tells you the date; 节气 gives the next solar term",
 ];
 
 export function tipsEnabled(): boolean {

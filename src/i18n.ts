@@ -320,6 +320,8 @@ const ZH: Record<string, string> = {
     "top 列出最占内存的进程，cpu 列出最占 CPU 的，回车两次结束它",
   "vol 40 sets the volume, vol +10 turns it up, mute silences it":
     "vol 40 调音量，vol +10 调大一点，mute 静音",
+  "农历 shows today in the Chinese calendar; 农历 中秋 or 农历 八月十五 tells you the date; 节气 gives the next solar term":
+    "输入 农历 看今天的农历；农历 中秋、农历 八月十五 查是公历哪天；节气 看下一个节气",
   // typed paths, volume, top, settings pages
   "open folder": "打开文件夹",
   "show file in folder": "在文件夹中显示",
@@ -338,6 +340,7 @@ const ZH: Record<string, string> = {
   "Sound on": "已取消静音",
   Path: "路径",
   Sound: "声音",
+  Calendar: "农历",
   "System settings": "系统设置",
   "{n} of them, {size} in all": "同名 {n} 个，共 {size}",
   "Wi-Fi Settings": "WLAN 设置",

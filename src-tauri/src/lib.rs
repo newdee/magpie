@@ -3957,7 +3957,7 @@ fn calc_query(query: String) -> Option<serde_json::Value> {
         return Some(json!({ "value": r.value, "alt": r.alt }));
     }
     magpie_core::transform::transform(&query).map(|t| {
-        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image, "timer": t.timer, "action": t.action })
+        json!({ "value": t.value, "alt": t.label, "swatch": t.swatch, "error": t.error, "image": t.image, "timer": t.timer, "action": t.action, "badge": t.badge })
     })
 }
 

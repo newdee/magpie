@@ -425,6 +425,10 @@ mockIPC((cmd, args) => {
       if (q === "uuid") return { value: "3f2c9a1e-8b4d-4e7a-9c21-d5f0a6b83e14", alt: "UUID v4", swatch: null };
       if (q === "大写 1234.56") return { value: "壹仟贰佰叁拾肆元伍角陆分", alt: "Chinese capitals" };
       if (q === "py 重庆") return { value: "chóng qìng", alt: "pinyin" };
+      // 农历: as the backend answers on 2026-09-29
+      if (q === "农历") return { value: "农历丙午年八月十九", alt: "马年 · 秋分第 7 天 · 下个节气寒露 10月8日（还有 9 天）", badge: "calendar" };
+      if (q === "农历 中秋") return { value: "2027年9月15日 周三", alt: "中秋节 · 农历丁未年八月十五 · 还有 351 天", badge: "calendar" };
+      if (q === "节气") return { value: "寒露 2026年10月8日 周四", alt: "下个节气 · 还有 9 天 · 现在是秋分第 7 天", badge: "calendar" };
       if (q === "sys") return { value: "CPU 12% · memory 9.8 of 32 GB · C: 120 GB free of 476 GB", alt: "system" };
       if (q === "timer 25m 开会") return { value: "开会", alt: "timer 25:00", timer: 1500 };
       if (q.startsWith("qr ")) {

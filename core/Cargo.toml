@@ -57,6 +57,8 @@ rqrr = "0.11.0"
 dirs = "7.0.0"
 # secret shapes in clipboard text (secrets.rs); already in the tree via tokenizers
 regex = "1"
+# 农历, 节气 and festivals, computed locally (chinese_calendar.rs); MIT
+tyme4rs = "1.5"
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]

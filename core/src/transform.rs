@@ -23,6 +23,9 @@ pub struct TransformResult {
     /// What Enter does instead of copying: `open:<path>` (a typed path),
     /// `volume:<0–100>`, `mute:true|false`. The backend checks it again.
     pub action: Option<String>,
+    /// What the row is when it is not a calculation: `calendar` (农历), so
+    /// the box shows it without "=" and with its own badge.
+    pub badge: Option<&'static str>,
 }
 
 pub fn transform(query: &str) -> Option<TransformResult> {
@@ -36,6 +39,10 @@ pub fn transform(query: &str) -> Option<TransformResult> {
             value: shown,
             ..Default::default()
         });
+    }
+    // 农历 / 节气: Chinese verbs may run into their argument (农历八月十五)
+    if let Some(a) = crate::chinese_calendar::answer(q, chrono::Local::now().date_naive()) {
+        return Some(TransformResult { label: a.label, value: a.value, error: a.error, badge: Some("calendar"), ..Default::default() });
     }
     let lower = q.to_lowercase();
     let (cmd, rest) = match lower.find(char::is_whitespace) {
@@ -878,6 +885,18 @@ mod tests {
         assert!(transform("vol loud").is_none(), "not a level: no row");
         let m = transform("静音").unwrap();
         assert!(m.error || m.action.as_deref() == Some("mute:true") || m.label == "already muted", "{m:?}");
+    }
+
+    /// 农历 reaches the box as a calendar row (no "=", its own badge), and a
+    /// word that merely starts like a verb stays a search.
+    #[test]
+    fn lunar_calendar_reaches_the_box() {
+        let r = transform("农历").unwrap();
+        assert!(r.value.starts_with("农历") && r.badge == Some("calendar") && !r.error, "{r:?}");
+        assert_eq!(transform("农历 中秋").unwrap().badge, Some("calendar"));
+        assert!(transform("节气").unwrap().value.contains('年'));
+        assert!(transform("nlp").is_none_or(|r| r.badge.is_none()));
+        assert!(transform("uuid").unwrap().badge.is_none(), "calculations keep their badge");
     }
 
     /// The local helpers reach the box: each verb answers, and the ones that

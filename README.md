@@ -153,6 +153,14 @@ vaguely remember (or drop in an image), hit Enter.
   for invoices and contracts. `py 重庆` gives *chóng qìng*, with tones; common
   words read differently from their characters (银行, 长大) come out right,
   other polyphonic characters get their most common reading.
+- **Chinese calendar, offline**: `农历` (or `nl`) shows today as 农历丙午年八月十九,
+  with the zodiac year, festivals and where the solar terms stand. `农历 2026-10-1`
+  does the same for any day. The other way round, `农历 八月十五`, `农历 腊月廿三`
+  or `农历 中秋` gives the Gregorian date of the next one and how many days are
+  left; `节气` names the next solar term and `节气 清明` finds the next 清明.
+  Arabic numerals mean a Gregorian date, Chinese ones a lunar date. It covers
+  1900 to 2100 and needs no network. Public holidays and swapped workdays are
+  not included, since they are announced year by year.
 - **Width and escapes**: `半角` and `全角` convert letters, digits and symbols
   (the marks of a Chinese sentence stay wide); `unicode` and `html` escape or
   unescape. Alone they work on the clipboard.
