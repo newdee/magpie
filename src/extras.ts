@@ -154,6 +154,7 @@ export const TIPS: string[] = [
   "top lists what uses the most memory, cpu what uses the most CPU; Enter twice ends one",
   "vol 40 sets the volume, vol +10 turns it up, mute silences it",
   "农历 shows today in the Chinese calendar; 农历 中秋 or 农历 八月十五 tells you the date; 节气 gives the next solar term",
+  "On the first day of a solar term a notification brings two lines of verse for it; Settings → General turns it off",
 ];
 
 export function tipsEnabled(): boolean {

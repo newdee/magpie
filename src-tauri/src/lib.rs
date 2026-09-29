@@ -266,6 +266,7 @@ const EXPORTABLE_META: &[&str] = &[
     "index_threads",
     "watch_enabled",
     "rescan_minutes",
+    "term_notify",
     magpie_core::semantic::META_KEY,
 ];
 
@@ -488,6 +489,8 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .map_err(err_str)?
             .map(|v| v == "1")
             .unwrap_or(false),
+        "term_notify": term_notify_on(&conn),
+        "term_notified": db::meta_get(&conn, "term_notified").map_err(err_str)?.unwrap_or_default(),
         "syncing": state.sync_running.load(Ordering::SeqCst),
         "local_indexing": state.local_indexing.load(Ordering::SeqCst),
     }))
@@ -3920,6 +3923,92 @@ fn set_ocr_pdf(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Res
     Ok(())
 }
 
+/// 节气 reminders on or off. Unset, they follow the interface language:
+/// on in Chinese, off in English (the verse means little untranslated).
+fn term_notify_on(conn: &magpie_core::rusqlite::Connection) -> bool {
+    match db::meta_get(conn, "term_notify").ok().flatten().as_deref() {
+        Some(v) => v == "1",
+        None => db::meta_get(conn, "ui_lang").ok().flatten().as_deref() == Some("zh"),
+    }
+}
+
+#[tauri::command]
+fn set_term_notify(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let conn = db::open(&state.db_path).map_err(err_str)?;
+    db::meta_set(&conn, "term_notify", if enabled { "1" } else { "0" }).map_err(err_str)
+}
+
+/// On the first day of a solar term, once, from 09:00 on: a notification
+/// with a couplet for it. Checked a few seconds after start and every minute
+/// after, so a machine switched on at ten still gets it; a day magpie did not
+/// run is not made up. `MAGPIE_TEST_NOW` (`2026-10-08T09:30`) stands in for
+/// the clock and `MAGPIE_NOTIFY_DRYRUN` keeps the notification off screen.
+fn spawn_term_notices(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        loop {
+            check_term_notice(&app);
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
+}
+
+fn check_term_notice(app: &AppHandle) {
+    let Ok(conn) = db::open(&app.state::<AppState>().db_path) else { return };
+    let last = db::meta_get(&conn, "term_notified").ok().flatten();
+    let clock = std::env::var("MAGPIE_TEST_NOW").ok();
+    let Some(n) = magpie_core::chinese_calendar::term_notice_now(clock.as_deref(), term_notify_on(&conn), last.as_deref()) else {
+        return;
+    };
+    // recorded first: a notification that fails is not retried every minute
+    if db::meta_set(&conn, "term_notified", &n.day).is_err() {
+        return;
+    }
+    log::info!("term notice: {}", n.term);
+    let _ = app.emit("term-notice", json!({ "term": n.term, "line": n.line, "source": n.source }));
+    if std::env::var_os("MAGPIE_NOTIFY_DRYRUN").is_none() {
+        show_term_notice(app, &n.term, n.line, n.source);
+    }
+}
+
+/// The reminder itself. On Windows a toast whose click opens the palette on
+/// `节气 <term>` (the verse again, with its date and source); elsewhere the
+/// notification plugin, where a click only brings the app forward.
+fn show_term_notice(app: &AppHandle, term: &str, line: &str, source: &str) {
+    let title = format!("今日{term}");
+    #[cfg(windows)]
+    {
+        use tauri_winrt_notification::Toast;
+        // the app's own identity once installed; a dev build borrows
+        // PowerShell's, as the notification plugin does
+        let installed = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.to_path_buf()))
+            .map(|d| !(d.ends_with("target/debug") || d.ends_with("target/release")))
+            .unwrap_or(false);
+        let id = if installed { app.config().identifier.clone() } else { Toast::POWERSHELL_APP_ID.to_string() };
+        let (a, query) = (app.clone(), format!("节气 {term}"));
+        let shown = Toast::new(&id)
+            .title(&title)
+            .text1(line)
+            .text2(source)
+            .on_activated(move |_| {
+                let _ = a.emit("search-selection", query.clone());
+                show_window(&a);
+                Ok(())
+            })
+            .show();
+        if let Err(e) = shown {
+            log::warn!("term notice: {e}");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title(&title).body(format!("{line}\n{source}")).show();
+    }
+}
+
 /// Toggle OCR text extraction for indexed images. Turning it on downloads
 /// the models (first run) and sweeps pending images; turning it off drops
 /// the engine — extracted text stays searchable until a folder rebuild.
@@ -5116,6 +5205,7 @@ pub fn run() {
             }
             spawn_app_scan(app.handle().clone());
             spawn_ffmpeg_check(app.handle().clone());
+            spawn_term_notices(app.handle().clone());
             // the MCP server for AI assistants, only if the user switched it on
             {
                 let state = app.state::<AppState>();
@@ -5329,6 +5419,7 @@ pub fn run() {
             set_update_badge,
             set_ocr,
             set_ocr_pdf,
+            set_term_notify,
             calc_query,
             toggle_pin_clip,
             copy_file_clip,

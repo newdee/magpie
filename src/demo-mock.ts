@@ -86,6 +86,8 @@ const status = {
   ocr_model: "pp-ocr-v4",
   ocr_status: "",
   ocr_pdf: false,
+  term_notify: true,
+  term_notified: "",
   syncing: false,
   local_indexing: false,
 };
@@ -504,6 +506,10 @@ mockIPC((cmd, args) => {
     }
     case "set_ocr_pdf": {
       status.ocr_pdf = (args as { enabled: boolean }).enabled;
+      return null;
+    }
+    case "set_term_notify": {
+      status.term_notify = (args as { enabled: boolean }).enabled;
       return null;
     }
     case "get_autostart":

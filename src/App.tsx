@@ -324,6 +324,8 @@ interface Status {
   ocr_model: string;
   ocr_status: string;
   ocr_pdf: boolean;
+  /// 节气 reminders (unset: on in Chinese, off in English)
+  term_notify?: boolean;
   syncing: boolean;
   local_indexing: boolean;
   max_file_mb: number;
@@ -3164,6 +3166,39 @@ export default function App() {
                             try {
                               await invoke("set_autostart", { on: o.on });
                               setAutostart(await invoke<boolean>("get_autostart"));
+                            } catch (e) {
+                              setLastError(String(e));
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Solar term reminders")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "On the first day of each of the 24 solar terms, a notification after 9 am with two lines of classical verse. Type 节气 any time to see the next one.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${status?.term_notify === o.on ? "active" : ""}`}
+                          disabled={status?.term_notify == null}
+                          onClick={async () => {
+                            try {
+                              await invoke("set_term_notify", { enabled: o.on });
+                              await refreshStatus();
                             } catch (e) {
                               setLastError(String(e));
                             }

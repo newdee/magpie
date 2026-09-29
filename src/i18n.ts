@@ -341,6 +341,11 @@ const ZH: Record<string, string> = {
   Path: "路径",
   Sound: "声音",
   Calendar: "农历",
+  "Solar term reminders": "节气提醒",
+  "On the first day of a solar term a notification brings two lines of verse for it; Settings → General turns it off":
+    "交节当天会弹一条通知，配一联应节的古诗；不想要可以在 设置 → 通用 里关掉",
+  "On the first day of each of the 24 solar terms, a notification after 9 am with two lines of classical verse. Type 节气 any time to see the next one.":
+    "二十四节气交节当天，上午 9 点后弹一条通知，配一联古诗。随时输入 节气 可以看下一个节气。",
   "System settings": "系统设置",
   "{n} of them, {size} in all": "同名 {n} 个，共 {size}",
   "Wi-Fi Settings": "WLAN 设置",

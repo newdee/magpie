@@ -161,6 +161,12 @@ vaguely remember (or drop in an image), hit Enter.
   Arabic numerals mean a Gregorian date, Chinese ones a lunar date. It covers
   1900 to 2100 and needs no network. Public holidays and swapped workdays are
   not included, since they are announced year by year.
+- **Solar term reminders**: on the first day of each of the 24 solar terms,
+  after 9 am, a notification brings a couplet of classical verse for it, one
+  of five per term, a different one each year; all 120 were checked against
+  published texts. On Windows, clicking it opens the palette on that term.
+  On by default when the interface is in Chinese; Settings → General turns
+  it on or off.
 - **Width and escapes**: `半角` and `全角` convert letters, digits and symbols
   (the marks of a Chinese sentence stay wide); `unicode` and `html` escape or
   unescape. Alone they work on the clipboard.
@@ -411,7 +417,7 @@ and the tab that opens on launch are both configurable.
 
 GitHub token (with connection badge) · indexed folders (add / remove /
 rebuild) · appearance (auto / light / dark) · UI language (auto / English /
-中文) · launch at login · hide on click-out · jump-to-tab keys (Ctrl/Cmd,
+中文) · launch at login · solar term reminders · hide on click-out · jump-to-tab keys (Ctrl/Cmd,
 Alt or off) · pinyin app matching · app aliases · summon shortcut (recordable) ·
 search-selection shortcut · notes file · recent opens on the empty box ·
 model download source (huggingface.co or hf-mirror.com for networks where

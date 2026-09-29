@@ -46,6 +46,233 @@ const FESTIVALS: &[(&str, &[&str], i32, usize)] = &[
     ("除夕", &["除夕", "大年三十", "年三十"], 12, 0),
 ];
 
+/// Verse for each solar term, five couplets to a term, in calendar order from
+/// 立春. Every line, author and title was checked against published texts
+/// before it went in; attributions in doubt (李白《立冬》, among others)
+/// were left out. See docs/ACCEPTANCE.md.
+pub const TERM_POEMS: [(&str, [(&str, &str); 5]); 24] = [
+    ("立春", [
+        ("律回岁晚冰霜少，春到人间草木知。", "宋·张栻《立春偶成》"),
+        ("春日春盘细生菜，忽忆两京梅发时。", "唐·杜甫《立春》"),
+        ("春风如贵客，一到便繁华。", "清·袁枚《春风》"),
+        ("碧玉妆成一树高，万条垂下绿丝绦。", "唐·贺知章《咏柳》"),
+        ("东风随春归，发我枝上花。", "唐·李白《落日忆山中》"),
+    ]),
+    ("雨水", [
+        ("好雨知时节，当春乃发生。", "唐·杜甫《春夜喜雨》"),
+        ("天街小雨润如酥，草色遥看近却无。", "唐·韩愈《早春呈水部张十八员外》"),
+        ("小楼一夜听春雨，深巷明朝卖杏花。", "宋·陆游《临安春雨初霁》"),
+        ("沾衣欲湿杏花雨，吹面不寒杨柳风。", "宋·志南《绝句》"),
+        ("渭城朝雨浥轻尘，客舍青青柳色新。", "唐·王维《送元二使安西》"),
+    ]),
+    ("惊蛰", [
+        ("微雨众卉新，一雷惊蛰始。", "唐·韦应物《观田家》"),
+        ("残雪压枝犹有橘，冻雷惊笋欲抽芽。", "宋·欧阳修《戏答元珍》"),
+        ("草长莺飞二月天，拂堤杨柳醉春烟。", "清·高鼎《村居》"),
+        ("千里莺啼绿映红，水村山郭酒旗风。", "唐·杜牧《江南春》"),
+        ("春风又绿江南岸，明月何时照我还。", "宋·王安石《泊船瓜洲》"),
+    ]),
+    ("春分", [
+        ("雪入春分省见稀，半开桃李不胜威。", "宋·苏轼《癸丑春分后雪》"),
+        ("竹外桃花三两枝，春江水暖鸭先知。", "宋·苏轼《惠崇春江晚景》"),
+        ("几处早莺争暖树，谁家新燕啄春泥。", "唐·白居易《钱塘湖春行》"),
+        ("等闲识得东风面，万紫千红总是春。", "宋·朱熹《春日》"),
+        ("春眠不觉晓，处处闻啼鸟。", "唐·孟浩然《春晓》"),
+    ]),
+    ("清明", [
+        ("清明时节雨纷纷，路上行人欲断魂。", "唐·杜牧《清明》"),
+        ("梨花风起正清明，游子寻春半出城。", "宋·吴惟信《苏堤清明即事》"),
+        ("春城无处不飞花，寒食东风御柳斜。", "唐·韩翃《寒食》"),
+        ("燕子来时新社，梨花落后清明。", "宋·晏殊《破阵子·燕子来时新社》"),
+        ("佳节清明桃李笑，野田荒冢只生愁。", "宋·黄庭坚《清明》"),
+    ]),
+    ("谷雨", [
+        ("谷雨春光晓，山川黛色青。", "唐·元稹《咏廿四气诗·谷雨三月中》"),
+        ("落红不是无情物，化作春泥更护花。", "清·龚自珍《己亥杂诗》"),
+        ("唯有牡丹真国色，花开时节动京城。", "唐·刘禹锡《赏牡丹》"),
+        ("人间四月芳菲尽，山寺桃花始盛开。", "唐·白居易《大林寺桃花》"),
+        ("春色恼人眠不得，月移花影上栏杆。", "宋·王安石《夜直》"),
+    ]),
+    ("立夏", [
+        ("绿树阴浓夏日长，楼台倒影入池塘。", "唐·高骈《山亭夏日》"),
+        ("小荷才露尖尖角，早有蜻蜓立上头。", "宋·杨万里《小池》"),
+        ("纷纷红紫已成尘，布谷声中夏令新。", "宋·陆游《初夏绝句》"),
+        ("四月清和雨乍晴，南山当户转分明。", "宋·司马光《客中初夏》"),
+        ("树阴满地日当午，梦觉流莺时一声。", "宋·苏舜钦《夏意》"),
+    ]),
+    ("小满", [
+        ("夜来南风起，小麦覆陇黄。", "唐·白居易《观刈麦》"),
+        ("梅子金黄杏子肥，麦花雪白菜花稀。", "宋·范成大《四时田园杂兴》"),
+        ("昼出耘田夜绩麻，村庄儿女各当家。", "宋·范成大《四时田园杂兴》"),
+        ("乡村四月闲人少，才了蚕桑又插田。", "宋·翁卷《乡村四月》"),
+        ("麦穗初齐稚子娇，桑叶正肥蚕食饱。", "宋·欧阳修《归田园四时乐春夏二首》"),
+    ]),
+    ("芒种", [
+        ("时雨及芒种，四野皆插秧。", "宋·陆游《时雨》"),
+        ("田家少闲月，五月人倍忙。", "唐·白居易《观刈麦》"),
+        ("黄梅时节家家雨，青草池塘处处蛙。", "宋·赵师秀《约客》"),
+        ("手把青秧插满田，低头便见水中天。", "五代·布袋和尚《插秧偈》"),
+        ("梅子黄时日日晴，小溪泛尽却山行。", "宋·曾几《三衢道中》"),
+    ]),
+    ("夏至", [
+        ("昼晷已云极，宵漏自此长。", "唐·韦应物《夏至避暑北池》"),
+        ("东边日出西边雨，道是无晴却有晴。", "唐·刘禹锡《竹枝词》"),
+        ("接天莲叶无穷碧，映日荷花别样红。", "宋·杨万里《晓出净慈寺送林子方》"),
+        ("竹深树密虫鸣处，时有微凉不是风。", "宋·杨万里《夏夜追凉》"),
+        ("蝉噪林逾静，鸟鸣山更幽。", "南朝梁·王籍《入若耶溪》"),
+    ]),
+    ("小暑", [
+        ("倏忽温风至，因循小暑来。", "唐·元稹《咏廿四气诗·小暑六月节》"),
+        ("荷风送香气，竹露滴清响。", "唐·孟浩然《夏日南亭怀辛大》"),
+        ("仲夏苦夜短，开轩纳微凉。", "唐·杜甫《夏夜叹》"),
+        ("稻花香里说丰年，听取蛙声一片。", "宋·辛弃疾《西江月·夜行黄沙道中》"),
+        ("人皆苦炎热，我爱夏日长。", "唐·李昂《夏日联句》"),
+    ]),
+    ("大暑", [
+        ("大暑三秋近，林钟九夏移。", "唐·元稹《咏廿四气诗·大暑六月中》"),
+        ("赤日几时过，清风无处寻。", "宋·曾几《大暑》"),
+        ("何以销烦暑，端居一院中。", "唐·白居易《销暑》"),
+        ("竹深留客处，荷净纳凉时。", "唐·杜甫《陪诸贵公子丈八沟携妓纳凉晚际遇雨》"),
+        ("赤日炎炎似火烧，野田禾稻半枯焦。", "明·施耐庵《水浒传》"),
+    ]),
+    ("立秋", [
+        ("乳鸦啼散玉屏空，一枕新凉一扇风。", "宋·刘翰《立秋》"),
+        ("自古逢秋悲寂寥，我言秋日胜春朝。", "唐·刘禹锡《秋词》"),
+        ("空山新雨后，天气晚来秋。", "唐·王维《山居秋暝》"),
+        ("秋风起兮白云飞，草木黄落兮雁南归。", "汉·刘彻《秋风辞》"),
+        ("解落三秋叶，能开二月花。", "唐·李峤《风》"),
+    ]),
+    ("处暑", [
+        ("处暑无三日，新凉直万金。", "宋·苏泂《长江二首》"),
+        ("离离暑云散，袅袅凉风起。", "唐·白居易《早秋曲江感怀》"),
+        ("天阶夜色凉如水，卧看牵牛织女星。", "唐·杜牧《秋夕》"),
+        ("萧萧梧叶送寒声，江上秋风动客情。", "宋·叶绍翁《夜书所见》"),
+        ("七月流火，九月授衣。", "《诗经·豳风·七月》"),
+    ]),
+    ("白露", [
+        ("露从今夜白，月是故乡明。", "唐·杜甫《月夜忆舍弟》"),
+        ("蒹葭苍苍，白露为霜。", "《诗经·秦风·蒹葭》"),
+        ("玉阶生白露，夜久侵罗袜。", "唐·李白《玉阶怨》"),
+        ("中庭地白树栖鸦，冷露无声湿桂花。", "唐·王建《十五夜望月》"),
+        ("秋风萧瑟天气凉，草木摇落露为霜。", "三国魏·曹丕《燕歌行》"),
+    ]),
+    ("秋分", [
+        ("金气秋分，风清露冷秋期半。", "宋·谢逸《点绛唇·金气秋分》"),
+        ("秋分客尚在，竹露夕微微。", "唐·杜甫《晚晴》"),
+        ("明月几时有？把酒问青天。", "宋·苏轼《水调歌头·明月几时有》"),
+        ("暮云收尽溢清寒，银汉无声转玉盘。", "宋·苏轼《阳关曲·中秋月》"),
+        ("海上生明月，天涯共此时。", "唐·张九龄《望月怀远》"),
+    ]),
+    ("寒露", [
+        ("袅袅凉风动，凄凄寒露零。", "唐·白居易《池上》"),
+        ("寒露惊秋晚，朝看菊渐黄。", "唐·元稹《咏廿四气诗·寒露九月节》"),
+        ("独在异乡为异客，每逢佳节倍思亲。", "唐·王维《九月九日忆山东兄弟》"),
+        ("待到重阳日，还来就菊花。", "唐·孟浩然《过故人庄》"),
+        ("秋阴不散霜飞晚，留得枯荷听雨声。", "唐·李商隐《宿骆氏亭寄怀崔雍崔衮》"),
+    ]),
+    ("霜降", [
+        ("月落乌啼霜满天，江枫渔火对愁眠。", "唐·张继《枫桥夜泊》"),
+        ("停车坐爱枫林晚，霜叶红于二月花。", "唐·杜牧《山行》"),
+        ("荷尽已无擎雨盖，菊残犹有傲霜枝。", "宋·苏轼《赠刘景文》"),
+        ("鸡声茅店月，人迹板桥霜。", "唐·温庭筠《商山早行》"),
+        ("霜降水返壑，风落木归山。", "唐·白居易《岁晚》"),
+    ]),
+    ("立冬", [
+        ("霜降向人寒，轻冰渌水漫。", "唐·元稹《咏廿四气诗·立冬十月节》"),
+        ("细雨生寒未有霜，庭前木叶半青黄。", "宋·仇远《立冬即事二首》"),
+        ("室小才容膝，墙低仅及肩。", "宋·陆游《立冬日作》"),
+        ("绿蚁新醅酒，红泥小火炉。", "唐·白居易《问刘十九》"),
+        ("寒雨连江夜入吴，平明送客楚山孤。", "唐·王昌龄《芙蓉楼送辛渐》"),
+    ]),
+    ("小雪", [
+        ("花雪随风不厌看，更多还肯失林峦。", "唐·戴叔伦《小雪》"),
+        ("莫怪虹无影，如今小雪时。", "唐·元稹《咏廿四气诗·小雪十月中》"),
+        ("夜深知雪重，时闻折竹声。", "唐·白居易《夜雪》"),
+        ("北风其凉，雨雪其雱。", "《诗经·邶风·北风》"),
+        ("忽如一夜春风来，千树万树梨花开。", "唐·岑参《白雪歌送武判官归京》"),
+    ]),
+    ("大雪", [
+        ("千山鸟飞绝，万径人踪灭。", "唐·柳宗元《江雪》"),
+        ("燕山雪花大如席，片片吹落轩辕台。", "唐·李白《北风行》"),
+        ("欲渡黄河冰塞川，将登太行雪满山。", "唐·李白《行路难》"),
+        ("窗含西岭千秋雪，门泊东吴万里船。", "唐·杜甫《绝句》"),
+        ("夜来城外一尺雪，晓驾炭车辗冰辙。", "唐·白居易《卖炭翁》"),
+    ]),
+    ("冬至", [
+        ("天时人事日相催，冬至阳生春又来。", "唐·杜甫《小至》"),
+        ("邯郸驿里逢冬至，抱膝灯前影伴身。", "唐·白居易《邯郸冬至夜思家》"),
+        ("冬至子之半，天心无改移。", "宋·邵雍《冬至吟》"),
+        ("黄钟应律好风催，阴伏阳升淑气回。", "宋·朱淑真《冬至》"),
+        ("今日日南至，吾门方寂然。", "宋·陆游《辛酉冬至》"),
+    ]),
+    ("小寒", [
+        ("小寒连大吕，欢鹊垒新巢。", "唐·元稹《咏廿四气诗·小寒十二月节》"),
+        ("墙角数枝梅，凌寒独自开。", "宋·王安石《梅花》"),
+        ("疏影横斜水清浅，暗香浮动月黄昏。", "宋·林逋《山园小梅》"),
+        ("梅须逊雪三分白，雪却输梅一段香。", "宋·卢钺《雪梅》"),
+        ("寒夜客来茶当酒，竹炉汤沸火初红。", "宋·杜耒《寒夜》"),
+    ]),
+    ("大寒", [
+        ("旧雪未及消，新雪又拥户。", "宋·邵雍《大寒吟》"),
+        ("柴门闻犬吠，风雪夜归人。", "唐·刘长卿《逢雪宿芙蓉山主人》"),
+        ("爆竹声中一岁除，春风送暖入屠苏。", "宋·王安石《元日》"),
+        ("岁暮阴阳催短景，天涯霜雪霁寒宵。", "唐·杜甫《阁夜》"),
+        ("年年雪里，常插梅花醉。", "宋·李清照《清平乐·年年雪里》"),
+    ]),
+];
+
+/// The couplet for `term` in `year`: one of its five, the same all year (so
+/// the reminder and the palette show the same one) and a different one from
+/// year to year.
+pub fn poem_for(term: &str, year: i32) -> Option<(&'static str, &'static str)> {
+    let (i, (_, lines)) = TERM_POEMS.iter().enumerate().find(|(_, (t, _))| *t == term)?;
+    // a small integer hash: neighbouring years and terms land far apart
+    let mut h = (year as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (i as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= h >> 29;
+    Some(lines[(h % 5) as usize])
+}
+
+/// The solar term that begins on `day`, if one does.
+pub fn term_starting(day: NaiveDate) -> Option<String> {
+    let td = solar(day)?.get_term_day();
+    (td.get_day_index() == 0).then(|| td.get_solar_term().get_name())
+}
+
+/// Whether a 节气 reminder is due at `now`: the reminder is on, it is 09:00
+/// or later on the first day of a term, and none was shown that day
+/// (`last_shown` is the date of the last one, `YYYY-MM-DD`). Returns the term.
+pub fn term_notice_due(now: chrono::NaiveDateTime, enabled: bool, last_shown: Option<&str>) -> Option<String> {
+    if !enabled || now.time() < chrono::NaiveTime::from_hms_opt(9, 0, 0)? {
+        return None;
+    }
+    let day = now.date();
+    if last_shown == Some(day.format("%Y-%m-%d").to_string().as_str()) {
+        return None;
+    }
+    term_starting(day)
+}
+
+/// A reminder to show: the day it is for (`YYYY-MM-DD`, to record), the term
+/// and its couplet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermNotice {
+    pub day: String,
+    pub term: String,
+    pub line: &'static str,
+    pub source: &'static str,
+}
+
+/// [`term_notice_due`] against the local clock, or against `clock` when a
+/// test sets one (`2026-10-08T09:30`).
+pub fn term_notice_now(clock: Option<&str>, enabled: bool, last_shown: Option<&str>) -> Option<TermNotice> {
+    let now = clock
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
+        .unwrap_or_else(|| chrono::Local::now().naive_local());
+    let term = term_notice_due(now, enabled, last_shown)?;
+    let (line, source) = poem_for(&term, now.date().year())?;
+    Some(TermNotice { day: now.date().format("%Y-%m-%d").to_string(), term, line, source })
+}
+
 pub fn answer(query: &str, today: NaiveDate) -> Option<Answer> {
     let q = query.trim();
     if let Some(rest) = strip_verb(q, &["节气"], &[]) {
@@ -300,10 +527,15 @@ fn terms(rest: &str, today: NaiveDate) -> Option<Answer> {
     }
     (0..=24).map(|k| now.next(k)).find_map(|t| {
         let date = naive(&t.get_solar_day())?;
-        (t.get_name() == rest && date >= today).then(|| Answer {
-            value: format!("{rest} {}", show(date)),
-            label: format!("节气 · {}", countdown(date, today)),
-            error: false,
+        if t.get_name() != rest || date < today {
+            return None;
+        }
+        let (line, source) = poem_for(rest, date.year())?;
+        // on the day itself the verse is the answer (the reminder opens here)
+        Some(if date == today {
+            Answer { value: line.into(), label: format!("今日{rest} · {} · {source}", show(date)), error: false }
+        } else {
+            Answer { value: format!("{rest} {}", show(date)), label: format!("节气 · {} · {line}", countdown(date, today)), error: false }
         })
     })
 }
@@ -393,7 +625,74 @@ mod tests {
         assert_eq!(a.label, "下个节气 · 还有 9 天 · 现在是秋分第 7 天");
         assert_eq!(answer("节气 清明", t).unwrap().value, "清明 2027年4月5日 周一");
         assert_eq!(answer("农历 冬至", t).unwrap().value, "冬至 2026年12月22日 周二");
-        assert_eq!(answer("节气 秋分", day(2026, 9, 23)).unwrap().label, "节气 · 就是今天");
+        // on the day: the verse is the answer, the date and source beside it
+        let a = answer("节气 秋分", day(2026, 9, 23)).unwrap();
+        let (line, source) = poem_for("秋分", 2026).unwrap();
+        assert_eq!(a.value, line);
+        assert_eq!(a.label, format!("今日秋分 · 2026年9月23日 周三 · {source}"));
+        // before it: the date, with the verse in the row
+        assert!(answer("节气 清明", t).unwrap().label.ends_with(poem_for("清明", 2027).unwrap().0));
+    }
+
+    /// 24 terms, five couplets each, every one with a source, none twice.
+    #[test]
+    fn the_verse_table_is_whole() {
+        let names: std::collections::BTreeSet<String> = (0..24).map(|i| SolarTerm::from_index(2026, i).get_name()).collect();
+        let mine: std::collections::BTreeSet<String> = TERM_POEMS.iter().map(|(t, _)| t.to_string()).collect();
+        assert_eq!(mine, names, "exactly the 24 solar terms");
+        let mut seen = std::collections::HashSet::new();
+        for (term, lines) in TERM_POEMS {
+            for (line, source) in lines {
+                // two halves: 「…，…。」, or a question first (明月几时有？把酒问青天。)
+                let middle = line.trim_end_matches(['。', '？']);
+                assert!(middle.contains(['，', '？']) && (line.ends_with('。') || line.ends_with('？')), "{term}: {line}");
+                assert!(source.contains('《') && source.ends_with('》'), "{term}: {source}");
+                assert!(seen.insert(line), "{line} appears twice");
+            }
+        }
+        assert_eq!(seen.len(), 120);
+    }
+
+    /// The pick is fixed for a year and moves between years: over a century
+    /// every couplet of every term comes up.
+    #[test]
+    fn each_year_picks_one_couplet_and_all_of_them_come_up() {
+        for (term, lines) in TERM_POEMS {
+            assert_eq!(poem_for(term, 2026), poem_for(term, 2026));
+            let used: std::collections::HashSet<_> = (2000..2100).filter_map(|y| poem_for(term, y)).collect();
+            assert_eq!(used.len(), 5, "{term}");
+            assert!(lines.contains(&poem_for(term, 2026).unwrap()));
+        }
+        assert_eq!(poem_for("端午", 2026), None);
+    }
+
+    #[test]
+    fn a_reminder_is_due_once_on_the_first_day_after_nine() {
+        let at = |d: NaiveDate, h: u32, m: u32| d.and_hms_opt(h, m, 0).unwrap();
+        let hanlu = day(2026, 10, 8);
+        assert_eq!(term_starting(hanlu).as_deref(), Some("寒露"));
+        assert_eq!(term_starting(day(2026, 10, 9)), None, "the second day is not a start");
+        assert_eq!(term_starting(day(2026, 12, 22)).as_deref(), Some("冬至"));
+        assert_eq!(term_notice_due(at(hanlu, 9, 0), true, None).as_deref(), Some("寒露"));
+        assert_eq!(term_notice_due(at(hanlu, 8, 59), true, None), None, "not before nine");
+        assert_eq!(term_notice_due(at(hanlu, 23, 30), true, Some("2026-09-23")).as_deref(), Some("寒露"));
+        assert_eq!(term_notice_due(at(hanlu, 10, 0), true, Some("2026-10-08")), None, "once a day");
+        assert_eq!(term_notice_due(at(hanlu, 10, 0), false, None), None, "switched off");
+        assert_eq!(term_notice_due(at(day(2026, 10, 9), 10, 0), true, None), None, "a missed day is not made up");
+        // every term of a year starts on exactly one day
+        let mut starts = 0;
+        let mut d = day(2026, 1, 1);
+        while d.year() == 2026 {
+            starts += usize::from(term_starting(d).is_some());
+            d = d.succ_opt().unwrap();
+        }
+        assert_eq!(starts, 24);
+        // the clock a test sets, and the couplet of that year
+        let n = term_notice_now(Some("2026-10-08T09:30"), true, None).unwrap();
+        assert_eq!((n.day.as_str(), n.term.as_str()), ("2026-10-08", "寒露"));
+        assert_eq!((n.line, n.source), poem_for("寒露", 2026).unwrap());
+        assert_eq!(term_notice_now(Some("2026-10-08T09:30"), true, Some("2026-10-08")), None);
+        assert_eq!(term_notice_now(Some("2026-10-08T08:30"), true, None), None);
     }
 
     /// Anything else stays a search.
