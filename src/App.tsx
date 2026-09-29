@@ -2980,6 +2980,10 @@ export default function App() {
                 onClick={() => setSettingsTab(s.id)}
               >
                 {t(s.label)}
+                {/* a new version waits: the About page has the update button */}
+                {s.id === "about" && (updPhase === "available" || updPhase === "downloading") && (
+                  <i className="upd-dot" title={tf("Version {v} is available.", { v: updVersion ?? "" })} />
+                )}
               </button>
             ))}
           </div>
