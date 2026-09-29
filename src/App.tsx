@@ -168,6 +168,9 @@ const CALC_LABELS = [
 /// Rows that only show something (the volume now, "already muted"): Enter
 /// does nothing there, rather than copy "🔊 38%".
 const INFO_LABELS = ["volume", "already muted", "not muted"];
+
+/// The tip slot taken by the day's solar term couplet (never a real tip text)
+const TERM_TIP = "\u0000term";
 function isInfoRow(c: CalcHit): boolean {
   return !c.action && !c.error && INFO_LABELS.includes(c.alt ?? "");
 }
@@ -326,6 +329,8 @@ interface Status {
   ocr_pdf: boolean;
   /// 节气 reminders (unset: on in Chinese, off in English)
   term_notify?: boolean;
+  /// the first day of a solar term (reminders on): its couplet joins the tips
+  term_today?: { term: string; line: string; source: string } | null;
   syncing: boolean;
   local_indexing: boolean;
   max_file_mb: number;
@@ -1280,12 +1285,20 @@ export default function App() {
     const iv = setInterval(() => {
       setTipPhase("out");
       setTimeout(() => {
-        setTip((t) => nextTip(t));
+        // on the first day of a solar term its couplet takes every other turn
+        setTip((t) => (termTodayRef.current && t !== TERM_TIP ? TERM_TIP : nextTip(t)));
         setTipPhase("in");
       }, OUT_MS);
     }, 8000);
     return () => clearInterval(iv);
   }, [tipsIdle]);
+  const termToday = status?.term_today ?? null;
+  const termTodayRef = useRef(termToday);
+  termTodayRef.current = termToday;
+  // the day moved on (or the reminder was switched off) mid-rotation
+  useEffect(() => {
+    if (!termToday && tip === TERM_TIP) setTip(randomTip());
+  }, [termToday, tip]);
 
   // extras react to the raw query synchronously (they're cheap and local)
   useEffect(() => {
@@ -1539,7 +1552,8 @@ export default function App() {
       listen("palette-shown", () => {
         inputRef.current?.focus();
         inputRef.current?.select();
-        setTip(randomTip());
+        // on the first day of a solar term the palette opens on its couplet
+        setTip(termTodayRef.current ? TERM_TIP : randomTip());
         setTipPhase("in");
         refreshStatus();
       }),
@@ -3182,7 +3196,7 @@ export default function App() {
                       <span className="set-name">{t("Solar term reminders")}</span>
                       <span className="set-desc">
                         {t(
-                          "On the first day of each of the 24 solar terms, a notification after 9 am with two lines of classical verse. Type 节气 any time to see the next one.",
+                          "On the first day of each of the 24 solar terms, a notification after 9 am with two lines of classical verse, which also take turns with the tips that day. Type 节气 any time to see the next one.",
                         )}
                       </span>
                     </div>
@@ -5146,7 +5160,16 @@ export default function App() {
         <div className="tip-row">
           {/* keyed so React swaps the node and the enter animation replays */}
           <span key={tip} className={`tip-text ${tipPhase === "out" ? "leaving" : ""}`}>
-            <span className="tip-bulb">💡</span> {t(tip)}
+            {tip === TERM_TIP && termToday ? (
+              <>
+                <span className="tip-bulb">🍃</span> 今日{termToday.term} · {termToday.line}
+                <span className="tip-source"> {termToday.source}</span>
+              </>
+            ) : (
+              <>
+                <span className="tip-bulb">💡</span> {t(tip)}
+              </>
+            )}
           </span>
         </div>
       )}

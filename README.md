@@ -165,8 +165,9 @@ vaguely remember (or drop in an image), hit Enter.
   after 9 am, a notification brings a couplet of classical verse for it, one
   of five per term, a different one each year; all 120 were checked against
   published texts. On Windows, clicking it opens the palette on that term.
-  On by default when the interface is in Chinese; Settings → General turns
-  it on or off.
+  All that day the couplet also takes turns with the tips under the empty
+  box. On by default when the interface is in Chinese; Settings → General
+  turns it on or off.
 - **Width and escapes**: `半角` and `全角` convert letters, digits and symbols
   (the marks of a Chinese sentence stay wide); `unicode` and `html` escape or
   unescape. Alone they work on the clipboard.

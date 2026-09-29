@@ -41,7 +41,7 @@ pub fn transform(query: &str) -> Option<TransformResult> {
         });
     }
     // 农历 / 节气: Chinese verbs may run into their argument (农历八月十五)
-    if let Some(a) = crate::chinese_calendar::answer(q, chrono::Local::now().date_naive()) {
+    if let Some(a) = crate::chinese_calendar::answer(q, crate::chinese_calendar::local_now().date()) {
         return Some(TransformResult { label: a.label, value: a.value, error: a.error, badge: Some("calendar"), ..Default::default() });
     }
     let lower = q.to_lowercase();

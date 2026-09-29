@@ -490,6 +490,11 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .map(|v| v == "1")
             .unwrap_or(false),
         "term_notify": term_notify_on(&conn),
+        // the tips on the empty box join in on the first day of a term
+        "term_today": term_notify_on(&conn)
+            .then(|| magpie_core::chinese_calendar::term_of_day(magpie_core::chinese_calendar::local_now().date()))
+            .flatten()
+            .map(|t| json!({ "term": t.term, "line": t.line, "source": t.source })),
         "term_notified": db::meta_get(&conn, "term_notified").map_err(err_str)?.unwrap_or_default(),
         "syncing": state.sync_running.load(Ordering::SeqCst),
         "local_indexing": state.local_indexing.load(Ordering::SeqCst),
@@ -3978,28 +3983,23 @@ fn show_term_notice(app: &AppHandle, term: &str, line: &str, source: &str) {
     let title = format!("今日{term}");
     #[cfg(windows)]
     {
-        use tauri_winrt_notification::Toast;
         // the app's own identity once installed; a dev build borrows
         // PowerShell's, as the notification plugin does
+        const POWERSHELL_APP_ID: &str = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
         let installed = std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(|d| d.to_path_buf()))
             .map(|d| !(d.ends_with("target/debug") || d.ends_with("target/release")))
             .unwrap_or(false);
-        let id = if installed { app.config().identifier.clone() } else { Toast::POWERSHELL_APP_ID.to_string() };
+        let id = if installed { app.config().identifier.clone() } else { POWERSHELL_APP_ID.to_string() };
         let (a, query) = (app.clone(), format!("节气 {term}"));
-        let shown = Toast::new(&id)
-            .title(&title)
-            .text1(line)
-            .text2(source)
-            .on_activated(move |_| {
-                let _ = a.emit("search-selection", query.clone());
-                show_window(&a);
-                Ok(())
-            })
-            .show();
+        let shown = magpie_core::toast::show(&id, &title, &[line, source], move || {
+            log::info!("term notice clicked");
+            let _ = a.emit("search-selection", query.clone());
+            show_window(&a);
+        });
         if let Err(e) = shown {
-            log::warn!("term notice: {e}");
+            log::warn!("term notice: {e:#}");
         }
     }
     #[cfg(not(windows))]

@@ -1269,6 +1269,11 @@ input.query:active {
 .tip-bulb {
   margin-right: 4px;
 }
+/* the source after a solar term couplet, a step quieter than the verse */
+.tip-source {
+  opacity: 0.7;
+  margin-left: 6px;
+}
 /* rotation: the outgoing tip fades up, the incoming one rises into place */
 .tip-text {
   display: inline-block;

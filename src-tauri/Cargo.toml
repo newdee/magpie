@@ -47,9 +47,6 @@ reqwest = { version = "0.13", features = ["json"] }
 
 [target."cfg(windows)".dependencies]
 winreg = "0.55"
-# 节气 reminders: a toast whose click opens the palette (the notification
-# plugin has no click callback); already in the tree through that plugin
-tauri-winrt-notification = "0.7"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 # NSWindow collection behaviour: tao never sets FullScreenAuxiliary, so the

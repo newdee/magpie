@@ -88,6 +88,10 @@ const status = {
   ocr_pdf: false,
   term_notify: true,
   term_notified: "",
+  // ?termday: the demo is on the first day of 寒露 (its couplet joins the tips)
+  term_today: new URLSearchParams(location.search).has("termday")
+    ? { term: "寒露", line: "秋阴不散霜飞晚，留得枯荷听雨声。", source: "唐·李商隐《宿骆氏亭寄怀崔雍崔衮》" }
+    : null,
   syncing: false,
   local_indexing: false,
 };
@@ -510,6 +514,7 @@ mockIPC((cmd, args) => {
     }
     case "set_term_notify": {
       status.term_notify = (args as { enabled: boolean }).enabled;
+      if (!status.term_notify) status.term_today = null;
       return null;
     }
     case "get_autostart":

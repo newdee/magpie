@@ -262,15 +262,34 @@ pub struct TermNotice {
     pub source: &'static str,
 }
 
+/// Local time, or the clock a test sets in `MAGPIE_TEST_NOW`
+/// (`2026-10-08T09:30`): the palette, the reminder and the tips then agree
+/// on what day it is.
+pub fn local_now() -> chrono::NaiveDateTime {
+    clock_or_now(std::env::var("MAGPIE_TEST_NOW").ok().as_deref())
+}
+
+fn clock_or_now(clock: Option<&str>) -> chrono::NaiveDateTime {
+    clock
+        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
+        .unwrap_or_else(|| chrono::Local::now().naive_local())
+}
+
 /// [`term_notice_due`] against the local clock, or against `clock` when a
 /// test sets one (`2026-10-08T09:30`).
 pub fn term_notice_now(clock: Option<&str>, enabled: bool, last_shown: Option<&str>) -> Option<TermNotice> {
-    let now = clock
-        .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M").ok())
-        .unwrap_or_else(|| chrono::Local::now().naive_local());
+    let now = clock_or_now(clock);
     let term = term_notice_due(now, enabled, last_shown)?;
     let (line, source) = poem_for(&term, now.date().year())?;
     Some(TermNotice { day: now.date().format("%Y-%m-%d").to_string(), term, line, source })
+}
+
+/// The term that begins on `day` with this year's couplet, for the tips on
+/// the empty box (all day, not only from nine).
+pub fn term_of_day(day: NaiveDate) -> Option<TermNotice> {
+    let term = term_starting(day)?;
+    let (line, source) = poem_for(&term, day.year())?;
+    Some(TermNotice { day: day.format("%Y-%m-%d").to_string(), term, line, source })
 }
 
 pub fn answer(query: &str, today: NaiveDate) -> Option<Answer> {
@@ -693,6 +712,10 @@ mod tests {
         assert_eq!((n.line, n.source), poem_for("寒露", 2026).unwrap());
         assert_eq!(term_notice_now(Some("2026-10-08T09:30"), true, Some("2026-10-08")), None);
         assert_eq!(term_notice_now(Some("2026-10-08T08:30"), true, None), None);
+        // the tips: all day on the first day, nothing the day after
+        let t = term_of_day(hanlu).unwrap();
+        assert_eq!((t.term.as_str(), t.line), ("寒露", poem_for("寒露", 2026).unwrap().0));
+        assert_eq!(term_of_day(day(2026, 10, 9)), None);
     }
 
     /// Anything else stays a search.

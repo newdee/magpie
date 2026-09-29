@@ -1,3 +1,34 @@
+# 验收记录 2026-09-29（节气诗句进 tips 轮播；自己实现 Windows 通知）
+
+## 实现
+
+- 交节当天（提醒开启时），搜索框下的小贴士里，节气诗句与普通 tips 交替出现；唤出窗口时第一条就是它。
+  `get_status.term_today` 给出节气名、诗句、出处，提醒关闭时为空。
+- Windows 通知改由 `core/src/toast.rs` 直接调用 WinRT：通知对象保留在内存中（最近 8 条），点击回调不会随
+  对象释放而丢失；横幅时长设为 long（约 25 秒）；点击时记日志「term notice clicked」。去掉 tauri-winrt-notification
+  直接依赖。
+- `chinese_calendar::local_now()`：计算器、提醒、tips 共用同一个时钟（测试可用 `MAGPIE_TEST_NOW` 指定）。
+
+## 点击通知：为何仍未实测
+
+- T39（真实通知 + UI Automation 调用通知自身的 Invoke）三次都没找到通知横幅。通知中心历史里有「今日寒露」，
+  说明已送达；在用户会话里查询 `ToastNotificationManager.GetDefault().NotificationMode` 得到 **AlarmsOnly**，
+  即开着勿扰，横幅被系统压下。用 PowerShell 另发一条静音闹钟型通知，Win32 枚举全部可见窗口也没有任何通知
+  窗口，说明勿扰下闹钟型也没显示。为此加的测试专用闹钟开关没有用处，已撤回。
+- 结论：在当前机器设置下无法自动验证点击；改为保留通知对象并记录点击日志，待关掉勿扰时人工确认一次。
+  勿扰用户看不到横幅，交节当天的 tips 轮播正好补上这一点。
+
+## 连续三轮干净（同一 exe）
+
+- R1（真机，时钟 2026-10-08 09:30）：T38 59/59，新增：`节气 寒露` 当天顶行即诗句、副行「今日寒露 · 2026年10月8日
+  周四 · 出处」；`term_today` 与之一致；关闭提醒后 `term_today` 为空。demo T37 58/58，tips 段 4 项：交节当天
+  26 秒内观察到 4 条 tips，诗句与普通 tips 严格交替；关闭后 18 秒内不再出现；普通日子只有普通 tips。
+- R2：clippy Windows / Linux 0；core 单测 Windows 199（含 toast XML 测试）、Linux 198；tsc 0；a1、a3（121 处）
+  0 FAIL；文档对照 0 FAIL；demo 回归 T37、T36、T35、T24、T25 通过。
+- R3：T38 两遍 60 行 0 差异；T37 两遍各项名称与结论 0 差异（附注中的普通 tips 为随机抽取，按设计不同）；
+  cargo test 两遍 223 行去耗时后 0 差异。
+
+---
 # 验收记录 2026-09-29（节气提醒）
 
 ## 实现

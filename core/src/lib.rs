@@ -29,6 +29,8 @@ pub mod videos;
 pub mod sync;
 pub mod syscmd;
 pub mod threads;
+#[cfg(windows)]
+pub mod toast;
 pub mod transform;
 pub mod typed_path;
 pub mod tz;
