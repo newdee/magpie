@@ -212,7 +212,10 @@ vaguely remember (or drop in an image), hit Enter.
   palette goes away.
 - **Look up what you have selected**: `Ctrl+Alt+Space` (`Option+Shift+Space`
   on macOS) copies the selection in whatever app you are in and summons
-  magpie with it as the query. Rebindable or removable in Settings.
+  magpie with it as the query. Rebindable or removable in Settings. On
+  macOS the copy needs magpie allowed under System Settings → Privacy &
+  Security → Accessibility; without it magpie says so and macOS offers to
+  open that page.
 - **Recent opens on the empty box**: switch it on and each tab lists what you
   last opened from it, so getting back to a file from a minute ago is two
   keystrokes.

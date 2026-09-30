@@ -22,6 +22,7 @@ pub mod ocr;
 pub mod onnx;
 pub mod search;
 pub mod secrets;
+pub mod selection;
 pub mod semantic;
 pub mod frecency;
 pub mod notes;

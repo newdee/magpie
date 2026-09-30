@@ -1592,6 +1592,14 @@ export default function App() {
         setSourceIdx(0);
         setQuery(e.payload);
       }),
+      // macOS dropped the copy chord for want of the Accessibility
+      // permission; the system shows its own prompt alongside (#17)
+      listen("selection-needs-access", () => {
+        setShowSettings(false);
+        setNotice(
+          t("Selection search needs Accessibility: allow magpie in System Settings → Privacy & Security → Accessibility"),
+        );
+      }),
       // no hide-on-blur: the palette stays until the user dismisses it
       // explicitly (Esc, Alt+Space, tray) — dragging files in needs the
       // window to survive losing focus
@@ -1607,6 +1615,43 @@ export default function App() {
   // while the preview is open.
   const previewShown =
     previewOpen && !showSettings && (results.length > 0 || calcHit != null || bangHit != null);
+
+  // The window follows `previewShown` at once, but a resize lands a frame or
+  // more later (on macOS asynchronously). Laying the pane out before that
+  // squeezed it into the old narrow window, and it then jumped right as the
+  // window grew (#11). So while the window has yet to catch up the panel keeps
+  // the wide width and the window edge clips it: opening, the pane waits off
+  // screen and the widening window uncovers it; closing, the shrinking window
+  // covers it before the layout drops it.
+  const [windowWide, setWindowWide] = useState(false);
+  useEffect(() => {
+    if (import.meta.env.VITE_DEMO) {
+      // no real window in the demo: the page is as wide as the browser
+      setWindowWide(previewShown);
+      return;
+    }
+    let settle = 0;
+    const done = () => {
+      window.removeEventListener("resize", measure);
+      clearTimeout(settle);
+    };
+    function measure() {
+      const wide = window.innerWidth > (WINDOW_WIDTH + WINDOW_WIDTH_PREVIEW) / 2;
+      setWindowWide(wide);
+      if (wide === previewShown) done();
+    }
+    window.addEventListener("resize", measure);
+    // a window that never reaches the size (the page and the window
+    // disagreeing on the scale) must not strand the pane off screen
+    settle = window.setTimeout(() => {
+      done();
+      setWindowWide(previewShown);
+    }, 400);
+    measure();
+    return done;
+  }, [previewShown]);
+  const paneLaidOut = previewShown || windowWide;
+  const paneCatchingUp = paneLaidOut && previewShown !== windowWide;
 
   // the panel's outline follows the window's (#16): on Windows the frosted
   // backdrop fills the window, so a CSS radius wider than the window's own
@@ -2944,8 +2989,9 @@ export default function App() {
   return (
     <div
       className={`panel ${showSettings ? "settings-mode" : ""} ${
-        previewShown ? "preview-open" : ""
+        paneLaidOut ? "preview-open" : ""
       }`}
+      style={paneCatchingUp ? { minWidth: WINDOW_WIDTH_PREVIEW } : undefined}
       ref={panelRef}
       onKeyDown={onKeyDown}
     >
@@ -5202,7 +5248,7 @@ export default function App() {
           {/* outside .body-row, which is the action menu's positioning box:
               the pane sits in the panel's right padding, full height, not
               over the list (#11) */}
-          {previewOpen && (
+          {paneLaidOut && (
             <PreviewPane
               hit={results[selected]}
               data={preview}

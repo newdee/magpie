@@ -1011,20 +1011,81 @@ fn register_hotkeys(app: &AppHandle, summon: &str, selection: Option<&str>) -> R
 /// chord, read the clipboard back, summon the palette with that as the
 /// query. If the clipboard did not change, nothing was selected — summon
 /// with an empty box rather than searching a stale clip.
+///
+/// The log gets how it went (timings, lengths, never the text), since a
+/// selection search that comes back empty looks the same whatever the cause.
 fn search_selection(app: AppHandle) {
+    use magpie_core::selection;
+    use std::time::{Duration, Instant};
     tauri::async_runtime::spawn(async move {
+        // macOS drops synthesized keys without the Accessibility permission;
+        // say so instead of opening an empty box as if nothing was selected
+        if !selection::input_allowed(false) {
+            log::warn!("selection search: no Accessibility permission, asking for it");
+            selection::input_allowed(true);
+            let _ = app.emit("selection-needs-access", ());
+            show_window(&app);
+            return;
+        }
+        // the chord goes out once the hotkey's modifiers are up: sent while
+        // Option+Shift are still held, ⌘C arrives as ⌥⇧⌘C and copies nothing
+        let start = Instant::now();
+        while selection::modifiers_held() && start.elapsed() < Duration::from_millis(1500) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let released = start.elapsed().as_millis();
+        let still_held = selection::modifiers_held();
+        let seq_before = selection::clipboard_seq();
         let before = clips::clipboard_text().ok();
         if let Err(e) = send_mod_chord(&app, 'c').await {
             log::warn!("selection search: could not synthesize the copy chord: {e}");
         }
-        // give the frontmost app a moment to service the copy
-        tokio::time::sleep(std::time::Duration::from_millis(160)).await;
-        let after = clips::clipboard_text().ok();
-        let query = match (after, before) {
-            (Some(a), Some(b)) if a == b => String::new(),
-            (Some(a), _) => a.trim().chars().take(500).collect(),
-            _ => String::new(),
-        };
+        // wait for the front app to write the clipboard: some take well over
+        // the 160 ms once allowed. With a change counter the wait ends at the
+        // write; without one, at a changed text
+        let sent = Instant::now();
+        let mut seq_after = seq_before;
+        let mut after = before.clone();
+        while sent.elapsed() < Duration::from_millis(800) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            seq_after = selection::clipboard_seq();
+            if seq_before.is_some() && seq_after.is_some() {
+                if seq_after != seq_before {
+                    // the writer may still hold the clipboard open
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                    after = clips::clipboard_text().ok();
+                    if after.is_none() {
+                        tokio::time::sleep(Duration::from_millis(80)).await;
+                        after = clips::clipboard_text().ok();
+                    }
+                    break;
+                }
+            } else {
+                after = clips::clipboard_text().ok();
+                if after.is_some() && after != before {
+                    break;
+                }
+            }
+        }
+        let waited = sent.elapsed().as_millis();
+        let query = selection::copied_query(
+            (seq_before, seq_after),
+            before.as_deref(),
+            after.as_deref(),
+        );
+        if query.is_empty() {
+            log::info!(
+                "selection search: nothing copied after {waited} ms (modifiers up after {released} ms{}; clipboard counter {:?} -> {:?})",
+                if still_held { ", still held" } else { "" },
+                seq_before,
+                seq_after
+            );
+        } else {
+            log::info!(
+                "selection search: copied {} chars in {waited} ms (modifiers up after {released} ms)",
+                query.chars().count()
+            );
+        }
         let _ = app.emit("search-selection", query);
         show_window(&app);
     });
