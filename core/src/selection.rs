@@ -99,7 +99,8 @@ mod imp {
 
     pub fn modifiers_held() -> bool {
         // SAFETY: a plain query of the event system's flags
-        unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) } & MODIFIER_MASK != 0
+        let flags = unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) };
+        flags & MODIFIER_MASK != 0
     }
 
     pub fn clipboard_seq() -> Option<u64> {
