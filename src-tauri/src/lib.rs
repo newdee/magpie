@@ -490,6 +490,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .map(|v| v == "1")
             .unwrap_or(false),
         "term_notify": term_notify_on(&conn),
+        "window_corners": WINDOW_CORNERS.get().copied(),
         // the tips on the empty box join in on the first day of a term
         "term_today": term_notify_on(&conn)
             .then(|| magpie_core::chinese_calendar::term_of_day(magpie_core::chinese_calendar::local_now().date()))
@@ -2639,9 +2640,8 @@ fn copy_clip(text: String) -> Result<(), String> {
 #[tauri::command]
 async fn paste_clip(app: AppHandle, text: String) -> Result<(), String> {
     clips::set_clipboard_text(&text).map_err(err_str)?;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
+    // the paste goes to the app that had the focus: hand it back
+    dismiss_palette(&app);
     tokio::time::sleep(std::time::Duration::from_millis(220)).await;
     send_mod_chord(&app, 'v').await.map_err(err_str)
 }
@@ -3928,6 +3928,11 @@ fn set_ocr_pdf(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Res
     Ok(())
 }
 
+/// How the palette window's corners are drawn on Windows: "round" when the
+/// system rounds them (Windows 11), "square" when it cannot (Windows 10).
+/// Unset elsewhere: the panel's own CSS radius applies.
+static WINDOW_CORNERS: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
 /// 节气 reminders on or off. Unset, they follow the interface language:
 /// on in Chinese, off in English (the verse means little untranslated).
 fn term_notify_on(conn: &magpie_core::rusqlite::Connection) -> bool {
@@ -4561,8 +4566,16 @@ fn placed_after_resize(
 }
 
 /// Resize the palette and keep it on screen. See [`placed_after_resize`].
+///
+/// `width` and `height` are CSS pixels as the page measured them; `dpr` is
+/// the page's devicePixelRatio. On Windows the window gets exactly
+/// `css × dpr` physical pixels, which is what the page needs even when the
+/// webview's pixel ratio and the window's scale factor disagree (a zoomed
+/// webview, a scale factor not yet updated after a display change); with
+/// `dpr` missing, and on other systems, the window's own scale factor is
+/// used as before.
 #[tauri::command]
-fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+fn resize_palette(app: AppHandle, width: f64, height: f64, dpr: Option<f64>) -> Result<(), String> {
     let Some(w) = app.get_webview_window("main") else {
         return Ok(());
     };
@@ -4570,14 +4583,19 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
     // React runs the effect behind this on every render, so most calls ask for
     // the size the window already has. Typing would otherwise churn through a
     // resize per keystroke.
-    let scale = w.scale_factor().map_err(err_str)?;
-    let want = tauri::LogicalSize::new(width, height).to_physical::<u32>(scale);
+    // Windows only: elsewhere the page's ratio can differ from the scale the
+    // toolkit converts with (WebKitGTK under fractional Wayland scaling
+    // reports 1.5 where GTK scales by 2), and the window came out smaller
+    let ratio = match dpr {
+        Some(r) if cfg!(windows) && r.is_finite() && r > 0.0 => r,
+        _ => w.scale_factor().map_err(err_str)?,
+    };
+    let want = tauri::PhysicalSize::new((width * ratio).round() as u32, (height * ratio).round() as u32);
     if before.width == want.width && before.height == want.height {
         return Ok(());
     }
     let pos = w.outer_position().map_err(err_str)?;
-    w.set_size(tauri::LogicalSize::new(width, height))
-        .map_err(err_str)?;
+    w.set_size(want).map_err(err_str)?;
     let monitor = w.current_monitor().ok().flatten().map(|m| {
         let (mp, ms) = (m.position(), m.size());
         ((mp.x, mp.y), (ms.width as i32, ms.height as i32))
@@ -4592,6 +4610,17 @@ fn resize_palette(app: AppHandle, width: f64, height: f64) -> Result<(), String>
             .map_err(err_str)?;
     }
     Ok(())
+}
+
+/// The page found the window shorter than the palette after a resize (#16):
+/// written to the log with the numbers needed to tell why. Sizes only.
+#[tauri::command]
+fn note_palette_misfit(app: AppHandle, panel: f64, viewport: f64, dpr: f64) {
+    let (scale, inner) = app
+        .get_webview_window("main")
+        .map(|w| (w.scale_factor().ok(), w.inner_size().ok()))
+        .unwrap_or((None, None));
+    log::warn!("palette taller than its window: panel {panel} css px, viewport {viewport}, dpr {dpr}, scale {scale:?}, inner {inner:?}");
 }
 
 #[cfg(test)]
@@ -4987,10 +5016,29 @@ fn restart_for_update(app: AppHandle) {
     app.restart();
 }
 
+/// Put the palette away and give the focus back (#9). On macOS hiding only
+/// the window left magpie the active app, so the window underneath showed as
+/// inactive until clicked; hiding the app hands activation back to the app
+/// that had it. For dismissals only: after launching or revealing something,
+/// that app takes the focus itself and the window alone is hidden.
+fn dismiss_palette(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = app.hide();
+}
+
+/// Esc and the like from the page: see [`dismiss_palette`].
+#[tauri::command]
+fn dismiss(app: AppHandle) {
+    dismiss_palette(&app);
+}
+
 fn toggle_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {
-            let _ = w.hide();
+            dismiss_palette(app);
         } else {
             show_window(app);
         }
@@ -5067,6 +5115,9 @@ fn show_window(app: &AppHandle) {
         let _ = w.set_visible_on_all_workspaces(true);
         #[cfg(target_os = "macos")]
         allow_over_fullscreen(&w);
+        // a dismissal hid the whole app on macOS (#9): bring it back first
+        #[cfg(target_os = "macos")]
+        let _ = app.show();
         let _ = w.show();
         let _ = w.set_focus();
         let _ = app.emit("palette-shown", ());
@@ -5206,6 +5257,16 @@ pub fn run() {
             spawn_app_scan(app.handle().clone());
             spawn_ffmpeg_check(app.handle().clone());
             spawn_term_notices(app.handle().clone());
+            // Windows 11 rounds the palette window itself (#16); Windows 10
+            // cannot, and the panel then drops its CSS radius to match
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window("main") {
+                if let Ok(h) = w.hwnd() {
+                    let round = magpie_core::corners::round(h.0 as isize);
+                    let _ = WINDOW_CORNERS.set(if round { "round" } else { "square" });
+                    log::info!("window corners: {}", if round { "rounded by the system" } else { "square" });
+                }
+            }
             // the MCP server for AI assistants, only if the user switched it on
             {
                 let state = app.state::<AppState>();
@@ -5366,7 +5427,7 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
+                dismiss_palette(window.app_handle());
                 api.prevent_close();
             }
         })
@@ -5427,6 +5488,8 @@ pub fn run() {
             open_file,
             restart_for_update,
             resize_palette,
+            note_palette_misfit,
+            dismiss,
             recent_hits,
             append_note,
             set_note_path,

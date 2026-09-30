@@ -7,6 +7,8 @@ mod browsers;
 pub mod calc;
 pub mod chinese_calendar;
 pub mod clips;
+#[cfg(windows)]
+pub mod corners;
 pub mod db;
 pub mod download;
 pub mod embed;

@@ -94,6 +94,8 @@ windows = { version = "0.61", features = [
   "UI_Notifications",
   "Data_Xml_Dom",
   "Foundation",
+  # rounded palette corners on Windows 11 (corners.rs)
+  "Win32_Graphics_Dwm",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

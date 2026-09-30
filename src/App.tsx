@@ -331,6 +331,9 @@ interface Status {
   term_notify?: boolean;
   /// the first day of a solar term (reminders on): its couplet joins the tips
   term_today?: { term: string; line: string; source: string } | null;
+  /// Windows: "round" when the system rounds the window (11), "square" when
+  /// it cannot (10); absent elsewhere, where the CSS radius stands
+  window_corners?: "round" | "square" | null;
   syncing: boolean;
   local_indexing: boolean;
   max_file_mb: number;
@@ -1479,7 +1482,8 @@ export default function App() {
         } else if (showSettingsRef.current) {
           setShowSettings(false);
         } else {
-          void getCurrentWindow().hide();
+          // dismissed: the focus goes back where it was (#9)
+          void invoke("dismiss");
         }
       }
     };
@@ -1604,17 +1608,74 @@ export default function App() {
   const previewShown =
     previewOpen && !showSettings && (results.length > 0 || calcHit != null || bangHit != null);
 
+  // the panel's outline follows the window's (#16): on Windows the frosted
+  // backdrop fills the window, so a CSS radius wider than the window's own
+  // corners showed a square of glass around them
+  const windowCorners = status?.window_corners ?? null;
+  useEffect(() => {
+    const radius = windowCorners === "round" ? "8px" : windowCorners === "square" ? "0px" : null;
+    if (radius) document.documentElement.style.setProperty("--radius", radius);
+    else document.documentElement.style.removeProperty("--radius");
+  }, [windowCorners]);
+
   // window size follows content; the preview pane widens the palette
-  useLayoutEffect(() => {
+  const previewShownRef = useRef(previewShown);
+  previewShownRef.current = previewShown;
+  const misfitNoted = useRef(false);
+  const fitWindow = useCallback((recheck: boolean) => {
     const el = panelRef.current;
     if (!el) return;
     const h = Math.min(Math.max(el.offsetHeight, 96), 620);
-    const w = previewShown ? WINDOW_WIDTH_PREVIEW : WINDOW_WIDTH;
+    const w = previewShownRef.current ? WINDOW_WIDTH_PREVIEW : WINDOW_WIDTH;
     // through the backend, not setSize: the backend skips no-op resizes and
     // clamps the window back onto the screen when the reserved room (see
-    // show_window) is not there, e.g. after a drag against the screen edge
-    invoke("resize_palette", { width: w, height: h }).catch(() => {});
+    // show_window) is not there, e.g. after a drag against the screen edge.
+    // The page's own pixel ratio goes along: the window gets css × dpr
+    // physical pixels, whatever scale factor the window believes it has (#16)
+    invoke("resize_palette", { width: w, height: h, dpr: window.devicePixelRatio })
+      .then(() => {
+        if (!recheck) return;
+        // a moment later the page must see all of the palette. The webview
+        // can trail the window by a frame or two while typing, so a short
+        // palette is sized once more and checked again; only a palette still
+        // cut off after that goes in the log, with the numbers to tell why
+        const cutOff = () => {
+          const p = panelRef.current;
+          if (!p || p.offsetHeight > 620) return null;
+          const bottom = p.getBoundingClientRect().bottom;
+          return bottom > window.innerHeight + 1 ? bottom : null;
+        };
+        setTimeout(() => {
+          if (cutOff() == null) return;
+          fitWindow(false);
+          setTimeout(() => {
+            const bottom = cutOff();
+            if (bottom == null || misfitNoted.current) return;
+            misfitNoted.current = true;
+            invoke("note_palette_misfit", { panel: bottom, viewport: window.innerHeight, dpr: window.devicePixelRatio }).catch(() => {});
+          }, 400);
+        }, 120);
+      })
+      .catch(() => {});
+  }, []);
+  useLayoutEffect(() => {
+    fitWindow(true);
   });
+  // and whenever the panel changes size without a render (late layout). The
+  // panel element can come and go (the welcome screen first), so each render
+  // checks that the one on screen is the one observed
+  const panelObserver = useRef<{ el: HTMLElement; ro: ResizeObserver } | null>(null);
+  useEffect(() => {
+    const el = panelRef.current;
+    if (panelObserver.current?.el === el) return;
+    panelObserver.current?.ro.disconnect();
+    panelObserver.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => fitWindow(true));
+    ro.observe(el);
+    panelObserver.current = { el, ro };
+  });
+  useEffect(() => () => panelObserver.current?.ro.disconnect(), []);
 
   // fetch preview content for the selected hit (index-local, so cheap); the
   // hit itself already carries everything for clips/web/apps
@@ -2423,7 +2484,7 @@ export default function App() {
           } else if (showSettings) {
             setShowSettings(false); // then close settings, then hide
           } else {
-            getCurrentWindow().hide();
+            void invoke("dismiss"); // the focus goes back where it was (#9)
           }
           break;
         // note: the Settings toggle (Alt+, / Ctrl+,) lives on a window-level
@@ -4759,6 +4820,7 @@ export default function App() {
         </div>
       ) : (
         (results.length > 0 || calcHit != null || bangHit != null || noteHit != null) && (
+          <>
           <div
             className="body-row"
             // the menu floats over the list; a short list grows to hold it
@@ -4785,7 +4847,13 @@ export default function App() {
               ))}
             </div>
           )}
-          <div className="results" ref={listRef}>
+          <div
+            className="results"
+            ref={listRef}
+            // any button, the right one too: the focus stays in the box, so the
+            // arrow keys keep moving the selection instead of scrolling (#12)
+            onMouseDown={(e) => e.preventDefault()}
+          >
             {bangHit && (
               <div
                 className={`row extra-row ${topRowActive ? "selected" : ""}`}
@@ -5130,6 +5198,10 @@ export default function App() {
               </div>
             ))}
           </div>
+          </div>
+          {/* outside .body-row, which is the action menu's positioning box:
+              the pane sits in the panel's right padding, full height, not
+              over the list (#11) */}
           {previewOpen && (
             <PreviewPane
               hit={results[selected]}
@@ -5140,7 +5212,7 @@ export default function App() {
               onReveal={toggleReveal}
             />
           )}
-          </div>
+          </>
         )
       )}
 
@@ -5306,7 +5378,7 @@ function Welcome({
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.preventDefault();
-          void getCurrentWindow().hide();
+          void invoke("dismiss");
         } else if (e.key === "Enter" && step < last) {
           e.preventDefault();
           setStep(step + 1);

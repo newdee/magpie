@@ -297,6 +297,11 @@ const mcpCommand = () =>
 
 // launch at login, as the OS would report it
 let autostart = false;
+const browserIconSvg =
+  "data:image/svg+xml;base64," +
+  btoa(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="#3b82f6"/><g fill="none" stroke="#fff" stroke-width="3"><circle cx="32" cy="32" r="26"/><ellipse cx="32" cy="32" rx="11" ry="26"/><path d="M6 32h52M10 19h44M10 45h44"/></g></svg>',
+  );
 const appIconSvg =
   "data:image/svg+xml;base64," +
   btoa(
@@ -404,8 +409,15 @@ mockIPC((cmd, args) => {
         return webHits.slice(0, 3).map((h) => ({ ...h, fuzzy: true }));
       }
       return q ? webHits : [];
-    case "search_clips":
-      return clipHits; // recent list on empty query, matches on typed ones
+    case "search_clips": {
+      // recent list on an empty query; typed, the text clips that contain it,
+      // or (none matching) the image clips, as the image model finds 山 in
+      // a mountain photo
+      const want = q.trim().toLowerCase();
+      if (!want) return clipHits;
+      const text = clipHits.filter((c) => c.clip_kind === "text" && (c.masked ?? c.content).toLowerCase().includes(want));
+      return text.length ? text : clipHits.filter((c) => c.clip_kind === "image");
+    }
     case "set_ocr": {
       const a = args as { enabled: boolean; model: string };
       status.ocr_enabled = a.enabled;
@@ -637,8 +649,9 @@ mockIPC((cmd, args) => {
         { browser: "librewolf", bookmarks: 12, history: 0 },
       ];
     case "browser_icon":
-      // installed browsers get the stand-in icon; LibreWolf shows its letter
-      return (args as { browser?: string })?.browser === "librewolf" ? null : appIconSvg;
+      // installed browsers get a generic globe (not an app's icon, which read
+      // as VS Code in the screenshots); LibreWolf shows its letter
+      return (args as { browser?: string })?.browser === "librewolf" ? null : browserIconSvg;
     case "app_icon":
       // a stand-in app icon: the demo has no OS to ask. ?noicons=1 shows
       // what an app looks like before its icon is read (the monogram)
