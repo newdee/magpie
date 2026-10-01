@@ -1,3 +1,53 @@
+# 验收记录 2026-10-01（#15 AppImage 在 Arch 上不出界面；0.5.5）
+
+## 背景与定位
+
+Tikas 实测 `LD_PRELOAD=/usr/lib/libwayland-client.so` 后 0.5.2 AppImage 能显示，确认是包里自带的
+libwayland-client（来自 Ubuntu 22.04）与 Arch 新版图形栈不兼容。
+
+- 解开 0.5.4 AppImage：带了 libwayland-client / cursor / egl / server 四个。
+- 先试 `LINUXDEPLOY_EXCLUDED_LIBRARIES`：在 WSL 22.04 里复现 tauri 的打包步骤（主程序、WebKit 进程、gtk 插件），
+  用 tauri-cli 2.11.4 当年缓存的 linuxdeploy，带不带这个变量都照样打进 client，**此路不通**，已撤回。
+- 用 tauri 现在钉住的 linuxdeploy（07333c6）和新版 gtk 插件，两种情况都不打包 client。
+  tauri-bundler 2.10.0 的更新日志明写修了 "`EGL_BAD_PARAMETER` crashes on newer Mesa and bundling on Fedora and Arch"，
+  进入 tauri-cli 2.12.0。
+
+## 实现
+
+- `@tauri-apps/cli` 2.11.4 → 2.12.0（不用 2.12.1：pnpm 11 的最短发布时间策略拒绝发布不足一天的包，CI 会装不上；在 WSL 里先撞到）。
+- 新 bundler 不再强制 `GDK_BACKEND=x11`。为了只修 bug、不改运行方式，`run()` 开头在 AppImage 内（有 `APPIMAGE` 且用户没设
+  `GDK_BACKEND`）设为 x11：AppImage 照旧走 X11/XWayland，正好等于 Tikas 实测可用的组合。deb/rpm 不受影响。
+- release 工作流：AppImage 里出现 libwayland-client 就失败（发布前拦截）。
+
+## 发现并修复
+
+| # | 来源 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | WSL 打包实验 | `LINUXDEPLOY_EXCLUDED_LIBRARIES` 对 tauri 用的 linuxdeploy 无效 | 撤回，改为升级 tauri-cli |
+| 2 | WSL pnpm install | 2.12.1 发布不满一天，pnpm 11 拒装（CI 会失败） | 锁 2.12.0 |
+| 3 | WSLg 对比 | 新 bundler 下 AppImage 改走原生 Wayland（Gdk-CRITICAL 7 条，旧版 0 条），属行为变化 | AppImage 内默认 x11；复测 X 服务器上可见 magpie 窗口，magpie 自身 0 条 Gdk 报错 |
+| 4 | Windows 完整打包 | 新 bundler 把 target/release 下的 magpie_lib.dll（cdylib 产物，24 MB，运行时不用）打进 MSI：38.9 MiB vs 0.5.4 的 30.4 MiB | crate-type 只留 rlib；MSI 回到 30.39 MiB，解包只有 magpie.exe 与 DirectML.dll，同 0.5.4 |
+| 5 | 真机回归 | T43 按字节偏移截取已解码的日志字符串（日志含中文，偏 48 字符），漏判 dry run 行；程序实际已写日志 | 改按字节截取；T43 连跑两遍 6/6 |
+| 6 | WSL 冒烟 | 测试脚本套私有 D-Bus 会话时 portal 激活卡住，app 表现不稳定 | 改用独立 HOME、不套私有总线的 trace 脚本 |
+
+## 连续三轮干净
+
+修 #4、#5 之后：R1 cargo test 全过（core 202、2 忽略）、clippy 0、CI 13907bb Linux 与 macOS 绿；R2 真机 T38 59/59、
+T40 6/6、T42 旧版 6 挤压 / 新版 0、T43 6/6。（R3 发现 #6，不计数。）
+
+修 #6 之后：
+- R4（可复现）：WSL 22.04 用最终代码打的 AppImage：无 libwayland-client、glibc 最高 2.35、onnxruntime 在、
+  无仅属主可执行文件；WSLg 下连跑两次，均稳定运行至超时、日志有启动记录、stderr 无报错。
+- R5（静态一致性）：0.5.4 以来 14 个文件的改动通读；README / 站点无 AppImage、Wayland 的过时说法；a1、a3、文档对照 0 FAIL。
+- R6（机制生效）：release 工作流里的检查原样对 0.5.4 AppImage 报 `libwayland-client is bundled`，对新包通过。
+
+## 遗留
+
+- Arch / niri 上是否真的好了，要等 Tikas 试 0.5.5。
+- Wayland 下全局快捷键不可用是协议限制；niri 里绑键执行 magpie（单实例会唤出浮窗）已告诉 Tikas，未在 niri 实测。
+  `--toggle` 参数、设置里的 Wayland 提示属于设计改动，待用户拍板。
+
+---
 # 验收记录 2026-10-01（#17 无辅助功能权限时的提示改在浮窗里）
 
 ## 背景
