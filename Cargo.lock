@@ -3722,7 +3722,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clipboard-win",
- "core-foundation 0.10.1",
  "dirs 7.0.0",
  "fastembed",
  "ffmpeg-sidecar",

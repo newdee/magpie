@@ -25,10 +25,8 @@ pub fn clipboard_seq() -> Option<u64> {
 
 /// May magpie send keystrokes to other apps? macOS drops them silently
 /// without the Accessibility permission; elsewhere nothing gates them.
-/// `prompt` also asks macOS to show its own dialog, which offers to open the
-/// right page of System Settings.
-pub fn input_allowed(prompt: bool) -> bool {
-    imp::input_allowed(prompt)
+pub fn input_allowed() -> bool {
+    imp::input_allowed()
 }
 
 /// The query a selection search runs, from the clipboard before and after
@@ -68,18 +66,13 @@ mod imp {
         clipboard_win::seq_num().map(|n| u64::from(n.get()))
     }
 
-    pub fn input_allowed(_prompt: bool) -> bool {
+    pub fn input_allowed() -> bool {
         true
     }
 }
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use core_foundation::base::TCFType;
-    use core_foundation::boolean::CFBoolean;
-    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-    use core_foundation::string::{CFString, CFStringRef};
-
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventSourceFlagsState(state_id: i32) -> u64;
@@ -88,8 +81,6 @@ mod imp {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> u8;
-        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> u8;
-        static kAXTrustedCheckOptionPrompt: CFStringRef;
     }
 
     /// kCGEventSourceStateHIDSystemState: the keys as the hardware has them
@@ -110,18 +101,10 @@ mod imp {
         })
     }
 
-    pub fn input_allowed(prompt: bool) -> bool {
-        if !prompt {
-            // SAFETY: no arguments
-            return unsafe { AXIsProcessTrusted() } != 0;
-        }
-        // SAFETY: the key is a constant CFString owned by the framework, and
-        // the dictionary lives across the call
-        unsafe {
-            let key = CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt);
-            let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
-            AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) != 0
-        }
+    pub fn input_allowed() -> bool {
+        // SAFETY: no arguments
+        let trusted = unsafe { AXIsProcessTrusted() };
+        trusted != 0
     }
 }
 
@@ -135,7 +118,7 @@ mod imp {
         None
     }
 
-    pub fn input_allowed(_prompt: bool) -> bool {
+    pub fn input_allowed() -> bool {
         true
     }
 }

@@ -266,6 +266,8 @@ const ZH: Record<string, string> = {
   "Saved {name}": "已保存 {name}",
   "Selection search needs Accessibility: allow magpie in System Settings → Privacy & Security → Accessibility":
     "划词搜索需要辅助功能权限：在 系统设置 → 隐私与安全性 → 辅助功能 里允许 magpie",
+  "Open System Settings": "打开系统设置",
+  Dismiss: "关闭",
   "kill chrome lists running Chrome processes; Enter twice ends one":
     "输入 kill chrome 列出运行中的 Chrome 进程；按两次 Enter 结束",
   "lock, sleep or dark mode run straight from the box": "锁屏、睡眠、深色模式，直接在搜索框里执行",

@@ -833,6 +833,7 @@ export default function App() {
   const [iconEpoch, setIconEpoch] = useState(0);
   // a short-lived line in the footer: an action's progress or outcome
   const [notice, setNotice] = useState<string | null>(null);
+  const [needsAccess, setNeedsAccess] = useState(false);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
@@ -1587,18 +1588,19 @@ export default function App() {
       // the selection-search chord: the backend copied the selected text and
       // is about to summon the palette; make that text the query
       listen<string>("search-selection", (e) => {
+        // a copy went out, so the permission is there now
+        setNeedsAccess(false);
         setShowSettings(false);
         setImageQuery(null);
         setSourceIdx(0);
         setQuery(e.payload);
       }),
-      // macOS dropped the copy chord for want of the Accessibility
-      // permission; the system shows its own prompt alongside (#17)
+      // macOS would drop the copy chord for want of the Accessibility
+      // permission: a hint row with a button to the settings page stays
+      // until a selection search goes through or it is dismissed (#17)
       listen("selection-needs-access", () => {
         setShowSettings(false);
-        setNotice(
-          t("Selection search needs Accessibility: allow magpie in System Settings → Privacy & Security → Accessibility"),
-        );
+        setNeedsAccess(true);
       }),
       // no hide-on-blur: the palette stays until the user dismisses it
       // explicitly (Esc, Alt+Space, tray) — dragging files in needs the
@@ -5271,6 +5273,24 @@ export default function App() {
               : source === "clips"
                 ? t("No matching clips")
                 : t("No matches in indexed folders")}
+        </div>
+      )}
+
+      {needsAccess && !showSettings && (
+        <div className="access-row">
+          <span className="access-text">
+            {t("Selection search needs Accessibility: allow magpie in System Settings → Privacy & Security → Accessibility")}
+          </span>
+          <button
+            className="ghost-btn"
+            tabIndex={-1}
+            onClick={() => invoke("open_accessibility_settings").catch((e) => setLastError(String(e)))}
+          >
+            {t("Open System Settings")}
+          </button>
+          <button className="access-close" tabIndex={-1} title={t("Dismiss")} onClick={() => setNeedsAccess(false)}>
+            ×
+          </button>
         </div>
       )}
 

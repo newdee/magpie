@@ -1019,10 +1019,11 @@ fn search_selection(app: AppHandle) {
     use std::time::{Duration, Instant};
     tauri::async_runtime::spawn(async move {
         // macOS drops synthesized keys without the Accessibility permission;
-        // say so instead of opening an empty box as if nothing was selected
-        if !selection::input_allowed(false) {
-            log::warn!("selection search: no Accessibility permission, asking for it");
-            selection::input_allowed(true);
+        // say so instead of opening an empty box as if nothing was selected.
+        // The palette carries the hint and a button to the settings page:
+        // macOS's own prompt opened underneath the palette (#17)
+        if !selection::input_allowed() {
+            log::warn!("selection search: no Accessibility permission");
             let _ = app.emit("selection-needs-access", ());
             show_window(&app);
             return;
@@ -4501,6 +4502,22 @@ async fn copy_file_clip(state: State<'_, AppState>, path: String) -> Result<(), 
     }
 }
 
+/// The Accessibility page of System Settings, where the selection search's
+/// copy chord gets its permission (#17).
+const ACCESSIBILITY_SETTINGS: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+
+/// Open that page, from the hint the palette shows when the permission is
+/// missing. A page of the palette's own rather than macOS's prompt: the
+/// palette floats above everything and covered the prompt.
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    if open_dry_run() {
+        log::info!("dry run: open {ACCESSIBILITY_SETTINGS}");
+        return Ok(());
+    }
+    tauri_plugin_opener::open_url(ACCESSIBILITY_SETTINGS, None::<&str>).map_err(err_str)
+}
+
 /// Open the OS log directory in the file manager — one click to grab the
 /// log file for a bug report.
 #[tauri::command]
@@ -5546,6 +5563,7 @@ pub fn run() {
             toggle_pin_clip,
             copy_file_clip,
             open_log_dir,
+            open_accessibility_settings,
             open_file,
             restart_for_update,
             resize_palette,

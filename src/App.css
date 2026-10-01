@@ -1269,6 +1269,38 @@ input.query:active {
 .tip-bulb {
   margin-right: 4px;
 }
+/* the selection search lacks the Accessibility permission (macOS): stays
+   until a search goes through or it is dismissed */
+.access-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 16px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--accent-soft);
+  border-top: 1px solid var(--border);
+}
+.access-text {
+  flex: 1;
+  min-width: 0;
+}
+.access-row .ghost-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.access-close {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.access-close:hover {
+  color: var(--text);
+}
 /* the source after a solar term couplet, a step quieter than the verse */
 .tip-source {
   opacity: 0.7;
