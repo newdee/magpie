@@ -4507,8 +4507,8 @@ async fn copy_file_clip(state: State<'_, AppState>, path: String) -> Result<(), 
 const ACCESSIBILITY_SETTINGS: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 /// Open that page, from the hint the palette shows when the permission is
-/// missing. A page of the palette's own rather than macOS's prompt: the
-/// palette floats above everything and covered the prompt.
+/// missing. The hint replaces macOS's own prompt, which opened underneath
+/// the palette: the palette floats above every other window.
 #[tauri::command]
 fn open_accessibility_settings() -> Result<(), String> {
     if open_dry_run() {

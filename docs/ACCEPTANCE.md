@@ -1,3 +1,43 @@
+# 验收记录 2026-10-01（#17 无辅助功能权限时的提示改在浮窗里）
+
+## 背景
+
+0.5.4 发布后 Tikas 实测：划词可用（修饰键问题证实）；但关掉辅助功能后再划词，macOS 的授权弹窗被
+magpie 浮窗压在下面（截图）。原因：先调系统弹窗、紧接着唤出置顶浮窗。调换顺序无效，浮窗总在上层。
+
+## 实现
+
+- 不再调用 AXIsProcessTrustedWithOptions 弹窗；`selection::input_allowed()` 只查询 AXIsProcessTrusted。
+  去掉 core-foundation 依赖。
+- 无权限时发 `selection-needs-access`，浮窗显示常驻提示行（不随 4 秒的页脚提示消失）：说明文字、「打开系统
+  设置」按钮（新命令 `open_accessibility_settings`，打开 `x-apple.systempreferences:…?Privacy_Accessibility`，
+  受 MAGPIE_OPEN_DRYRUN 控制）、关闭按钮。下一次划词成功（`search-selection`）自动消失。
+- README 中英文同步改为「magpie 会提示，并带一个按钮直接打开那一页」。
+
+## T43（新测试，e2e/t43-access-hint.*）
+
+真机。Windows 不会缺这个权限，所以由页面发出后端那条事件，之后全走真实浮窗和真实命令（打开动作 dry run）。
+6 项：事件前无提示；提示含按钮与关闭、在窗口内；按钮走到命令（日志出现 dry run 行，页脚无错误）；5 秒后仍在；
+关闭即隐藏；划词成功后自动消失且查询为 hello。
+
+## 发现并修复
+
+| # | 来源 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | 构建 | C 盘 0 字节，release 构建报 `no space on device`；target/debug 252.8 GB，其中 incremental 114 GB | 只删 target/debug/incremental（纯缓存），腾出 92.7 GB |
+| 2 | R3 静态一致性 | `open_accessibility_settings` 的文档注释措辞不通 | 改写注释（不影响二进制），本轮不计数 |
+
+## 连续三轮干净（修 #2 之后）
+
+- R4（可复现）：T43 连跑两遍，输出逐行相同（6/6 与 6/6）。
+- R5（代码正确性）：clippy 0 警告；a1 命令 99 个定义 / 99 注册 / 91 由前端调用，a3、文档对照 0 FAIL；错误路径：
+  打开失败走 setLastError 显示在页脚，Windows / Linux 永不发该事件。
+- R6（机制是否生效）：同一 T43 对 0.5.3 旧版 1/3（提示不出现、找不到按钮），对新版 6/6。
+
+此前两轮（修 #2 之前，同一代码）：cargo test 全过（core 202、2 忽略）；CI 3cb0946 Linux 与 macOS 全绿；
+demo T37 62/62；真机 T38 59/59、T40 6/6、T42 旧版 4 挤压 / 8 拉伸、新版 0 / 0。
+
+---
 # 验收记录 2026-09-30（#17 划词搜索取不到选区、#11 预览窗格打开时跳动）
 
 ## 实现
