@@ -7,7 +7,11 @@ edition = "2021"
 
 [lib]
 name = "magpie_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# rlib only: the desktop binary links it. tauri's template also builds a
+# cdylib and a staticlib for mobile, which magpie does not ship, and since
+# tauri-cli 2.12 the Windows installers pick up the magpie_lib.dll next to
+# the exe (24 MB nothing loads)
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
