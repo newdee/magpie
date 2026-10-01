@@ -29,6 +29,9 @@ pub fn eval(query: &str) -> Option<CalcResult> {
     if let Some(r) = eval_conversion(q) {
         return Some(r);
     }
+    if reads_as_identifier(q) {
+        return None;
+    }
     // quick reject: expressions contain only this alphabet, and must have at
     // least one operator or be a base literal (plain "42" is a search query)
     let ok_chars = q
@@ -50,6 +53,27 @@ pub fn eval(query: &str) -> Option<CalcResult> {
     let alt = (p.used_base_literal && v.fract() == 0.0 && v.abs() < 9e15)
         .then(|| format!("0x{:X}", v as i64));
     Some(CalcResult { value: fmt_num(v), alt })
+}
+
+/// Digit groups joined by dashes or slashes with no spaces, as in dates
+/// (20-05-2026, 20/05/2026) and phone numbers (138-0013-8000), are not sums:
+/// three or more groups with one kind of separator, or any group with a
+/// leading zero. The same digits typed with spaces still calculate.
+fn reads_as_identifier(q: &str) -> bool {
+    if q.contains(' ') {
+        return false;
+    }
+    let sep = match (q.contains('-'), q.contains('/')) {
+        (true, false) => '-',
+        (false, true) => '/',
+        _ => return false,
+    };
+    let groups: Vec<&str> = q.split(sep).collect();
+    // a leading minus leaves an empty first group: that is a negative number
+    if !groups.iter().all(|g| !g.is_empty() && g.bytes().all(|b| b.is_ascii_digit())) {
+        return false;
+    }
+    groups.len() >= 3 || groups.iter().any(|g| g.len() > 1 && g.starts_with('0'))
 }
 
 fn fmt_num(v: f64) -> String {
@@ -351,6 +375,21 @@ fn eval_date(q: &str) -> Option<CalcResult> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn dates_and_phone_numbers_are_not_sums() {
+        for q in ["20-05-2026", "20/05/2026", "05/20/2026", "138-0013-8000", "010-12345678", "05-12", "1-2-3"] {
+            assert_eq!(eval(q), None, "{q:?}");
+        }
+        // with spaces, or with two plain groups, it is arithmetic again
+        assert_eq!(v("20 - 05 - 2026"), "-2011");
+        assert_eq!(v("100-20"), "80");
+        assert_eq!(v("10/2"), "5");
+        assert_eq!(v("1.5-0.5"), "1");
+        assert_eq!(v("2*3-1"), "5");
+        // an ISO date still reads as a date
+        assert!(eval("2026-10-01").unwrap().value.starts_with("2026-10-01"));
+    }
+
     fn v(q: &str) -> String {
         eval(q).unwrap_or_else(|| panic!("{q:?} must evaluate")).value
     }
@@ -392,9 +431,10 @@ mod tests {
         assert!(eval("today").is_none());
         assert!(eval("tomorrow").is_none());
         assert!(eval("today + x").is_none());
-        // an impossible date is not a date; the arithmetic path still owns
-        // the dashes, as it always has (2026 - 13 - 40)
-        assert_eq!(v("2026-13-40"), "1973");
+        // an impossible date is not a date, and three dash-joined groups are
+        // not a sum either (see reads_as_identifier); spaced, it calculates
+        assert!(eval("2026-13-40").is_none());
+        assert_eq!(v("2026 - 13 - 40"), "1973");
     }
 
     #[test]
