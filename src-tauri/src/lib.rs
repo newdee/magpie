@@ -5204,6 +5204,15 @@ fn show_window(app: &AppHandle) {
 }
 
 pub fn run() {
+    // The AppImage keeps running on X11 (XWayland under Wayland), as it did
+    // when the bundler forced it; tauri-cli 2.12 stopped forcing it while
+    // fixing #15 (the bundled libwayland-client is gone). A choice the user
+    // makes with GDK_BACKEND still wins. Set before GTK starts, while only
+    // this thread runs.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("APPIMAGE").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
     // `mut` is only exercised by the macOS activation-policy call below
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut app = tauri::Builder::default()

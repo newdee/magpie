@@ -137,6 +137,14 @@ jobs:
           cd "$(mktemp -d)"
           "$img" --appimage-extract >/dev/null
           test -f squashfs-root/usr/lib/magpie/libonnxruntime.so
+          # the system's libwayland-client, never a bundled one: the copy from
+          # 22.04 kept the window from coming up on Arch, EGL_BAD_PARAMETER
+          # (#15). tauri-cli 2.12 bundles with a linuxdeploy that leaves it out
+          wl=$(find squashfs-root -name 'libwayland-client*')
+          if [ -n "$wl" ]; then
+            echo "::error::libwayland-client is bundled: $wl"
+            exit 1
+          fi
           newest=$(find squashfs-root -type f -exec sh -c 'file -b "$1" | grep -q ^ELF && objdump -T "$1" 2>/dev/null' _ {} \; \
             | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
           echo "newest glibc symbol in the AppImage: $newest"
