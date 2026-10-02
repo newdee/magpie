@@ -988,6 +988,62 @@ input.query:active {
   flex-shrink: 0;
 }
 
+/* "Add common places": a checklist under the folder header */
+.places {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.place-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.place-row:hover {
+  background: var(--row-hover);
+}
+.place-row.off {
+  cursor: default;
+  opacity: 0.6;
+}
+.place-row input {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.places > .set-desc {
+  max-width: none;
+  padding: 0 8px 2px;
+}
+.place-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.place-name {
+  font-size: 13px;
+}
+.place-note {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: right;
+}
+.places-actions {
+  align-self: flex-end;
+  margin-top: 4px;
+}
+
 .folder-row {
   display: flex;
   align-items: center;

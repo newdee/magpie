@@ -164,6 +164,23 @@ const ZH: Record<string, string> = {
   "Scanned recursively; hidden and gitignored paths are skipped.":
     "递归扫描；跳过隐藏文件及 gitignore 路径。",
   "Add folder": "添加文件夹",
+  "Add common places…": "添加常用位置…",
+  "Where downloads, screenshots and files from chat apps usually land. Tick the ones to index.":
+    "下载、截图和聊天软件收到的文件通常存在这些地方。勾选要索引的。",
+  "Looking for common places…": "正在查找常用位置…",
+  "No common places found on this computer.": "这台电脑上没找到常用位置。",
+  Downloads: "下载",
+  Desktop: "桌面",
+  Screenshots: "截图",
+  "Files received in WeChat": "微信收到的文件",
+  "Files received in QQ": "QQ 收到的文件",
+  "{n} files": "{n} 个文件",
+  "{n}+ files": "{n}+ 个文件",
+  Added: "已添加",
+  "Already in an indexed folder": "已包含在索引的文件夹里",
+  "Holds an indexed folder; remove that one first": "里面有已索引的文件夹，先移除那个",
+  "Add {n}": "添加 {n} 个",
+  Add: "添加",
   "No folders yet.": "还没有文件夹。",
   "The folder list failed to load — please report this with the error below.":
     "文件夹列表加载失败 — 请附下方错误反馈。",

@@ -145,6 +145,12 @@ pub fn clear_folder_files(conn: &Connection, folder_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// A path the way the folder list stores it, so it compares with the
+/// registered folders; None when it does not exist.
+pub fn canonical_path(p: &Path) -> Option<String> {
+    dunce_canonicalize(p).ok()
+}
+
 /// Canonicalize without Windows `\\?\` prefix noise.
 fn dunce_canonicalize(p: &Path) -> Result<String> {
     let c = p.canonicalize()?;

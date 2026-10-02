@@ -341,7 +341,34 @@ mockIPC((cmd, args) => {
       return { ...status };
     case "list_folders":
       return folders;
+    case "common_places": {
+      // "Add common places": one of each state, against the demo folders
+      const added = (p: string) => folders.some((f) => f.path === p);
+      const row = (kind: string, path: string, files: number, more = false) => ({
+        kind,
+        path,
+        state: added(path) ? "added" : "new",
+        files,
+        more,
+      });
+      return [
+        row("downloads", "C:\\Users\\dfine\\Downloads", 50000, true),
+        row("desktop", "C:\\Users\\dfine\\Desktop", 37),
+        { ...row("screenshots", "C:\\Users\\dfine\\Pictures\\screenshots", 411), state: "added" },
+        row("wechat", "C:\\Users\\dfine\\Documents\\xwechat_files\\wxid_demo_1a2b\\msg\\file", 1306),
+        row("qq", "C:\\Users\\dfine\\Documents\\Tencent Files\\10001\\nt_qq\\nt_data\\File", 62),
+      ];
+    }
     case "add_folder":
+    case "add_folders": {
+      const a = args as { path?: string; paths?: string[] };
+      for (const path of a.paths ?? (a.path ? [a.path] : [])) {
+        if (!folders.some((f) => f.path === path)) {
+          folders.push({ id: Math.max(0, ...folders.map((f) => f.id)) + 1, path, file_count: 0 });
+        }
+      }
+      return cmd === "add_folders" ? [[...folders], []] : [...folders];
+    }
     case "remove_folder": {
       // remove for real, like the backend, so the settings page can be driven
       // down to an empty list (status.folder_count stays stale on purpose:

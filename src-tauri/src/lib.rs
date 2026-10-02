@@ -1383,6 +1383,80 @@ async fn add_folder(
     Ok(out)
 }
 
+/// Several folders at once ("Add common places"): all are registered before
+/// the one index pass starts, so the scan takes them all in together and
+/// none waits for another's pass (embedding a big Downloads can take long).
+/// A folder that cannot be added is reported; the others still go in.
+#[tauri::command]
+async fn add_folders(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<(Vec<FolderInfo>, Vec<String>), String> {
+    let (out, failed) = {
+        let conn = state.db.lock().await;
+        let failed: Vec<String> = paths
+            .iter()
+            .filter_map(|p| files::add_folder(&conn, p).err().map(|e| format!("{p}: {e}")))
+            .collect();
+        (files::list_folders(&conn).map_err(err_str)?, failed)
+    };
+    rewatch(&app);
+    spawn_local_index(app);
+    Ok((out, failed))
+}
+
+/// One entry of the "Add common places" list.
+#[derive(serde::Serialize)]
+struct CommonPlace {
+    kind: &'static str,
+    path: String,
+    state: magpie_core::places::PlaceState,
+    /// files the index would take in, counted up to a cap
+    files: usize,
+    /// the count stopped early: there are at least this many
+    more: bool,
+}
+
+/// Where downloads, screenshots and chat apps' received files land on this
+/// computer, each with how it relates to the indexed folders and roughly how
+/// many files it holds, so the user can tell what ticking it means.
+#[tauri::command]
+async fn common_places(state: State<'_, AppState>) -> Result<Vec<CommonPlace>, String> {
+    let folders: Vec<String> = {
+        let conn = state.db.lock().await;
+        files::list_folders(&conn).map_err(err_str)?.into_iter().map(|f| f.path).collect()
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        use magpie_core::places;
+        let found: Vec<(&'static str, String)> = places::detect(&places::Roots::from_os())
+            .into_iter()
+            .filter_map(|p| files::canonical_path(std::path::Path::new(&p.path)).map(|c| (p.kind, c)))
+            .collect();
+        // counted side by side: a big Downloads should not hold up the rest
+        std::thread::scope(|s| {
+            let handles: Vec<_> = found
+                .iter()
+                .map(|(kind, path)| {
+                    let folders = &folders;
+                    s.spawn(move || {
+                        let state = places::place_state(path, folders);
+                        let (files, more) = places::count_files(
+                            std::path::Path::new(path),
+                            50_000,
+                            std::time::Duration::from_millis(1500),
+                        );
+                        CommonPlace { kind, path: path.clone(), state, files, more }
+                    })
+                })
+                .collect();
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        })
+    })
+    .await
+    .map_err(err_str)
+}
+
 #[tauri::command]
 async fn remove_folder(
     app: AppHandle,
@@ -3164,8 +3238,14 @@ enum Scope {
     Paths(Vec<PathBuf>),
 }
 
+/// A full walk, now or right after the pass that is running: that pass may
+/// have read the folder list before this request (two folders added in a
+/// row, say), so the request is queued, not dropped. The watch ticker runs
+/// it once the indexer is free.
 fn spawn_local_index(app: AppHandle) {
-    start_local_index(app, Scope::All);
+    if !start_local_index(app.clone(), Scope::All) {
+        app.state::<AppState>().pending.lock().unwrap().rescan_all(std::time::Instant::now());
+    }
 }
 
 /// Scan (full or scoped), then embed whatever the scan left pending. One
@@ -5639,6 +5719,8 @@ pub fn run() {
             set_hf_endpoint,
             list_folders,
             add_folder,
+            add_folders,
+            common_places,
             remove_folder,
             index_local,
             rebuild_folder,

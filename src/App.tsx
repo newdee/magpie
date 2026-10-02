@@ -388,6 +388,22 @@ const WINDOW_WIDTH = 720;
 // the tab strip and the query row never reflow when the pane opens
 const PREVIEW_PANE_WIDTH = 372;
 const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
+
+/// One row of "Add common places" (common_places in lib.rs).
+interface CommonPlace {
+  kind: string;
+  path: string;
+  state: "new" | "added" | "covered" | "contains";
+  files: number;
+  more: boolean;
+}
+const PLACE_LABELS: Record<string, string> = {
+  downloads: "Downloads",
+  desktop: "Desktop",
+  screenshots: "Screenshots",
+  wechat: "Files received in WeChat",
+  qq: "Files received in QQ",
+};
 // how long the selection must rest on a local file before its preview loads
 const LOCAL_PREVIEW_DELAY_MS = 800;
 
@@ -1105,7 +1121,24 @@ export default function App() {
     inputRef.current?.focus();
   }, []);
 
+  // the row a refresh should keep selected (refreshResults sets it, a new
+  // query clears it); runSearch selects it once it is in the list
+  const followKeyRef = useRef<string | null>(null);
   const runSearch = useCallback(async (q: string, srcIdx: number) => {
+    // where the selection goes with a new list: the followed row if it is
+    // there, else the top. Always handed a whole list (a followed local
+    // search paints only once every part is in), so a row missing is gone.
+    const pick = (list: Hit[]): number => {
+      const k = followKeyRef.current;
+      followKeyRef.current = null;
+      if (k == null) return 0;
+      return Math.max(0, list.findIndex((h) => hitKey(h) === k));
+    };
+    const show = (list: Hit[]) => {
+      setResults(list);
+      setSelected(pick(list));
+      setSelAnchor(null);
+    };
     // one ticket per search: only the latest request may publish results. The
     // backend cancels the superseded query outright (see take_search_conn);
     // this guard covers the tail where an older response is already in flight.
@@ -1119,9 +1152,7 @@ export default function App() {
       try {
         const fs = await invoke<Hit[]>("recent_downloads");
         if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-          setResults(fs);
-          setSelected(0);
-          setSelAnchor(null);
+          show(fs);
         }
       } catch (e) {
         setLastError(String(e));
@@ -1134,9 +1165,7 @@ export default function App() {
       try {
         const ps = await invoke<Omit<ProcessHit, "kind">[]>("list_port_processes", { port: portQ });
         if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-          setResults(ps.map((p) => ({ ...p, kind: "process" as const })));
-          setSelected(0);
-          setSelAnchor(null);
+          show(ps.map((p) => ({ ...p, kind: "process" as const })));
         }
       } catch (e) {
         setLastError(String(e));
@@ -1152,9 +1181,7 @@ export default function App() {
         const by = /^cpu$/i.test(topQ[1]) ? "cpu" : "memory";
         const ps = await invoke<Omit<ProcessHit, "kind">[]>("top_processes", { by });
         if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-          setResults(ps.map((p) => ({ ...p, kind: "process" as const })));
-          setSelected(0);
-          setSelAnchor(null);
+          show(ps.map((p) => ({ ...p, kind: "process" as const })));
         }
       } catch (e) {
         setLastError(String(e));
@@ -1167,9 +1194,7 @@ export default function App() {
       try {
         const ps = await invoke<Omit<ProcessHit, "kind">[]>("list_processes", { query: killQ });
         if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-          setResults(ps.map((p) => ({ ...p, kind: "process" as const })));
-          setSelected(0);
-          setSelAnchor(null);
+          show(ps.map((p) => ({ ...p, kind: "process" as const })));
         }
       } catch {
         /* listing failed: keep what is on screen */
@@ -1183,9 +1208,7 @@ export default function App() {
         try {
           const recents = await invoke<Hit[]>("recent_hits", { source: srcId });
           if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-            setResults(Array.isArray(recents) ? recents : []);
-            setSelected(0);
-            setSelAnchor(null);
+            show(Array.isArray(recents) ? recents : []);
           }
         } catch {
           /* keep the bare box */
@@ -1235,12 +1258,13 @@ export default function App() {
           const allIn = apps !== null && cmds !== null && files !== null;
           // nothing to show yet: keep the previous list rather than blank it
           if (list.length === 0 && !allIn) return;
+          // a refresh keeps the list on screen until all of it is in, so the
+          // followed row never jumps to the top in between
+          if (followKeyRef.current != null && !allIn) return;
           if (!painted) {
             painted = true;
             shown = list;
-            setResults(list);
-            setSelected(0);
-            setSelAnchor(null);
+            show(list);
             return;
           }
           // later parts: the first row stays selected unless the user moved;
@@ -1287,14 +1311,26 @@ export default function App() {
         return;
       }
       if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-        setResults(hits);
-        setSelected(0);
-        setSelAnchor(null);
+        show(hits);
       }
     } catch {
       /* transient: db busy during migration */
     }
   }, []);
+
+  // A refresh of the query on screen (an index pass finished, a clip was
+  // pinned, a process ended): the list may change under the user, the
+  // selection should not. The row selected now stays selected wherever it
+  // lands (runSearch picks it, see followKeyRef); a new query or tab still
+  // starts at the top, since the query effect forgets the row.
+  const refreshResults = useCallback(() => {
+    // an image search on screen is no text query: re-running the (empty)
+    // text query would wipe its results
+    if (imageQueryRef.current) return Promise.resolve();
+    const cur = resultsRef.current[selectedRef.current];
+    followKeyRef.current = cur ? hitKey(cur) : null;
+    return runSearch(queryRef.current, sourceRef.current);
+  }, [runSearch]);
 
   const acceptImageQuery = useCallback((iq: ImageQuery) => {
     setQuery("");
@@ -1442,6 +1478,7 @@ export default function App() {
         .catch((e) => setLastError(String(e)));
       return;
     }
+    followKeyRef.current = null;
     const t = setTimeout(() => runSearch(query, sourceIdx), 120);
     return () => clearTimeout(t);
   }, [query, sourceIdx, imageQuery, repoSort, localScope, webScope, runSearch]);
@@ -1571,7 +1608,7 @@ export default function App() {
       listen("sync-done", () => {
         setStarsProgress(null);
         refreshStatus();
-        runSearch(queryRef.current, sourceRef.current);
+        refreshResults();
       }),
       listen<string>("sync-error", (e) => {
         setStarsProgress(null);
@@ -1583,7 +1620,7 @@ export default function App() {
         setLocalProgress(null);
         refreshStatus();
         refreshFolders();
-        runSearch(queryRef.current, sourceRef.current);
+        refreshResults();
       }),
       listen<string>("local-error", (e) => {
         setLocalProgress(null);
@@ -1591,13 +1628,13 @@ export default function App() {
       }),
       listen("bookmarks-done", () => {
         refreshStatus();
-        runSearch(queryRef.current, sourceRef.current);
+        refreshResults();
       }),
       listen<string>("bookmarks-error", (e) => setLastError(e.payload)),
       listen("model-status", () => refreshStatus()),
       listen("embed-caught-up", () => {
         refreshStatus();
-        runSearch(queryRef.current, sourceRef.current);
+        refreshResults();
       }),
       listen("palette-hidden", () => setPreviewOpen(false)),
       listen("palette-shown", () => {
@@ -1661,7 +1698,7 @@ export default function App() {
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
-  }, [refreshStatus, refreshFolders, runSearch]);
+  }, [refreshStatus, refreshFolders, refreshResults]);
 
   // The pane renders only when there is a row to describe, so the reserved
   // column and the wider window follow that same condition. Keying them off
@@ -1782,6 +1819,14 @@ export default function App() {
   // image and PDF on the way. Stars come from the index and show at once,
   // and so does whatever is selected when the pane is opened.
   const previewWasOpen = useRef(false);
+  // what the pane shows depends on which row is selected (and on the query,
+  // which picks the excerpt), not on the list around it: a refresh that
+  // keeps the row selected keeps its preview. A file's mtime is part of it,
+  // so a file that changed on disk is fetched again.
+  const selHit = results[selected] as Hit | undefined;
+  const previewKey = selHit
+    ? `${hitKey(selHit)}@${"mtime" in selHit ? selHit.mtime : ""}|${query}`
+    : "";
   useEffect(() => {
     const justOpened = previewOpen && !previewWasOpen.current;
     previewWasOpen.current = previewOpen;
@@ -1828,7 +1873,7 @@ export default function App() {
       stale = true;
       clearTimeout(t);
     };
-  }, [previewOpen, selected, results]);
+  }, [previewOpen, previewKey]);
 
   // keep selection visible
   useEffect(() => {
@@ -1926,14 +1971,14 @@ export default function App() {
           await invoke("end_process", { pid: hit.pid, name: hit.name });
           setLastError(null);
           // the list without it; the palette stays for the next one
-          void runSearch(queryRef.current, sourceRef.current);
+          void refreshResults();
         }
       } catch (e) {
         setLastError(String(e));
       }
       return true;
     },
-    [finishAction, runSearch],
+    [finishAction, refreshResults],
   );
 
   const openHit = useCallback(async (hit: Hit | undefined) => {
@@ -1982,12 +2027,12 @@ export default function App() {
         // the backend is rescanning apps; search again once it has, so the
         // stale row goes away
         setLastError(t("That app has moved or been removed; the app list was refreshed."));
-        setTimeout(() => void runSearch(queryRef.current, sourceRef.current), 1200);
+        setTimeout(() => void refreshResults(), 1200);
       } else {
         setLastError(msg);
       }
     }
-  }, [finishAction, runSearch, runRisky]);
+  }, [finishAction, refreshResults, runRisky]);
 
   /// What the action menu (Ctrl/Cmd+K) offers for a row. The first entry is
   /// what Enter does on the row itself.
@@ -1995,7 +2040,7 @@ export default function App() {
     (hit: Hit): RowAction[] => {
       const act = (p: Promise<unknown>) => p.catch((e) => setLastError(String(e)));
       const copy = (text: string) => act(invoke("copy_clip", { text }));
-      const refresh = () => void runSearch(queryRef.current, sourceRef.current);
+      const refresh = () => void refreshResults();
       // a file's folder in a terminal, the file in each installed editor
       const openElsewhere = (path: string): RowAction[] => [
         {
@@ -2207,7 +2252,7 @@ export default function App() {
           ];
       }
     },
-    [openHit, runRisky, finishAction, runSearch, editors, revealed, toggleReveal],
+    [openHit, runRisky, finishAction, refreshResults, editors, revealed, toggleReveal],
   );
 
   const menuActions = useMemo(
@@ -2542,7 +2587,7 @@ export default function App() {
           if (r && r.kind === "clip") {
             e.preventDefault();
             void invoke("toggle_pin_clip", { clipId: r.id })
-              .then(() => runSearch(queryRef.current, sourceRef.current))
+              .then(() => refreshResults())
               .catch((err) => setLastError(String(err)));
           }
           break;
@@ -2625,7 +2670,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, runSearch, finishAction, actionsOpen, actionSel, menuActions, runMenuAction],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, finishAction, actionsOpen, actionSel, menuActions, runMenuAction],
   );
 
   const refresh = useCallback(async () => {
@@ -2707,6 +2752,39 @@ export default function App() {
     },
     [refreshStatus],
   );
+
+  // "Add common places": opened as a checklist under the folder list. null
+  // while the backend looks (it counts files, which takes a moment)
+  const [placesOpen, setPlacesOpen] = useState(false);
+  const [places, setPlaces] = useState<CommonPlace[] | null>(null);
+  const [placesPick, setPlacesPick] = useState<ReadonlySet<string>>(new Set());
+  const [placesBusy, setPlacesBusy] = useState(false);
+  const openPlaces = useCallback(async () => {
+    setPlacesOpen(true);
+    setPlaces(null);
+    setPlacesPick(new Set());
+    try {
+      setPlaces(await invoke<CommonPlace[]>("common_places"));
+    } catch (e) {
+      setPlaces([]);
+      setLastError(String(e));
+    }
+  }, []);
+  const addPlaces = useCallback(async () => {
+    setPlacesBusy(true);
+    try {
+      // all at once: one index pass takes them in together
+      const [list, failed] = await invoke<[FolderInfo[], string[]]>("add_folders", {
+        paths: [...placesPick],
+      });
+      setFolders(list);
+      setLastError(failed.length ? failed.join("\n") : null);
+    } catch (e) {
+      setLastError(String(e));
+    }
+    setPlacesBusy(false);
+    setPlacesOpen(false);
+  }, [placesPick]);
 
   const addFolder = useCallback(async () => {
     const dir = await holdOpen(() => openDialog({ directory: true, multiple: false }));
@@ -3482,7 +3560,7 @@ export default function App() {
                             // the list behind the settings page was built under the
                             // old setting; rebuild it now, or it lingers until the
                             // next keystroke or tab switch
-                            void runSearch(queryRef.current, sourceRef.current);
+                            void refreshResults();
                           }}
                         >
                           {t(o.label)}
@@ -4000,10 +4078,73 @@ export default function App() {
                           {t("Scanned recursively; hidden and gitignored paths are skipped.")}
                         </span>
                       </div>
-                      <button className="primary-btn" onClick={addFolder}>
-                        {t("Add folder")}
-                      </button>
+                      <div className="pill-row">
+                        <button className="ghost-btn" onClick={() => void openPlaces()}>
+                          {t("Add common places…")}
+                        </button>
+                        <button className="primary-btn" onClick={addFolder}>
+                          {t("Add folder")}
+                        </button>
+                      </div>
                     </div>
+                    {placesOpen && (
+                      <div className="places">
+                        <p className="set-desc">
+                          {t("Where downloads, screenshots and files from chat apps usually land. Tick the ones to index.")}
+                        </p>
+                        {places == null ? (
+                          <p className="set-empty">{t("Looking for common places…")}</p>
+                        ) : places.length === 0 ? (
+                          <p className="set-empty">{t("No common places found on this computer.")}</p>
+                        ) : (
+                          places.map((p) => (
+                            <label key={p.path} className={`place-row ${p.state === "new" ? "" : "off"}`}>
+                              <input
+                                type="checkbox"
+                                disabled={p.state !== "new" || placesBusy}
+                                checked={p.state === "added" || p.state === "covered" || placesPick.has(p.path)}
+                                onChange={(e) => {
+                                  const on = e.currentTarget.checked;
+                                  setPlacesPick((s) => {
+                                    const n = new Set(s);
+                                    if (on) n.add(p.path);
+                                    else n.delete(p.path);
+                                    return n;
+                                  });
+                                }}
+                              />
+                              <span className="place-main">
+                                <span className="place-name">{t(PLACE_LABELS[p.kind] ?? p.kind)}</span>
+                                <span className="folder-path" title={p.path}>
+                                  {p.path}
+                                </span>
+                              </span>
+                              <span className="place-note">
+                                {p.state === "new"
+                                  ? tf(p.more ? "{n}+ files" : "{n} files", { n: p.files.toLocaleString() })
+                                  : p.state === "added"
+                                    ? t("Added")
+                                    : p.state === "covered"
+                                      ? t("Already in an indexed folder")
+                                      : t("Holds an indexed folder; remove that one first")}
+                              </span>
+                            </label>
+                          ))
+                        )}
+                        <div className="pill-row places-actions">
+                          <button className="ghost-btn" disabled={placesBusy} onClick={() => setPlacesOpen(false)}>
+                            {t("Cancel")}
+                          </button>
+                          <button
+                            className="primary-btn"
+                            disabled={placesPick.size === 0 || placesBusy}
+                            onClick={() => void addPlaces()}
+                          >
+                            {placesPick.size > 0 ? tf("Add {n}", { n: placesPick.size }) : t("Add")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {folders.length === 0 &&
                       // "failed to load" only when the load actually failed. It used
                       // to be inferred from status.folder_count, which lags behind

@@ -40,7 +40,10 @@ vaguely remember (or drop in an image), hit Enter.
   recursive within those folders, `.gitignore` rules are respected (even
   outside git repos), hidden files are skipped, and symlinks are never
   followed out of the folders you chose. Nested or duplicate folders are
-  rejected up front.
+  rejected up front. *Add common places…* in settings lists where saved
+  things usually land on this computer (Downloads, the desktop, the
+  screenshots folder and, on Windows, the folders WeChat and QQ keep
+  received files in), each with its file count; only what you tick is added.
 - **Everything stays on your machine.** The index is a single SQLite file in
   your user profile. Embedding models run locally via ONNX; after the one-time
   download the whole thing works offline. Bookmarks are read straight from

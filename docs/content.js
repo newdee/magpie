@@ -408,14 +408,14 @@ window.FEATURES = {
   },
   g5: {
     en: [
-      "<b>No full-disk scanning.</b> magpie reads only the folders you add. It respects .gitignore, skips hidden files, and does not follow symlinks out of those folders.",
+      "<b>No full-disk scanning.</b> magpie reads only the folders you add. It respects .gitignore, skips hidden files, and does not follow symlinks out of those folders. <i>Add common places</i> lists where saved things usually land (Downloads, the desktop, screenshots, and on Windows the files received in WeChat and QQ); only what you tick is added.",
       "<b>Nothing leaves your machine.</b> The index is a single SQLite file in your user profile. The models run locally and work offline once downloaded.",
       "<b>Queries are not logged.</b> The log records errors and model status, enough for a useful bug report. What you typed is not in it.",
       "<b>Secrets are not stored.</b> Clips marked confidential by your password manager are never saved. Passwords and keys you copy yourself show starred, and MCP clients only get the starred form. Exported settings leave out the GitHub token.",
       "<b>Signed and notarized.</b> macOS builds carry a Developer ID signature and Apple notarization. Updates are installed in place after their signature is verified.",
     ],
     zh: [
-      "<b>不做全盘扫描。</b>只读取你添加的文件夹，遵守 .gitignore，跳过隐藏文件，也不会顺着符号链接走出文件夹。",
+      "<b>不做全盘扫描。</b>只读取你添加的文件夹，遵守 .gitignore，跳过隐藏文件，也不会顺着符号链接走出文件夹。「添加常用位置」会列出东西通常存去的地方（下载、桌面、截图，Windows 上还有微信和 QQ 收到的文件），只加你勾选的。",
       "<b>数据不出本机。</b>索引就是用户目录下的一个 SQLite 文件。模型在本机运行，下载完成后离线可用。",
       "<b>搜索内容不入日志。</b>日志只记录错误和模型状态，提 bug 时够用；你输入过什么，日志里一个字也没有。",
       "<b>机密不留痕。</b>密码管理器标为机密的剪贴内容一律不存；自己复制的密码、密钥打上星号显示，交给 MCP 客户端的也是打码后的样子；导出设置时也不带 GitHub token。",
