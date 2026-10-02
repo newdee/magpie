@@ -1,3 +1,42 @@
+# 验收记录 2026-10-02（启动参数 + Wayland 下的唤出快捷键，#15）
+
+## 实现
+
+- `src-tauri/src/cli.rs`：`--toggle`、`--source <tab>`（local / stars / web / clips 及别名）、`--query <text>`，
+  `--x=y` 与 `--x y` 两种写法，不认识的参数忽略。第二次启动经单实例插件交给正在运行的 magpie；首次启动先存着，
+  页面加载后 `take_launch_request` 取走。日志只记参数名，不记查询内容。
+- `src-tauri/src/wayland_hotkey.rs`：Wayland 会话里按环境变量判断桌面（SWAYSOCK / HYPRLAND_INSTANCE_SIGNATURE /
+  NIRI_SOCKET / XDG_CURRENT_DESKTOP）。sway：`swaymsg` 加浮动和无边框规则（按 X11 class 与 app_id）、先解绑再
+  `bindsym --inhibited`；Hyprland：`hyprctl eval`（0.55+ 的 Lua API）不行再 `keyword`（`bindp`）；niri：设置页
+  给 config.kdl 片段；GNOME / KDE / 其他：给命令。换快捷键时解绑旧键、重新绑定。快捷键运行的命令是对单实例插件
+  已有的 D-Bus 服务发 `dbus-send … ExecuteCallback array:string:--toggle`，失败才 `exec magpie --toggle`。
+  程序路径需要引号时不自动绑定，改给手动命令。思路参考 kunkka19xx/look（GPLv3），未抄代码。
+- 设置页「唤出快捷键」下显示 Wayland 状态与可复制的命令；README 中英文、站点各加一节。
+
+## 开发中发现并修复（在真实 sway 1.7 上测出）
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 1 | `dbus-send … array:string:magpie,--toggle` 在 sway 里于逗号处被截断，绑定成只发 `magpie`（按键只会显示不会切换），`swaymsg` 返回失败 | 只发 `--toggle`；单实例回调仅当第一个参数不以 `--` 开头时才当作程序名跳过（`cli::after_program`）；测试断言 sway 命令里没有逗号或分号 |
+| 2 | `for_window … floating enable, border none` 的后半句被当成独立命令执行（"Only views can have borders"） | 拆成两条 `for_window` |
+| 3 | 实测脚本：等到第一条 `wayland hotkey` 日志就判断，「绑定成功」那行稍晚写入，误判失败 | 改为等「成功 / 失败」那行 |
+| 4 | 起初把「窗口浮动」当规则生效的证据；sway 会自动浮动尺寸固定的窗口 | 改查 `border: none`，只有我们的规则会设它 |
+
+另：WSL 的 `/tmp/.X11-unix` 无粘滞位，sway 起不了 XWayland；sway 以 root 拒绝启动。实测改用普通用户 tester、
+私有 D-Bus、`GDK_BACKEND=wayland`。按 X11 class 匹配的规则、Hyprland、niri 无法在本机实测。
+
+## 三轮
+
+- R1（机制在真实环境生效）：T45（e2e/t45-sway-hotkey.sh，WSL 22.04 + sway 1.7 headless）5/5：日志「Alt+Space
+  bound through Sway」；窗口 app_id `magpie`、浮动且 `border: none`；执行绑定的命令，D-Bus 2–4 ms，窗口 1→0→1，
+  日志恰 2 次 `--toggle`；magpie 未运行时同一命令把它启动并显示。T44（e2e/t44-cli.*，Windows 真机）4/4：
+  `--source clips --query hello`、`--toggle` 两次、未知标签不切、首次启动带 `--query`。
+- R2（回归）：cargo test 全过（magpie 44、core 203 + 2 忽略）；clippy Windows 0、WSL Linux 0、CI 753a5d5 Linux 与
+  macOS 绿；demo T37 62/62；真机 T38 59/59、T40 6/6、T42 新版 0 / 0、T43 6/6。
+- R3（一致性与可复现）：a1（100 命令定义 / 注册）、a3、文档对照 0 FAIL；README / 站点说法逐条对代码；T44 连跑两遍
+  逐行相同；T45 修复后连跑两遍均 4/4（加未运行项后 5/5）。
+
+---
 # 验收记录 2026-10-02（计算器把日期、电话号码当减法）
 
 ## 来源与修复
