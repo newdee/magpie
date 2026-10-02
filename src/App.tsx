@@ -285,6 +285,23 @@ interface FolderInfo {
   file_count: number;
 }
 
+/// What a launch asked for on the command line (src-tauri/src/cli.rs).
+interface LaunchRequest {
+  toggle: boolean;
+  source: string | null;
+  query: string | null;
+}
+
+/// The summon key on a Wayland desktop (src-tauri/src/wayland_hotkey.rs).
+interface WaylandHotkeyInfo {
+  desktop: "sway" | "hyprland" | "niri" | "gnome" | "kde" | "other";
+  hotkey: string;
+  registered: boolean;
+  command: string;
+  snippet: string | null;
+  error: string | null;
+}
+
 interface Status {
   repo_count: number;
   file_count: number;
@@ -334,6 +351,9 @@ interface Status {
   /// Windows: "round" when the system rounds the window (11), "square" when
   /// it cannot (10); absent elsewhere, where the CSS radius stands
   window_corners?: "round" | "square" | null;
+  /// Linux on Wayland: how the summon key is bound there (#15); absent
+  /// elsewhere, where the ordinary key grab works
+  wayland_hotkey?: WaylandHotkeyInfo | null;
   syncing: boolean;
   local_indexing: boolean;
   max_file_mb: number;
@@ -1518,6 +1538,21 @@ export default function App() {
   useEffect(() => {
     refreshStatus();
     refreshFolders();
+    // a tab or a query the launch that started magpie asked for
+    const applyLaunchRequest = (r: LaunchRequest | null) => {
+      if (!r || (r.source == null && r.query == null)) return;
+      setShowSettings(false);
+      setImageQuery(null);
+      if (r.source != null) {
+        const idx = sourcesRef.current.findIndex((s) => s.id === r.source);
+        if (idx >= 0) {
+          setSourceIdx(idx);
+          setSelected(0);
+        }
+      }
+      if (r.query != null) setQuery(r.query);
+    };
+    void invoke<LaunchRequest | null>("take_launch_request").then(applyLaunchRequest).catch(() => {});
     const subs = [
       listen<StarsProgress>("sync-progress", (e) => {
         setStarsProgress(e.payload);
@@ -1595,6 +1630,9 @@ export default function App() {
         setSourceIdx(0);
         setQuery(e.payload);
       }),
+      // `magpie --source clips --query …` from a second launch (a key bound
+      // in a window manager, a script): open on that tab with that query
+      listen<LaunchRequest>("open-request", (e) => applyLaunchRequest(e.payload)),
       // macOS would drop the copy chord for want of the Accessibility
       // permission: a hint row with a button to the settings page stays
       // until a selection search goes through or it is dismissed (#17)
@@ -3490,6 +3528,7 @@ export default function App() {
                         </button>
                       </div>
                     )}
+                    {status?.wayland_hotkey && <WaylandHotkey info={status.wayland_hotkey} />}
                   </div>
 
                   <div className="set-row stack">
@@ -5334,6 +5373,55 @@ export default function App() {
 /// Modifier-only presses are ignored; a bare Backspace/Delete/Escape clears.
 /// Shift-only or bare chords (Shift+A, Tab…) would hijack normal typing
 /// system-wide, so anything that is not an F-key needs Ctrl/Alt/Super.
+const DESKTOP_NAMES: Record<string, string> = {
+  sway: "sway",
+  hyprland: "Hyprland",
+  niri: "niri",
+  gnome: "GNOME",
+  kde: "KDE",
+  other: "",
+};
+
+/// The summon key on a Wayland desktop (#15): bound by magpie through the
+/// desktop's IPC, or the command (niri: the config lines) to bind by hand.
+function WaylandHotkey({ info }: { info: WaylandHotkeyInfo }) {
+  const [copied, setCopied] = useState(false);
+  const desktop = DESKTOP_NAMES[info.desktop] ?? "";
+  if (info.registered) {
+    return (
+      <p className="set-empty">
+        {tf("On Wayland, magpie bound {key} through {desktop}.", { key: info.hotkey, desktop })}
+      </p>
+    );
+  }
+  const text = info.snippet ?? info.command;
+  const lead = info.snippet
+    ? t("niri takes no bindings at run time. Add these lines to ~/.config/niri/config.kdl:")
+    : info.error
+      ? tf("Binding the key through {desktop} failed ({error}). Bind a key to this command by hand:", {
+          desktop,
+          error: info.error,
+        })
+      : t("On Wayland the desktop owns the keyboard: in its keyboard settings, add a custom shortcut that runs this command.");
+  return (
+    <div className="wayland-hotkey">
+      <span className="set-desc">{lead}</span>
+      <pre className="wayland-cmd">{text}</pre>
+      <button
+        className="ghost-btn"
+        onClick={() =>
+          void invoke("copy_clip", { text }).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+        }
+      >
+        {copied ? t("Copied") : t("Copy")}
+      </button>
+    </div>
+  );
+}
+
 function chordFromEvent(e: React.KeyboardEvent): {
   chord?: string;
   clear?: boolean;

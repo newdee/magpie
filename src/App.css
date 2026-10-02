@@ -1269,6 +1269,34 @@ input.query:active {
 .tip-bulb {
   margin-right: 4px;
 }
+/* the summon key on Wayland: what magpie bound, or what to bind by hand */
+.wayland-hotkey {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}
+.wayland-cmd {
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+  color: var(--text);
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.wayland-hotkey .ghost-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 /* the selection search lacks the Accessibility permission (macOS): stays
    until a search goes through or it is dismissed */
 .access-row {

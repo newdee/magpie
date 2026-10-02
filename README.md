@@ -417,6 +417,24 @@ macOS; on Windows and Linux it stays until dismissed by default, so files can
 be dragged in from other windows. Settings switch it either way. Tab order
 and the tab that opens on launch are both configurable.
 
+### From the command line, and on Wayland
+
+Launching `magpie` again talks to the copy that is already running:
+
+- `magpie --toggle` shows the palette, or hides it when it is showing
+- `magpie --source clips` opens on a tab: `local`, `stars`, `web` or `clips`
+- `magpie --query "invoice"` opens with that text in the box; it combines
+  with `--source`
+
+Any of these can sit behind a key in a window manager, or in a script.
+
+A Wayland desktop lets no app claim a key for itself, so there the summon key
+is the desktop's to bind. On sway and Hyprland magpie binds it at start
+through their IPC and floats its window; nothing is written to your config,
+and a new shortcut in Settings is bound the same way. On niri, GNOME, KDE and
+the rest, Settings → Summon shortcut shows the command to bind (on niri, the
+lines to add to `config.kdl`).
+
 ## Settings (tray icon → Settings…)
 
 GitHub token (with connection badge) · indexed folders (add / remove /

@@ -27,7 +27,9 @@ use magpie_core::search::{self, SearchResult, VectorStore};
 use magpie_core::siglip::Siglip;
 use magpie_core::sync;
 
+mod cli;
 pub mod mcp;
+mod wayland_hotkey;
 mod watch;
 
 struct AppState {
@@ -491,6 +493,8 @@ async fn get_status(state: State<'_, AppState>) -> Result<serde_json::Value, Str
             .unwrap_or(false),
         "term_notify": term_notify_on(&conn),
         "window_corners": WINDOW_CORNERS.get().copied(),
+        // Wayland: how the summon key is bound (None elsewhere)
+        "wayland_hotkey": wayland_hotkey::status(),
         // the tips on the empty box join in on the first day of a term
         "term_today": term_notify_on(&conn)
             .then(|| magpie_core::chinese_calendar::term_of_day(magpie_core::chinese_calendar::local_now().date()))
@@ -1150,8 +1154,17 @@ async fn set_hotkey(
         let _ = register_hotkeys(&app, &previous, selection.as_deref());
         return Err(format!("cannot register {hotkey:?}: {e}"));
     }
-    let conn = state.db.lock().await;
-    db::meta_set(&conn, "hotkey", &hotkey).map_err(err_str)?;
+    {
+        let conn = state.db.lock().await;
+        db::meta_set(&conn, "hotkey", &hotkey).map_err(err_str)?;
+    }
+    // on Wayland the desktop holds the key: rebind it there too, before
+    // returning, so Settings reads the new state
+    #[cfg(target_os = "linux")]
+    {
+        let key = hotkey.clone();
+        let _ = tokio::task::spawn_blocking(move || wayland_hotkey::apply(&key)).await;
+    }
     Ok(())
 }
 
@@ -5203,6 +5216,50 @@ fn show_window(app: &AppHandle) {
     }
 }
 
+/// A command-line request from a launch, for the log: which flags, never the
+/// query text.
+fn describe_request(req: &cli::Request) -> String {
+    if req.is_empty() {
+        return "no arguments".into();
+    }
+    let mut parts = Vec::new();
+    if req.toggle {
+        parts.push("--toggle".to_string());
+    }
+    if let Some(s) = &req.source {
+        parts.push(format!("--source {s}"));
+    }
+    if req.query.is_some() {
+        parts.push("--query".into());
+    }
+    parts.join(" ")
+}
+
+/// The request magpie was started with, kept until the page has loaded and
+/// asks for it (an event sent during setup would reach no one).
+static FIRST_LAUNCH: StdMutex<Option<cli::Request>> = StdMutex::new(None);
+
+/// Act on a launch's arguments in the running copy: `--toggle` alone hides
+/// a showing palette; a tab or a query shows it and the page applies them;
+/// a plain launch shows it, as it always did.
+fn handle_request(app: &AppHandle, req: cli::Request) {
+    if req.toggle && !req.opens_something() {
+        toggle_window(app);
+        return;
+    }
+    if req.opens_something() {
+        let _ = app.emit("open-request", &req);
+    }
+    show_window(app);
+}
+
+/// The page, once loaded, collects the request of the launch that started
+/// magpie (see [`FIRST_LAUNCH`]).
+#[tauri::command]
+fn take_launch_request() -> Option<cli::Request> {
+    FIRST_LAUNCH.lock().ok()?.take()
+}
+
 pub fn run() {
     // The AppImage keeps running on X11 (XWayland under Wayland), as it did
     // when the bundler forced it; tauri-cli 2.12 stopped forcing it while
@@ -5220,9 +5277,10 @@ pub fn run() {
         // opens the database or claims a tray icon. magpie lives in the tray
         // and answers to a hotkey, so clicking the icon again means "show me
         // the palette", never "start another copy".
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            log::info!("second launch requested; summoning the running instance");
-            show_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let req = cli::parse(cli::after_program(argv));
+            log::info!("second launch requested ({}); summoning the running instance", describe_request(&req));
+            handle_request(app, req);
         }))
         // logging first, so every later plugin/setup line can log. Info level,
         // one rotated file in the OS log dir — enough forensics for bug
@@ -5436,6 +5494,26 @@ pub fn run() {
                     let _ = register_hotkeys(app.handle(), &hotkey, None);
                 }
             }
+            // on a Wayland desktop the key is the desktop's to bind (#15):
+            // through its own IPC where it has one; it runs tools, so not
+            // on this thread
+            #[cfg(target_os = "linux")]
+            {
+                let key = hotkey.clone();
+                std::thread::spawn(move || wayland_hotkey::apply(&key));
+            }
+            // started with arguments: show the palette; the page collects a
+            // tab or a query once it has loaded (take_launch_request)
+            let first = cli::parse(std::env::args().skip(1));
+            if !first.is_empty() {
+                log::info!("started with {}", describe_request(&first));
+                if first.opens_something() {
+                    if let Ok(mut slot) = FIRST_LAUNCH.lock() {
+                        *slot = Some(first);
+                    }
+                }
+                show_window(app.handle());
+            }
 
             spawn_model_init(app.handle().clone());
             // a fresh install: open on the welcome screen, which asks about
@@ -5573,6 +5651,7 @@ pub fn run() {
             copy_file_clip,
             open_log_dir,
             open_accessibility_settings,
+            take_launch_request,
             open_file,
             restart_for_update,
             resize_palette,

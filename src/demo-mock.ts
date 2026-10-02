@@ -92,9 +92,32 @@ const status = {
   term_today: new URLSearchParams(location.search).has("termday")
     ? { term: "寒露", line: "秋阴不散霜飞晚，留得枯荷听雨声。", source: "唐·李商隐《宿骆氏亭寄怀崔雍崔衮》" }
     : null,
+  // ?wayland=sway|hyprland|niri|gnome|kde, plus ,bound or ,failed: the
+  // Settings note about the summon key on a Wayland desktop (#15)
+  wayland_hotkey: demoWayland(new URLSearchParams(location.search).get("wayland")),
   syncing: false,
   local_indexing: false,
 };
+
+function demoWayland(param: string | null) {
+  if (!param) return null;
+  const [desktop, state] = param.split(",");
+  const exe = "/home/you/Applications/magpie_0.5.5_amd64.AppImage";
+  const sh =
+    "dbus-send --session --print-reply --dest=com.dfine.magpie.SingleInstance /com/dfine/magpie/SingleInstance " +
+    `org.SingleInstance.DBus.ExecuteCallback array:string:--toggle string: >/dev/null 2>&1 || exec ${exe} --toggle`;
+  return {
+    desktop,
+    hotkey: "Alt+Space",
+    registered: state === "bound",
+    command: `sh -c "${sh}"`,
+    snippet:
+      desktop === "niri"
+        ? `binds {\n    Alt+space allow-inhibiting=false { spawn "sh" "-c" "${sh}"; }\n}\n\nwindow-rule {\n    match app-id="^(magpie|com\\\\.dfine\\\\.magpie)$"\n    open-floating true\n}\n`
+        : null,
+    error: state === "failed" ? "swaymsg: Error: Unknown/invalid command" : null,
+  };
+}
 
 const now = Math.floor(Date.now() / 1000);
 const day = 86_400;
@@ -529,6 +552,8 @@ mockIPC((cmd, args) => {
       if (!status.term_notify) status.term_today = null;
       return null;
     }
+    case "take_launch_request":
+      return null;
     case "get_autostart":
       return autostart;
     case "set_autostart": {

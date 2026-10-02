@@ -321,6 +321,21 @@ macOS 上表里写 `Ctrl` 的地方用 `Cmd` 同样有效。
 其他窗口拖文件进来。设置里两边都能切换。tab 顺序和启动时打开哪个 tab 都可
 自定义。
 
+### 命令行，以及 Wayland 下的快捷键
+
+再运行一次 `magpie`，参数会交给已经在运行的那个：
+
+- `magpie --toggle`：显示浮窗，已经显示时则收起
+- `magpie --source clips`：打开到指定 tab，可选 `local`、`stars`、`web`、`clips`
+- `magpie --query "发票"`：打开时搜索框里填好这段文字，可以和 `--source` 一起用
+
+这些命令都可以绑到窗口管理器的快捷键上，或者写进脚本。
+
+Wayland 桌面不允许应用自己抢占按键，唤出快捷键得由桌面来绑定。在 sway 和
+Hyprland 上，magpie 启动时通过它们的 IPC 绑定快捷键，并让浮窗浮动显示，不会改动
+你的配置文件；在设置里换了快捷键，也会照样重新绑定。niri、GNOME、KDE 等桌面上，
+设置 → 唤出快捷键 下面会给出要绑定的命令（niri 给的是要加进 `config.kdl` 的几行）。
+
 ## 设置（托盘图标 → Settings…）
 
 GitHub token（带连接徽章）· 索引文件夹（添加/移除/重建）· 主题（跟随系统/

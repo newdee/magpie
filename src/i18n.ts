@@ -267,6 +267,14 @@ const ZH: Record<string, string> = {
   "Selection search needs Accessibility: allow magpie in System Settings → Privacy & Security → Accessibility":
     "划词搜索需要辅助功能权限：在 系统设置 → 隐私与安全性 → 辅助功能 里允许 magpie",
   "Open System Settings": "打开系统设置",
+  "On Wayland, magpie bound {key} through {desktop}.": "Wayland 下，magpie 已通过 {desktop} 绑定了 {key}。",
+  "niri takes no bindings at run time. Add these lines to ~/.config/niri/config.kdl:":
+    "niri 不支持在运行时添加快捷键。把下面几行加到 ~/.config/niri/config.kdl：",
+  "Binding the key through {desktop} failed ({error}). Bind a key to this command by hand:":
+    "通过 {desktop} 绑定快捷键失败（{error}）。请手动把一个快捷键绑定到这条命令：",
+  "On Wayland the desktop owns the keyboard: in its keyboard settings, add a custom shortcut that runs this command.":
+    "Wayland 下快捷键由桌面管理：在系统的键盘设置里添加一个自定义快捷键，让它运行这条命令。",
+  Copied: "已复制",
   Dismiss: "关闭",
   "kill chrome lists running Chrome processes; Enter twice ends one":
     "输入 kill chrome 列出运行中的 Chrome 进程；按两次 Enter 结束",
