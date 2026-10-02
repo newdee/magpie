@@ -1572,6 +1572,13 @@ kbd.keys {
   max-width: 100%;
   border-radius: 8px;
 }
+/* the 96 px index thumbnail, stretched while the full image loads: blurred
+   so it reads as "loading", not as a bad picture */
+.pv-placeholder {
+  width: 100%;
+  filter: blur(6px);
+  clip-path: inset(0 round 8px);
+}
 .pv-chips {
   display: flex;
   flex-wrap: wrap;

@@ -1482,9 +1482,7 @@ fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
         return Err("this app has moved or been removed; the app list is refreshed now".into());
     }
     magpie_core::apps::launch_app(&target).map_err(err_str)?;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
+    hide_palette(&app);
     Ok(())
 }
 
@@ -1506,9 +1504,7 @@ fn run_system_command(app: AppHandle, id: String, confirmed: bool) -> Result<Str
         return Err("confirm first".into());
     }
     // out of the way before the screen locks or the machine sleeps
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
+    hide_palette(&app);
     log::info!("system command: {id}");
     magpie_core::syscmd::run(&id).map_err(err_str)
 }
@@ -1634,9 +1630,7 @@ fn run_app_as_admin(app: AppHandle, state: State<'_, AppState>, target: String) 
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(err_str)?;
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.hide();
-        }
+        hide_palette(&app);
         Ok(())
     }
     #[cfg(not(windows))]
@@ -4241,9 +4235,7 @@ fn run_action(app: AppHandle, action: String) -> Result<String, String> {
         } else {
             tauri_plugin_opener::reveal_item_in_dir(path).map_err(err_str)?;
         }
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.hide();
-        }
+        hide_palette(&app);
         return Ok(format!("opened {p}"));
     }
     if let Some(n) = action.strip_prefix("volume:") {
@@ -4295,9 +4287,7 @@ fn run_launch(app: &AppHandle, l: magpie_core::launch::Launch) -> Result<String,
         return Ok(format!("dry run: {l}"));
     }
     magpie_core::launch::run(&l).map_err(err_str)?;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
+    hide_palette(app);
     Ok(String::new())
 }
 
@@ -5138,15 +5128,23 @@ fn restart_for_update(app: AppHandle) {
     app.restart();
 }
 
+/// Hide the palette window. Every hide goes through here so the page hears
+/// of it ("palette-hidden") and can drop what should not outlive a summon,
+/// such as the preview pane (#13), while the window is out of sight.
+fn hide_palette(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    let _ = app.emit("palette-hidden", ());
+}
+
 /// Put the palette away and give the focus back (#9). On macOS hiding only
 /// the window left magpie the active app, so the window underneath showed as
 /// inactive until clicked; hiding the app hands activation back to the app
 /// that had it. For dismissals only: after launching or revealing something,
 /// that app takes the focus itself and the window alone is hidden.
 fn dismiss_palette(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
+    hide_palette(app);
     #[cfg(target_os = "macos")]
     let _ = app.hide();
 }

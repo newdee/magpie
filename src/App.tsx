@@ -909,6 +909,14 @@ export default function App() {
   // hit's content renders beside the list. Backend data only for kinds whose
   // content is not already in the hit (file text/image, video shots, repo).
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Every hide the page does itself; the backend's go through hide_palette,
+  // which says "palette-hidden". The preview is for checking a find, not a
+  // mode (#13): it closes once the window is out of sight, so the next
+  // summon starts without it and the narrowing is never seen.
+  const hidePalette = useCallback(async () => {
+    await getCurrentWindow().hide();
+    setPreviewOpen(false);
+  }, []);
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
 
   // sync the tray language once at startup ("auto" resolves per OS locale)
@@ -1523,7 +1531,7 @@ export default function App() {
       if (!focused) setRevealed((s) => (s.size ? new Set() : s));
       if (focused || !hideOnBlurRef.current || holdOpenCount > 0) return;
       timer = setTimeout(() => {
-        if (hideOnBlurRef.current && holdOpenCount === 0) void getCurrentWindow().hide();
+        if (hideOnBlurRef.current && holdOpenCount === 0) hidePalette();
       }, 120);
     });
     return () => {
@@ -1591,7 +1599,11 @@ export default function App() {
         refreshStatus();
         runSearch(queryRef.current, sourceRef.current);
       }),
+      listen("palette-hidden", () => setPreviewOpen(false)),
       listen("palette-shown", () => {
+        // hidden by something outside magpie (the OS, another tool): the
+        // pane goes now, at the cost of a frame or two of it on screen
+        setPreviewOpen(false);
         inputRef.current?.focus();
         inputRef.current?.select();
         // on the first day of a solar term the palette opens on its couplet
@@ -1831,7 +1843,7 @@ export default function App() {
   // so the empty state never flashes on screen. Escape deliberately keeps
   // the query: dismissing is not finishing.
   const finishAction = useCallback(async () => {
-    await getCurrentWindow().hide();
+    await hidePalette();
     setQuery("");
     setImageQuery(null);
   }, []);
@@ -5880,7 +5892,13 @@ function PreviewPane({
             )}
           </div>
         </>
-      ) : data == null ? null /* still loading */ : hit.kind === "file" || hit.kind === "video" ? (
+      ) : data == null ? (
+        // still loading (a local file waits for the selection to rest): the
+        // index's thumbnail stands in, so the pane is not blank meanwhile
+        (hit.kind === "file" || hit.kind === "video") && hit.thumb ? (
+          <img className="pv-image pv-placeholder" src={`data:image/jpeg;base64,${hit.thumb}`} alt="" />
+        ) : null
+      ) : hit.kind === "file" || hit.kind === "video" ? (
         // nothing to render inline (a binary, an empty file, a video with
         // no ffmpeg at hand): the facts about the file instead of a blank
         <>
