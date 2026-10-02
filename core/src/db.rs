@@ -134,7 +134,8 @@ fn migrate(conn: &Connection) -> Result<()> {
             mtime     INTEGER NOT NULL,
             content   TEXT,
             thumb     BLOB,
-            ocr_mtime INTEGER
+            ocr_mtime INTEGER,
+            changed   INTEGER
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
@@ -339,6 +340,18 @@ fn migrate(conn: &Connection) -> Result<()> {
     ensure_column(conn, "clips", "thumb", "TEXT")?;
     ensure_column(conn, "clips", "width", "INTEGER")?;
     ensure_column(conn, "clips", "height", "INTEGER")?;
+    // when a file last arrived or changed: the later of its mtime and its
+    // creation time, since a copied or unzipped file keeps an old mtime.
+    // Rows indexed before it existed get their mtime, once, and only those
+    // from the last week: older ones can never reach the list, and every
+    // row updated here also rewrites its full-text entry (files_au).
+    if ensure_column(conn, "files", "changed", "INTEGER")? {
+        conn.execute(
+            "UPDATE files SET changed = mtime WHERE mtime >= CAST(strftime('%s', 'now') AS INTEGER) - 8 * 86400",
+            [],
+        )?;
+    }
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_changed ON files(changed)", [])?;
     conn.execute_batch(
         r#"
         -- SigLIP vectors for image clips (text clips stay in clip_vecs/e5)
@@ -362,16 +375,18 @@ fn migrate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// ALTER TABLE … ADD COLUMN, only when the column is missing.
-fn ensure_column(conn: &Connection, table: &str, col: &str, ddl: &str) -> Result<()> {
+/// ALTER TABLE … ADD COLUMN, only when the column is missing. True when it
+/// was added just now.
+fn ensure_column(conn: &Connection, table: &str, col: &str, ddl: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let existing: Vec<String> = stmt
         .query_map([], |r| r.get::<_, String>(1))?
         .collect::<rusqlite::Result<_>>()?;
-    if !existing.iter().any(|c| c == col) {
-        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {ddl}"), [])?;
+    if existing.iter().any(|c| c == col) {
+        return Ok(false);
     }
-    Ok(())
+    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {ddl}"), [])?;
+    Ok(true)
 }
 
 // ---------- meta ----------
@@ -681,6 +696,39 @@ pub fn build_fts_query(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_indexed_before_the_changed_column_get_it_from_a_recent_mtime() {
+        // a database from before the column: build today's, then take it out
+        let conn = open_in_memory().unwrap();
+        let now: i64 = conn.query_row("SELECT CAST(strftime('%s', 'now') AS INTEGER)", [], |r| r.get(0)).unwrap();
+        conn.execute("INSERT INTO folders(id, path) VALUES (1, '/w')", []).unwrap();
+        for (p, m) in [("/w/recent", now - 3600), ("/w/old", now - 30 * 86400)] {
+            conn.execute(
+                "INSERT INTO files(folder_id, path, name, size, mtime, content) VALUES (1, ?1, 'n', 1, ?2, 'searchable words')",
+                rusqlite::params![p, m],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("DROP INDEX idx_files_changed; ALTER TABLE files DROP COLUMN changed;").unwrap();
+        migrate(&conn).unwrap();
+        let got: Vec<(String, Option<i64>)> = conn
+            .prepare("SELECT path, changed FROM files ORDER BY path")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(got, vec![("/w/old".into(), None), ("/w/recent".into(), Some(now - 3600))]);
+        // the full-text index survived the rewrite of the recent row
+        let hits: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files_fts WHERE files_fts MATCH 'searchable'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hits, 2);
+        // a second open adds nothing and touches nothing
+        assert!(!ensure_column(&conn, "files", "changed", "INTEGER").unwrap());
+        migrate(&conn).unwrap();
+    }
 
     fn sample(id: i64, name: &str, desc: &str) -> Repo {
         Repo {

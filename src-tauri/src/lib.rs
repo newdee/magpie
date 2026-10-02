@@ -1252,10 +1252,16 @@ async fn open_note_file(app: AppHandle, state: State<'_, AppState>) -> Result<()
         .map_err(err_str)
 }
 
+/// How far back a file's last change still counts as recent for the empty
+/// box: a week covers "the thing I saved on Monday".
+const CHANGED_WITHIN_SECS: i64 = 7 * 86_400;
+
 /// What the user opened most recently from one source tab, newest first.
 /// Backs the empty-query list when that setting is on. Identities come from
 /// hit_stats and are resolved back into full rows; anything since deleted or
-/// uninstalled simply drops out.
+/// uninstalled simply drops out. The local tab also lists files in the
+/// indexed folders that changed lately (saved, downloaded, screenshotted),
+/// whether or not they were ever opened through magpie.
 #[tauri::command]
 async fn recent_hits(
     state: State<'_, AppState>,
@@ -1273,7 +1279,22 @@ async fn recent_hits(
         return Ok(Vec::new());
     };
     let apps = state.apps.lock().unwrap();
-    recent_rows(&conn, &apps, kinds, limit).map_err(err_str)
+    let opened = recent_rows_timed(&conn, &apps, kinds, limit).map_err(err_str)?;
+    if source != "local" {
+        return Ok(opened.into_iter().map(|(_, _, v)| v).collect());
+    }
+    let now = unix_now();
+    let changed = files::changed_between(&conn, now - CHANGED_WITHIN_SECS, now + 300, limit)
+        .map_err(err_str)?
+        .into_iter()
+        .filter_map(|(t, f)| {
+            let path = f.path.clone();
+            let mut v = serde_json::to_value(&f).ok()?;
+            v["kind"] = serde_json::Value::from("file");
+            Some((t, path, v))
+        })
+        .collect();
+    Ok(magpie_core::frecency::blend(opened, changed, limit))
 }
 
 /// The rows behind the most recently opened hits of the given kinds, newest
@@ -1284,6 +1305,16 @@ fn recent_rows(
     kinds: &[&str],
     limit: usize,
 ) -> Result<Vec<serde_json::Value>> {
+    Ok(recent_rows_timed(conn, apps, kinds, limit)?.into_iter().map(|(_, _, v)| v).collect())
+}
+
+/// `recent_rows` with each row's last_used time and identity, for blending.
+fn recent_rows_timed(
+    conn: &magpie_core::rusqlite::Connection,
+    apps: &[magpie_core::apps::AppEntry],
+    kinds: &[&str],
+    limit: usize,
+) -> Result<Vec<(i64, String, serde_json::Value)>> {
     let keys = magpie_core::frecency::recent(conn, kinds, limit * 2)?;
     let tag = |mut v: serde_json::Value, kind: &str| {
         v["kind"] = serde_json::Value::from(kind);
@@ -1293,7 +1324,7 @@ fn recent_rows(
         v
     };
     let mut out = Vec::with_capacity(limit);
-    for (kind, key) in keys {
+    for (kind, key, last_used) in keys {
         let row = match kind.as_str() {
             // a video opened from a shot comes back as its file row: the shot
             // itself is not a stable identity, the path is
@@ -1321,7 +1352,7 @@ fn recent_rows(
             _ => None,
         };
         if let Some(v) = row {
-            out.push(v);
+            out.push((last_used, key, v));
             if out.len() >= limit {
                 break;
             }

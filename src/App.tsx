@@ -3437,7 +3437,9 @@ export default function App() {
                     <div className="set-label">
                       <span className="set-name">{t("Recent opens on the empty box")}</span>
                       <span className="set-desc">
-                        {t("With nothing typed, each tab lists what you opened from it most recently.")}
+                        {t(
+                          "With nothing typed, each tab lists what you opened from it most recently. Local also lists files in your folders that are new or changed this week.",
+                        )}
                       </span>
                     </div>
                     <div className="pill-row">

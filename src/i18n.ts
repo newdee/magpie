@@ -11,8 +11,8 @@ const ZH: Record<string, string> = {
   "Enter appends this line to your notes file": "Enter 把这一行追加到你的笔记文件",
   note: "笔记",
   "Recent opens on the empty box": "空搜索框显示最近打开",
-  "With nothing typed, each tab lists what you opened from it most recently.":
-    "什么都没输入时，每个 tab 列出你最近从它打开过的条目。",
+  "With nothing typed, each tab lists what you opened from it most recently. Local also lists files in your folders that are new or changed this week.":
+    "什么都没输入时，每个 tab 列出你最近从它打开过的条目。本地文件还会列出文件夹里这一周新增或改过的文件。",
   "Search selection shortcut": "划词搜索快捷键",
   "Removed.": "已移除。",
   "Skip git worktrees": "跳过 git worktree",

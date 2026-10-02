@@ -314,12 +314,14 @@ impl<'a> Scan<'a> {
 
     fn upsert(&mut self, folder_id: i64, path: &Path, meta: &std::fs::Metadata) -> Result<()> {
         let path_str = path.to_string_lossy().to_string();
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let secs = |t: std::io::Result<std::time::SystemTime>| {
+            t.ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+        };
+        let mtime = secs(meta.modified()).unwrap_or(0);
+        // creation time is missing on some Linux filesystems: mtime alone then
+        let changed = secs(meta.created()).map_or(mtime, |c| c.max(mtime));
         let size = meta.len() as i64;
         self.seen.insert(path_str.clone());
         if let Some((_, m, s)) = self.known.get(&path_str) {
@@ -356,14 +358,14 @@ impl<'a> Scan<'a> {
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase());
         self.conn.execute(
-            "INSERT INTO files(folder_id, path, name, ext, size, mtime, content)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO files(folder_id, path, name, ext, size, mtime, content, changed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(path) DO UPDATE SET
                 folder_id = excluded.folder_id,
                 name = excluded.name, ext = excluded.ext,
                 size = excluded.size, mtime = excluded.mtime,
-                content = excluded.content",
-            params![folder_id, path_str, name, ext, size, mtime, content],
+                content = excluded.content, changed = excluded.changed",
+            params![folder_id, path_str, name, ext, size, mtime, content, changed],
         )?;
         self.report.indexed += 1;
         Ok(())
@@ -1329,6 +1331,20 @@ pub fn recent_files(conn: &Connection, limit: usize) -> Result<Vec<FileHit>> {
     Ok(rows)
 }
 
+/// Files that arrived or changed within `[since, until]` (the `changed`
+/// column), newest first, each with that time. `until` keeps a file stamped
+/// in the future (bad clock, odd archive) from sitting on top.
+pub fn changed_between(conn: &Connection, since: i64, until: i64, limit: usize) -> Result<Vec<(i64, FileHit)>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {HIT_COLS}, changed FROM files WHERE changed >= ?1 AND changed <= ?2
+         ORDER BY changed DESC, id DESC LIMIT ?3"
+    ))?;
+    let rows = stmt
+        .query_map(params![since, until, limit as i64], |r| Ok((r.get(7)?, row_to_hit(r)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// Is `path` inside one of the registered folders, or the Downloads folder
 /// (`dl` lists it)? Guard for every command that opens, copies or moves a
 /// file the palette names. A `..` anywhere is refused: `C:\indexed\..\x`
@@ -1455,7 +1471,59 @@ mod tests {
         assert_eq!(forget_path(&conn, "/w/a.txt").unwrap(), 0);
         let left: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 1);
-    }    use crate::db::open_in_memory;
+    }
+
+    #[test]
+    fn changed_between_lists_the_window_newest_first() {
+        let conn = crate::db::open_in_memory().unwrap();
+        conn.execute("INSERT INTO folders(id, path) VALUES (1, '/w')", []).unwrap();
+        // (path, mtime, changed): "copied" kept an old mtime but arrived lately
+        for (p, m, c) in [("/w/old", 10, 10), ("/w/a", 100, 100), ("/w/copied", 5, 150), ("/w/b", 200, 200), ("/w/future", 9_999, 9_999)] {
+            conn.execute(
+                "INSERT INTO files(folder_id, path, name, ext, size, mtime, changed) VALUES (1, ?1, 'x', 'txt', 1, ?2, ?3)",
+                params![p, m, c],
+            )
+            .unwrap();
+        }
+        let paths = |v: Vec<(i64, FileHit)>| v.into_iter().map(|(t, h)| format!("{}@{t}", h.path)).collect::<Vec<_>>();
+        assert_eq!(paths(changed_between(&conn, 50, 500, 10).unwrap()), vec!["/w/b@200", "/w/copied@150", "/w/a@100"]);
+        assert_eq!(paths(changed_between(&conn, 50, 500, 1).unwrap()), vec!["/w/b@200"], "limit applies");
+        assert!(changed_between(&conn, 300, 500, 10).unwrap().is_empty());
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT id FROM files WHERE changed >= 1 AND changed <= 2 ORDER BY changed DESC",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("idx_files_changed"), "uses the index: {plan}");
+    }
+
+    #[test]
+    fn indexing_records_when_a_file_arrived() {
+        let tmp = std::env::temp_dir().join(format!("magpie-changed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // an unzipped or copied file: mtime from long ago, created just now
+        let f = tmp.join("copied.txt");
+        std::fs::write(&f, "hello").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options().write(true).open(&f).unwrap().set_modified(old).unwrap();
+        let conn = crate::db::open_in_memory().unwrap();
+        add_folder(&conn, tmp.to_str().unwrap()).unwrap();
+        index_folders(&conn, |_| {}).unwrap();
+        let (mtime, changed): (i64, i64) =
+            conn.query_row("SELECT mtime, changed FROM files", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(mtime, 1_000_000_000);
+        let created = std::fs::metadata(&f).unwrap().created().ok();
+        match created {
+            Some(_) => assert!(changed > mtime + 86_400, "creation time wins: {changed}"),
+            None => assert_eq!(changed, mtime, "no creation time: mtime alone"),
+        }
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    use crate::db::open_in_memory;
 
     #[test]
     fn substring_snippet_is_char_boundary_safe_and_marked() {

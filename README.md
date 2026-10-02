@@ -218,7 +218,9 @@ vaguely remember (or drop in an image), hit Enter.
   opens that page.
 - **Recent opens on the empty box**: switch it on and each tab lists what you
   last opened from it, so getting back to a file from a minute ago is two
-  keystrokes.
+  keystrokes. The Local tab also lists files in your folders that are new or
+  changed this week, so a screenshot or download you just saved is there
+  even if you never opened it through magpie.
 - **Bang-style web shortcuts**: `gh magpie` searches GitHub, `g …` Google,
   `bd …` Baidu. Prefixes are editable rules in settings (`prefix = URL
   with {q}`).
