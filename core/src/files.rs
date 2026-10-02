@@ -1521,11 +1521,19 @@ mod tests {
         let (mtime, changed): (i64, i64) =
             conn.query_row("SELECT mtime, changed FROM files", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!(mtime, 1_000_000_000);
-        let created = std::fs::metadata(&f).unwrap().created().ok();
-        match created {
-            Some(_) => assert!(changed > mtime + 86_400, "creation time wins: {changed}"),
-            None => assert_eq!(changed, mtime, "no creation time: mtime alone"),
-        }
+        // what the filesystem reports decides: the later of the two
+        let created = std::fs::metadata(&f)
+            .unwrap()
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        assert_eq!(changed, created.map_or(mtime, |c| c.max(mtime)), "created {created:?}");
+        // NTFS keeps the creation time of now, so the file reads as arrived
+        // lately. APFS moves the birth time back with an earlier mtime, so on
+        // macOS a copied or unzipped file keeps its old date.
+        #[cfg(windows)]
+        assert!(changed > mtime + 86_400, "creation time wins: {changed}");
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 

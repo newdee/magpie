@@ -341,7 +341,8 @@ fn migrate(conn: &Connection) -> Result<()> {
     ensure_column(conn, "clips", "width", "INTEGER")?;
     ensure_column(conn, "clips", "height", "INTEGER")?;
     // when a file last arrived or changed: the later of its mtime and its
-    // creation time, since a copied or unzipped file keeps an old mtime.
+    // creation time, since a copied or unzipped file keeps an old mtime (on
+    // Windows; APFS moves the birth time back with it, so macOS cannot tell).
     // Rows indexed before it existed get their mtime, once, and only those
     // from the last week: older ones can never reach the list, and every
     // row updated here also rewrites its full-text entry (files_au).
