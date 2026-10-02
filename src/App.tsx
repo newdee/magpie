@@ -388,6 +388,8 @@ const WINDOW_WIDTH = 720;
 // the tab strip and the query row never reflow when the pane opens
 const PREVIEW_PANE_WIDTH = 372;
 const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
+// how long the selection must rest on a local file before its preview loads
+const LOCAL_PREVIEW_DELAY_MS = 800;
 
 /// localStorage keys included in a settings export/import.
 const LOCAL_KEYS = [
@@ -1762,9 +1764,15 @@ export default function App() {
   });
   useEffect(() => () => panelObserver.current?.ro.disconnect(), []);
 
-  // fetch preview content for the selected hit (index-local, so cheap); the
-  // hit itself already carries everything for clips/web/apps
+  // fetch preview content for the selected hit; the hit itself already
+  // carries everything for clips/web/apps. A local file waits until the
+  // selection rests (#13): arrowing down a list should not decode every
+  // image and PDF on the way. Stars come from the index and show at once,
+  // and so does whatever is selected when the pane is opened.
+  const previewWasOpen = useRef(false);
   useEffect(() => {
+    const justOpened = previewOpen && !previewWasOpen.current;
+    previewWasOpen.current = previewOpen;
     if (!previewOpen) return;
     const hit = results[selected];
     if (!hit) {
@@ -1783,6 +1791,12 @@ export default function App() {
       return;
     }
     let stale = false;
+    const delay =
+      justOpened || hit.kind === "repo"
+        ? 0
+        : hit.kind === "file" || hit.kind === "video"
+          ? LOCAL_PREVIEW_DELAY_MS
+          : 100;
     const t = setTimeout(() => {
       invoke<Record<string, unknown>>("get_preview", {
         kind: hit.kind,
@@ -1797,7 +1811,7 @@ export default function App() {
           // fetch should fall back to the file details, not spin forever
           if (!stale) setPreview({ kind: "none" });
         });
-    }, 100);
+    }, delay);
     return () => {
       stale = true;
       clearTimeout(t);
