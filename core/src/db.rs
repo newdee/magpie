@@ -353,6 +353,13 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
     conn.execute("CREATE INDEX IF NOT EXISTS idx_files_changed ON files(changed)", [])?;
+    // zips indexed before their entry lists were: once, mark them changed so
+    // the next walk reads them again (the walk re-reads a file whose mtime
+    // differs from the index's)
+    if meta_get(conn, "zip_listing")?.as_deref() != Some("1") {
+        conn.execute("UPDATE files SET mtime = -1 WHERE lower(ext) = 'zip' AND content IS NULL", [])?;
+        meta_set(conn, "zip_listing", "1")?;
+    }
     conn.execute_batch(
         r#"
         -- SigLIP vectors for image clips (text clips stay in clip_vecs/e5)
@@ -697,6 +704,38 @@ pub fn build_fts_query(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zips_indexed_without_their_list_are_walked_again_once() {
+        let conn = open_in_memory().unwrap();
+        conn.execute("INSERT INTO folders(id, path) VALUES (1, '/w')", []).unwrap();
+        for (p, ext, content) in [("/w/a.zip", "zip", None), ("/w/b.ZIP", "ZIP", None), ("/w/c.zip", "zip", Some("x.txt")), ("/w/d.txt", "txt", None)] {
+            conn.execute(
+                "INSERT INTO files(folder_id, path, name, ext, size, mtime, content) VALUES (1, ?1, 'n', ?2, 1, 100, ?3)",
+                rusqlite::params![p, ext, content],
+            )
+            .unwrap();
+        }
+        // a database from before: the flag not set yet
+        conn.execute("DELETE FROM meta WHERE key = 'zip_listing'", []).unwrap();
+        migrate(&conn).unwrap();
+        let mtimes: Vec<(String, i64)> = conn
+            .prepare("SELECT path, mtime FROM files ORDER BY path")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            mtimes,
+            vec![("/w/a.zip".into(), -1), ("/w/b.ZIP".into(), -1), ("/w/c.zip".into(), 100), ("/w/d.txt".into(), 100)]
+        );
+        // once: a zip added later with no list (an unreadable one) stays put
+        conn.execute("UPDATE files SET mtime = 200 WHERE path = '/w/a.zip'", []).unwrap();
+        migrate(&conn).unwrap();
+        let a: i64 = conn.query_row("SELECT mtime FROM files WHERE path = '/w/a.zip'", [], |r| r.get(0)).unwrap();
+        assert_eq!(a, 200);
+    }
 
     #[test]
     fn files_indexed_before_the_changed_column_get_it_from_a_recent_mtime() {

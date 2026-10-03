@@ -3723,6 +3723,7 @@ dependencies = [
  "chrono-tz",
  "clipboard-win",
  "dirs 7.0.0",
+ "encoding_rs",
  "fastembed",
  "ffmpeg-sidecar",
  "futures",

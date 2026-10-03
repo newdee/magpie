@@ -795,6 +795,12 @@ async fn get_preview(
                 .map_err(err_str)?;
                 return Ok(json!({ "kind": "image", "image": b64 }));
             }
+            // a zip's indexed text is its entry list, kept for search; the
+            // pane shows the file's details instead (a listing in the
+            // preview is not decided yet)
+            if ext.as_deref().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
+                return Ok(json!({ "kind": "none" }));
+            }
             let text = content.unwrap_or_default();
             if text.is_empty() {
                 return Ok(json!({ "kind": "none" }));

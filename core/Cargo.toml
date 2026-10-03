@@ -61,6 +61,8 @@ regex = "1"
 tyme4rs = "1.5"
 # where a download came from (origin.rs); already in the tree via reqwest
 url = "2.5"
+# GBK entry names in zips (files.rs); already in the tree via reqwest and lopdf
+encoding_rs = "0.8"
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]

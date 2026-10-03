@@ -78,11 +78,11 @@ window.FEATURES = {
       tag: "Local files",
       en: {
         t: "Files, contents too",
-        d: "Add the folders you work in. Any file can be found by name, and about 80 text formats plus PDF and Office documents can be searched by their contents. The matching line is highlighted.",
+        d: "Add the folders you work in. Any file can be found by name, and about 80 text formats plus PDF and Office documents can be searched by their contents. The matching line is highlighted. A file packed in a ZIP finds the ZIP.",
       },
       zh: {
         t: "本地文件，连正文也搜",
-        d: "把常用的文件夹交给它。按名字找自不必说，约 80 种文本格式外加 PDF、Office 文档，连正文也能搜，命中的那一行高亮标出。",
+        d: "把常用的文件夹交给它。按名字找自不必说，约 80 种文本格式外加 PDF、Office 文档，连正文也能搜，命中的那一行高亮标出。打包在 ZIP 里的文件，也能把那个 ZIP 找出来。",
       },
     },
     {

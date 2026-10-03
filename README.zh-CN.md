@@ -207,7 +207,9 @@ GitHub 项目、埋在项目目录深处的文件、能描述出画面却找不�
 - PDF：经 [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
   解析（扫描版/乱码 PDF 仍可按文件名找到）
 - Word / Excel / PowerPoint（docx、xlsx、pptx）
-- 其余一切，包括视频、压缩包、二进制，按文件名索引
+- ZIP 压缩包：按包里的文件名索引，搜一个只存在于压缩包里的文件，能找到那个包
+  （加了密码的也行，ZIP 的文件名不加密；Windows 自带压缩打的中文文件名也能正确读出）
+- 其余一切，包括视频、其他压缩包、二进制，按文件名索引
 - 范围切换（点选或 `Shift+Tab`）：全部 / 仅文本 / 仅图片 / 仅视频
 - git 的 linked worktree 在其所属 checkout 已被索引时自动跳过，一个项目开六个
   worktree 不会被索引六遍。作为唯一副本的 worktree 照常索引；设置里可关。

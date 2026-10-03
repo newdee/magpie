@@ -349,6 +349,9 @@ impl<'a> Scan<'a> {
             (meta.len() <= limits.doc_bytes)
                 .then(|| extract_office_text(path, limits.char_cap))
                 .flatten()
+        } else if is_zip(path) {
+            // no size cap: only the entry list at the end of the file is read
+            zip_listing(path, limits.char_cap)
         } else if is_text_ext(path) {
             (meta.len() <= limits.file_bytes)
                 .then(|| read_text_full(path, limits))
@@ -612,6 +615,52 @@ fn extract_office_text(path: &Path, char_cap: usize) -> Option<String> {
         return None;
     }
     Some(out.chars().take(char_cap).collect())
+}
+
+/// What a zip holds, one entry path per line, as the archive's indexed text:
+/// "the contract is in some zip" is then a plain search. Only the central
+/// directory is read, so a big archive costs no more than its entry list,
+/// and an encrypted one lists its names too (zip encrypts contents, not
+/// names). Capped, so a zip of a whole project does not flood the
+/// embeddings.
+pub const ARCHIVE_LIST_CAP: usize = 32 * 1024;
+
+fn zip_listing(path: &Path, char_cap: usize) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let cap = char_cap.min(ARCHIVE_LIST_CAP);
+    let mut out = String::new();
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index_raw(i) else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        out.push_str(&zip_entry_name(entry.name_raw()));
+        out.push('\n');
+        if out.len() >= cap {
+            break;
+        }
+    }
+    let out = out.trim_end();
+    if out.is_empty() {
+        return None;
+    }
+    Some(out.chars().take(cap).collect())
+}
+
+/// An entry name as stored. Zips made by Windows' own "Send to" and many
+/// older tools in China store GBK without the UTF-8 flag, which the zip
+/// crate would read as CP437 (mojibake): bytes that are not UTF-8 are read
+/// as GB18030 instead.
+fn zip_entry_name(raw: &[u8]) -> String {
+    match std::str::from_utf8(raw) {
+        Ok(s) => s.to_string(),
+        Err(_) => encoding_rs::GB18030.decode(raw).0.into_owned(),
+    }
+}
+
+fn is_zip(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip"))
 }
 
 /// Text outside XML tags, basic entities decoded, whitespace collapsed per line.
@@ -1503,6 +1552,96 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("idx_files_changed"), "uses the index: {plan}");
+    }
+
+    /// A stored (uncompressed) zip of `entries` (name, body); a trailing `/`
+    /// makes a directory.
+    fn make_zip(path: &Path, entries: &[(&str, &str)]) {
+        use std::io::Write;
+        let mut w = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in entries {
+            if let Some(dir) = name.strip_suffix('/') {
+                w.add_directory(dir, opts).unwrap();
+            } else {
+                w.start_file(*name, opts).unwrap();
+                w.write_all(body.as_bytes()).unwrap();
+            }
+        }
+        w.finish().unwrap();
+    }
+
+    #[test]
+    fn a_zip_lists_its_files() {
+        let dir = std::env::temp_dir().join(format!("magpie-ziplist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let z = dir.join("a.zip");
+        make_zip(&z, &[("合同/", ""), ("合同/2026 季度合同.pdf", "x"), ("notes.txt", "hello")]);
+        assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP).as_deref(), Some("合同/2026 季度合同.pdf\nnotes.txt"), "directories skipped");
+        // the cap holds, on a char boundary
+        let names: Vec<String> = (0..3000).map(|i| format!("文件夹/很长的文件名-{i:04}.txt")).collect();
+        let entries: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "")).collect();
+        make_zip(&z, &entries);
+        let big = zip_listing(&z, CONTENT_CHAR_CAP).unwrap();
+        assert!(big.chars().count() <= ARCHIVE_LIST_CAP && big.len() > ARCHIVE_LIST_CAP / 2, "{}", big.len());
+        // not a zip, or an empty one: nothing
+        std::fs::write(&z, "not a zip").unwrap();
+        assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP), None);
+        make_zip(&z, &[("empty/", "")]);
+        assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_encrypted_zip_still_lists_its_names() {
+        let dir = std::env::temp_dir().join(format!("magpie-zipenc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let z = dir.join("secret.zip");
+        make_zip(&z, &[("机密/工资表.xlsx", "x")]);
+        // set the "encrypted" flag (bit 0 of the general purpose flags) in the
+        // local header (offset 6) and the central directory entry (offset 8)
+        let mut b = std::fs::read(&z).unwrap();
+        for i in 0..b.len().saturating_sub(4) {
+            match b[i..i + 4] {
+                [0x50, 0x4b, 0x03, 0x04] => b[i + 6] |= 1,
+                [0x50, 0x4b, 0x01, 0x02] => b[i + 8] |= 1,
+                _ => {}
+            }
+        }
+        std::fs::write(&z, &b).unwrap();
+        let mut a = zip::ZipArchive::new(std::fs::File::open(&z).unwrap()).unwrap();
+        assert!(a.by_index_raw(0).unwrap().encrypted(), "the fixture is marked encrypted");
+        assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP).as_deref(), Some("机密/工资表.xlsx"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gbk_entry_names_are_read_as_gbk() {
+        let (gbk, _, _) = encoding_rs::GBK.encode("发票/三月发票.pdf");
+        assert!(std::str::from_utf8(&gbk).is_err(), "the fixture is not UTF-8");
+        assert_eq!(zip_entry_name(&gbk), "发票/三月发票.pdf");
+        assert_eq!(zip_entry_name("合同.pdf".as_bytes()), "合同.pdf", "UTF-8 stays UTF-8");
+        assert_eq!(zip_entry_name(b"plain.txt"), "plain.txt");
+    }
+
+    #[test]
+    fn a_file_inside_a_zip_finds_the_zip() {
+        let dir = std::env::temp_dir().join(format!("magpie-zipidx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        make_zip(&dir.join("资料包.zip"), &[("2026 季度合同.pdf", "x")]);
+        let conn = crate::db::open_in_memory().unwrap();
+        add_folder(&conn, dir.to_str().unwrap()).unwrap();
+        index_folders(&conn, |_| {}).unwrap();
+        let hits = files_fts_search(&conn, "季度合同", 10).unwrap();
+        let names: Vec<String> = hits
+            .iter()
+            .map(|(id, _)| conn.query_row("SELECT name FROM files WHERE id = ?1", [id], |r| r.get(0)).unwrap())
+            .collect();
+        assert_eq!(names, vec!["资料包.zip".to_string()]);
+        // the row's snippet names the file inside
+        assert!(hits[0].1.contains("季度合同"), "{}", hits[0].1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

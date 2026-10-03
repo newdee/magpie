@@ -268,7 +268,10 @@ name, and understood formats are searched in full text:
 - PDF via [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
   (scanned/garbled PDFs stay findable by name)
 - Word / Excel / PowerPoint (docx, xlsx, pptx)
-- Everything else (video, archives, binaries) indexes by filename
+- ZIP archives by the names of the files inside, so a search for a file that
+  only lives in a zip finds the zip (password-protected ones too: zip keeps
+  names in the clear; Chinese names from Windows' own zipping are read right)
+- Everything else (video, other archives, binaries) indexes by filename
 - Scope pills (or `Shift+Tab`) narrow results: all / text / images / videos
 - Linked git worktrees are skipped when the checkout they belong to is
   already indexed, so a project with six worktrees is not indexed six times.
