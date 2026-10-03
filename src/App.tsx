@@ -523,8 +523,18 @@ interface RowAction {
   key: string;
   label: string;
   risky?: boolean;
+  /// the key that does this without the menu, shown beside it
+  shortcut?: string;
   run: () => Promise<unknown> | void;
 }
+
+/// "Edit with" (#14, edit.rs): these extensions open in this app target on
+/// Ctrl+E / ⌘E; an empty app means the system's own edit action.
+interface EditRule {
+  exts: string[];
+  app: string;
+}
+const EDIT_SHORTCUT = IS_MAC ? "⌘E" : "Ctrl+E";
 
 /// Hide the palette when it loses focus. Stored "1"/"0"; nothing stored
 /// means the platform default: on for macOS, where a Spotlight-style panel
@@ -1026,6 +1036,41 @@ export default function App() {
       .then(setEditors)
       .catch(() => {});
   }, [actionsOpen]);
+  // "Edit with" (#14): the table and the apps it can name, read at start,
+  // when the action menu opens (its label names the app) and when settings
+  // open (an app installed meanwhile can be picked)
+  const [editRules, setEditRules] = useState<EditRule[]>([]);
+  const [appChoices, setAppChoices] = useState<{ name: string; target: string }[]>([]);
+  useEffect(() => {
+    invoke<EditRule[]>("get_edit_rules").then(setEditRules).catch(() => {});
+    invoke<{ name: string; target: string }[]>("app_choices").then(setAppChoices).catch(() => {});
+  }, [actionsOpen, showSettings]);
+  const saveEditRules = useCallback(async (rules: EditRule[]) => {
+    try {
+      setEditRules(await invoke<EditRule[]>("set_edit_rules", { rules }));
+      setLastError(null);
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, []);
+  /// the name of the app a file's type is set to open in, if any
+  const editAppName = useCallback(
+    (path: string): string | null => {
+      const ext = /\.([^.\\/]+)$/.exec(path)?.[1]?.toLowerCase();
+      const rule = ext ? editRules.find((r) => r.app && r.exts.includes(ext)) : undefined;
+      return rule ? (appChoices.find((a) => a.target === rule.app)?.name ?? null) : null;
+    },
+    [editRules, appChoices],
+  );
+  const editFile = useCallback(async (path: string) => {
+    try {
+      // the backend hides the palette once the app is on its way
+      const said = await invoke<string>("edit_file", { path });
+      if (said.startsWith("dry run")) setNotice(said);
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, []);
   // Settings › Web: the browsers found and what each contributed
   const [webSources, setWebSources] = useState<WebSource[] | null>(null);
   const loadWebSources = useCallback(() => {
@@ -2080,6 +2125,16 @@ export default function App() {
           run: () => act(invoke("open_in_editor", { path, editor: ed.target }).then(finishAction)),
         })),
       ];
+      // Ctrl+E / ⌘E (#14): the app picked for the type, named when there is one
+      const editAction = (path: string): RowAction => {
+        const app = editAppName(path);
+        return {
+          key: "edit",
+          label: app ? tf("Edit with {app}", { app }) : t("Edit"),
+          shortcut: EDIT_SHORTCUT,
+          run: () => editFile(path),
+        };
+      };
       // to the OS trash, on a second Enter; the row leaves the list
       const trashAction = (h: FileHit | VideoHit): RowAction => ({
         key: "trash",
@@ -2111,6 +2166,7 @@ export default function App() {
               label: t("Open with default app"),
               run: () => act(invoke("open_path_default", { path: hit.path }).then(finishAction)),
             },
+            editAction(hit.path),
             ...(/\.pdf$/i.test(hit.path)
               ? [
                   {
@@ -2164,6 +2220,7 @@ export default function App() {
               label: t("Show in folder"),
               run: () => act(invoke("open_file", { path: hit.path }).then(finishAction)),
             },
+            editAction(hit.path),
             { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
             ...openElsewhere(hit.path),
             trashAction(hit),
@@ -2278,7 +2335,7 @@ export default function App() {
           ];
       }
     },
-    [openHit, runRisky, finishAction, refreshResults, editors, revealed, toggleReveal],
+    [openHit, runRisky, finishAction, refreshResults, editors, revealed, toggleReveal, editAppName, editFile],
   );
 
   const menuActions = useMemo(
@@ -2470,6 +2527,16 @@ export default function App() {
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Ctrl/Cmd+E (#14): edit the selected file in the app picked for its
+      // type (Settings › Local Files), else the system's own edit action
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === "KeyE" || e.key.toLowerCase() === "e")) {
+        const r = results[selected];
+        if (!showSettings && !actionsOpen && r && (r.kind === "file" || r.kind === "video") && !(topRowActive && (calcHit || bangHit))) {
+          e.preventDefault();
+          void editFile(r.path);
+          return;
+        }
+      }
       // Ctrl/Cmd+K: the selected row's action menu (physical key, so any
       // layout works)
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === "KeyK" || e.key.toLowerCase() === "k")) {
@@ -2696,7 +2763,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, finishAction, actionsOpen, actionSel, menuActions, runMenuAction],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, editFile, finishAction, actionsOpen, actionSel, menuActions, runMenuAction],
   );
 
   const refresh = useCallback(async () => {
@@ -4213,6 +4280,79 @@ export default function App() {
                     )}
                   </div>
 
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">{t("Editing apps")}</span>
+                        <span className="set-desc">
+                          {tf(
+                            "{key} on a file opens it in the app picked for its type. Other types use the system's own way to edit.",
+                            { key: EDIT_SHORTCUT },
+                          )}
+                        </span>
+                      </div>
+                      <button
+                        className="ghost-btn"
+                        onClick={() => void saveEditRules([...editRules, { exts: [], app: "" }])}
+                      >
+                        {t("Add a type")}
+                      </button>
+                    </div>
+                    {editRules.length > 0 && (
+                      <div className="edit-rules">
+                        {editRules.map((r, i) => (
+                          <div key={i} className="edit-rule">
+                            <input
+                              // re-mounted when the saved value comes back tidied
+                              key={r.exts.join(",")}
+                              className="edit-exts"
+                              defaultValue={r.exts.join(", ")}
+                              placeholder="png, jpg, psd"
+                              aria-label={t("File types")}
+                              spellCheck={false}
+                              onBlur={(e) => {
+                                const v = e.currentTarget.value;
+                                if (v !== r.exts.join(", ")) {
+                                  void saveEditRules(editRules.map((x, j) => (j === i ? { ...x, exts: [v] } : x)));
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") e.currentTarget.blur();
+                              }}
+                            />
+                            <select
+                              className="set-select edit-app"
+                              value={r.app}
+                              aria-label={t("Editing app")}
+                              onChange={(e) => {
+                                const app = e.currentTarget.value;
+                                void saveEditRules(editRules.map((x, j) => (j === i ? { ...x, app } : x)));
+                              }}
+                            >
+                              <option value="">{t("System default")}</option>
+                              {r.app && !appChoices.some((a) => a.target === r.app) && (
+                                <option value={r.app}>{t("(not installed)")}</option>
+                              )}
+                              {appChoices.map((a) => (
+                                <option key={a.target} value={a.target}>
+                                  {a.name}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              className="folder-remove"
+                              title={t("Remove")}
+                              aria-label={t("Remove")}
+                              onClick={() => void saveEditRules(editRules.filter((_, j) => j !== i))}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="set-row">
                     <div className="set-label">
                       <span className="set-name">{t("File changes")}</span>
@@ -5124,7 +5264,7 @@ export default function App() {
                       ? t("Press Enter again to confirm")
                       : a.label}
                   </span>
-                  {i === 0 && <kbd>⏎</kbd>}
+                  {i === 0 ? <kbd>⏎</kbd> : a.shortcut ? <kbd>{a.shortcut}</kbd> : null}
                 </div>
               ))}
             </div>

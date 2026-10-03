@@ -166,6 +166,16 @@ const ZH: Record<string, string> = {
   "Add folder": "添加文件夹",
   "Add common places…": "添加常用位置…",
   "Downloaded from": "下载自",
+  Edit: "编辑",
+  "Edit with {app}": "用 {app} 编辑",
+  "Editing apps": "编辑用的软件",
+  "{key} on a file opens it in the app picked for its type. Other types use the system's own way to edit.":
+    "在文件上按 {key}，用为它的类型选定的软件打开；其他类型用系统自带的编辑方式。",
+  "Add a type": "添加类型",
+  "File types": "文件类型",
+  "Editing app": "编辑软件",
+  "System default": "系统默认",
+  "(not installed)": "（未安装）",
   "Where downloads, screenshots and files from chat apps usually land. Tick the ones to index.":
     "下载、截图和聊天软件收到的文件通常存在这些地方。勾选要索引的。",
   "Looking for common places…": "正在查找常用位置…",

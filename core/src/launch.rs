@@ -18,10 +18,16 @@ pub struct Launch {
     pub shell_open: bool,
     /// Windows: give a console program its own window
     pub new_console: bool,
+    /// Windows, with `shell_open`: the shell's verb, "open" unless asked
+    /// otherwise; "edit" falls back to "open" for a type that has no edit
+    pub verb: &'static str,
 }
 
 impl std::fmt::Display for Launch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.verb != "open" {
+            write!(f, "{} ", self.verb)?;
+        }
         write!(f, "{}", self.program)?;
         for a in &self.args {
             write!(f, " {a:?}")?;
@@ -41,6 +47,7 @@ impl Launch {
             cwd: None,
             shell_open: false,
             new_console: false,
+            verb: "open",
         }
     }
 }
@@ -138,7 +145,29 @@ pub fn editor_with(app_target: &str, path: &Path) -> Result<Launch> {
     }
 }
 
-/// Start what [`terminal_at`] or [`editor_with`] planned.
+/// The system's own way to edit `path` (no app picked for its type): the
+/// shell's "edit" verb on Windows (Paint for a PNG, Notepad for a .txt),
+/// else what opens the file. macOS and Linux have no separate edit action.
+pub fn default_edit(path: &Path) -> Launch {
+    let p = path.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        let mut l = Launch::new(p, &[]);
+        l.shell_open = true;
+        l.verb = "edit";
+        l
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Launch::new("open", &[&p])
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Launch::new("xdg-open", &[&p])
+    }
+}
+
+/// Start what [`terminal_at`], [`editor_with`] or [`default_edit`] planned.
 pub fn run(l: &Launch) -> Result<()> {
     #[cfg(target_os = "windows")]
     if l.shell_open {
@@ -147,11 +176,17 @@ pub fn run(l: &Launch) -> Result<()> {
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
         // one path per argument; Windows paths cannot contain a quote
         let params = l.args.iter().map(|a| format!("\"{a}\"")).collect::<Vec<_>>().join(" ");
-        let r = unsafe {
-            ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(l.program.as_str()), &HSTRING::from(params), None, SW_SHOWNORMAL)
+        let exec = |verb: &str| unsafe {
+            ShellExecuteW(None, &HSTRING::from(verb), &HSTRING::from(l.program.as_str()), &HSTRING::from(params.as_str()), None, SW_SHOWNORMAL).0 as isize
         };
+        let mut r = exec(l.verb);
+        // SE_ERR_NOASSOC (31): nothing is registered for that verb, as with
+        // "edit" on most types; opening is the next best thing
+        if r == 31 && l.verb != "open" {
+            r = exec("open");
+        }
         // ShellExecute returns a value above 32 on success
-        return if r.0 as isize > 32 { Ok(()) } else { Err(anyhow!("could not open {} (code {})", l.program, r.0 as isize)) };
+        return if r > 32 { Ok(()) } else { Err(anyhow!("could not open {} (code {r})", l.program)) };
     }
     let mut cmd = std::process::Command::new(&l.program);
     cmd.args(&l.args);
@@ -228,6 +263,23 @@ mod tests {
                 assert!(headless_linux_ok, "{e}");
             }
         }
+    }
+
+    #[test]
+    fn the_system_edit_action() {
+        let path = Path::new(if cfg!(windows) { r"C:\work\a b.png" } else { "/work/a b.png" });
+        let l = default_edit(path);
+        #[cfg(target_os = "windows")]
+        {
+            assert!(l.shell_open);
+            assert_eq!((l.verb, l.program.as_str()), ("edit", r"C:\work\a b.png"));
+            assert!(l.args.is_empty());
+            assert_eq!(l.to_string(), r"edit C:\work\a b.png");
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!((l.program.as_str(), l.args.clone()), ("open", vec!["/work/a b.png".to_string()]));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert_eq!((l.program.as_str(), l.args.clone()), ("xdg-open", vec!["/work/a b.png".to_string()]));
     }
 
     #[test]

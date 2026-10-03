@@ -988,6 +988,42 @@ input.query:active {
   flex-shrink: 0;
 }
 
+/* "Editing apps" (#14): extensions → app, one row per type */
+.edit-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.edit-rule {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.edit-rule .edit-exts {
+  flex: 1;
+  min-width: 0;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+}
+.edit-rule .edit-exts:focus {
+  border-color: var(--border-strong);
+}
+.edit-rule .edit-exts::placeholder {
+  color: var(--text-faint);
+}
+.edit-rule .edit-app {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+}
+
 /* "Add common places": a checklist under the folder header */
 .places {
   display: flex;

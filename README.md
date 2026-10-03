@@ -190,6 +190,9 @@ vaguely remember (or drop in an image), hit Enter.
   administrator (Windows), copy a repo's clone command or a page as a Markdown
   link, save an image from the clipboard history as a file, pin or delete a
   clip, end a process.
+- **Edit in your own app**: `Ctrl+E` (`⌘E` on macOS) on a file opens it in
+  the app you picked for its type in Settings → Local Files, Photoshop for
+  images say; a type with no app picked uses the system's own way to edit.
 - **PDF to Markdown**: on a PDF, `Ctrl+K` offers *Copy as Markdown* and
   *Save as Markdown…* (next to the PDF by default). Every page is converted
   in order, headings, lists and tables included; scanned pages are read by
@@ -404,6 +407,7 @@ starred form. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Ctrl+Enter` | hand the query to the browser: URL-looking input opens directly, anything else web-searches |
 | `Ctrl+C` | copy what identifies the row: a path, a URL, a clip's text (`Ctrl+Shift+C`: the file itself) |
 | `Ctrl+K` | the selected result's action menu (`↑↓` to pick, `Enter` to run, `Esc` to close) |
+| `Ctrl+E` | edit the selected file in the app picked for its type |
 | `Ctrl+Alt+Space` | in any app: look up the selected text (`Option+Shift+Space` on macOS; rebindable) |
 | `Tab` | next source (Local / Stars / Web / Clipboard, order set in settings) |
 | `Ctrl+1` … `Ctrl+9` | jump straight to that tab, in strip order (`Alt` instead, or off, in settings) |

@@ -30,6 +30,16 @@ document.head.appendChild(style);
 const demoTimers: { id: number; label: string; ends_at: number }[] = [];
 const demoVolume = { level: 38, muted: false };
 
+// "Editing apps" (#14): a fresh install's table, and a few installed apps
+let demoEditRules: { exts: string[]; app: string }[] = [
+  { exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "psd"], app: "" },
+];
+const demoEditApps = [
+  { name: "Adobe Photoshop 2026", target: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Adobe Photoshop 2026.lnk" },
+  { name: "Paint", target: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Paint.lnk" },
+  { name: "Typora", target: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Typora.lnk" },
+];
+
 const folders = [
   { id: 1, path: "C:\\Users\\dfine\\Documents\\projects", file_count: 1284 },
   { id: 2, path: "C:\\Users\\dfine\\Pictures\\screenshots", file_count: 411 },
@@ -341,6 +351,33 @@ mockIPC((cmd, args) => {
       return { ...status };
     case "list_folders":
       return folders;
+    case "app_choices":
+      return demoEditApps;
+    case "get_edit_rules":
+      return demoEditRules;
+    case "set_edit_rules": {
+      // tidied like the backend: lower case, no dots, each once
+      const rules = (args as { rules: { exts: string[]; app: string }[] }).rules;
+      demoEditRules = rules.map((r) => ({
+        exts: [
+          ...new Set(
+            r.exts
+              .join(",")
+              .split(/[,，\s]+/)
+              .map((e) => e.trim().replace(/^\.+/, "").toLowerCase())
+              .filter((e) => /^[\p{L}\p{N}]+$/u.test(e)),
+          ),
+        ],
+        app: r.app,
+      }));
+      return demoEditRules;
+    }
+    case "edit_file": {
+      const path = (args as { path: string }).path;
+      const ext = /\.([^.\\/]+)$/.exec(path)?.[1]?.toLowerCase();
+      const app = demoEditRules.find((r) => r.app && ext && r.exts.includes(ext))?.app;
+      return app ? `dry run: ${app} "${path}"` : `dry run: edit ${path}`;
+    }
     case "file_origin":
       // downloaded PDFs say where they came from
       return /\.pdf$/i.test((args as { path?: string })?.path ?? "")

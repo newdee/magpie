@@ -11,6 +11,7 @@ pub mod clips;
 pub mod corners;
 pub mod db;
 pub mod download;
+pub mod edit;
 pub mod embed;
 pub mod files;
 pub mod filters;

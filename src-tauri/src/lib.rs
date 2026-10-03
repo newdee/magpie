@@ -270,6 +270,7 @@ const EXPORTABLE_META: &[&str] = &[
     "rescan_minutes",
     "term_notify",
     magpie_core::semantic::META_KEY,
+    magpie_core::edit::META_KEY,
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -4413,6 +4414,64 @@ async fn open_in_editor(app: AppHandle, state: State<'_, AppState>, path: String
     run_launch(&app, l)
 }
 
+/// Every installed app, by name, for the "Edit with" picker in settings.
+#[tauri::command]
+fn app_choices(state: State<'_, AppState>) -> Vec<serde_json::Value> {
+    let apps = state.apps.lock().unwrap();
+    let mut v: Vec<&magpie_core::apps::AppEntry> = apps.iter().collect();
+    v.sort_by_key(|a| a.name.to_lowercase());
+    v.dedup_by(|a, b| a.target == b.target);
+    v.into_iter().map(|a| json!({ "name": a.name, "target": a.target })).collect()
+}
+
+/// The "Edit with" table (#14): which app opens which file types on Ctrl+E.
+#[tauri::command]
+async fn get_edit_rules(state: State<'_, AppState>) -> Result<Vec<magpie_core::edit::EditRule>, String> {
+    let conn = state.db.lock().await;
+    let stored = db::meta_get(&conn, magpie_core::edit::META_KEY).map_err(err_str)?;
+    Ok(magpie_core::edit::parse_rules(stored.as_deref()))
+}
+
+/// Save the table, extensions tidied. An app is kept as given, even one
+/// that is gone (uninstalled since, or from another computer's settings):
+/// refusing it would make the whole table unsavable. What may run is
+/// decided in [`edit_file`], which starts only apps on the installed list.
+#[tauri::command]
+async fn set_edit_rules(
+    state: State<'_, AppState>,
+    rules: Vec<magpie_core::edit::EditRule>,
+) -> Result<Vec<magpie_core::edit::EditRule>, String> {
+    let rules: Vec<magpie_core::edit::EditRule> = rules
+        .into_iter()
+        .map(|r| magpie_core::edit::EditRule { exts: magpie_core::edit::normalize_exts(&r.exts), app: r.app })
+        .collect();
+    let conn = state.db.lock().await;
+    db::meta_set(&conn, magpie_core::edit::META_KEY, &serde_json::to_string(&rules).map_err(err_str)?).map_err(err_str)?;
+    Ok(rules)
+}
+
+/// Ctrl+E / ⌘E on a file: the app picked for its type, or the system's own
+/// edit action. The picked app runs only while it is still installed; one
+/// removed since (or from an imported settings file) falls back.
+#[tauri::command]
+async fn edit_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<String, String> {
+    require_indexed(&state, &path).await?;
+    let rules = {
+        let conn = state.db.lock().await;
+        let stored = db::meta_get(&conn, magpie_core::edit::META_KEY).map_err(err_str)?;
+        magpie_core::edit::parse_rules(stored.as_deref())
+    };
+    let p = Path::new(&path);
+    let picked = magpie_core::edit::app_for(&rules, p)
+        .filter(|t| state.apps.lock().unwrap().iter().any(|a| a.target == *t))
+        .map(str::to_string);
+    let l = match picked {
+        Some(t) => magpie_core::launch::editor_with(&t, p).map_err(err_str)?,
+        None => magpie_core::launch::default_edit(p),
+    };
+    run_launch(&app, l)
+}
+
 /// Move an indexed file to the trash (the palette asks twice first, and the
 /// check is repeated here so no caller can skip it); its row leaves the
 /// index at once.
@@ -5739,6 +5798,10 @@ pub fn run() {
             add_folders,
             common_places,
             file_origin,
+            app_choices,
+            get_edit_rules,
+            set_edit_rules,
+            edit_file,
             remove_folder,
             index_local,
             rebuild_folder,
