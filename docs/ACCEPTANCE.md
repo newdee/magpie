@@ -1,3 +1,36 @@
+# 验收记录 2026-10-03（预览显示下载来源）
+
+## 实现
+
+- `core/src/origin.rs`：读浏览器记下的来源。Windows 读 `Zone.Identifier` 流（`ReferrerUrl` 网页、`HostUrl` 文件），
+  macOS 读 `kMDItemWhereFroms`（二进制 plist，[文件, 网页]），Linux 读 Chromium 的 `user.xdg.referrer.url` /
+  `user.xdg.origin.url`。只认 http(s)；显示网页的域名（去 `www.`），没有网页才借文件地址的域名，且此时不给链接
+  （文件地址常是带签名 token 的 CDN 地址，点开会重新下载）。预览时现读，不存、不记日志。
+- 后端 `file_origin`（只允许索引目录和下载目录里的路径）；预览面板顶部一行「下载自 github.com」，点开网页。
+- 依据：本机下载目录 20 个文件里 4 个有来源（GitHub 2、微信 1、bypass.cn 1）；`HostUrl` 最长 983 字符带签名，
+  `ReferrerUrl` 是干净的网页地址。按覆盖率只做显示，不做按来源搜索（用户 2026-10-03 同意）。
+
+## 开发中发现并修复
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 1 | Cargo.toml 注释写 xattr 来自 tauri，实际来自 tar（ffmpeg-sidecar） | 改注释 |
+| 2 | T53 选行只往下找，排序靠前的文件找不到 | 先回到顶部再找 |
+| 3 | CI：`parse_zone_identifier` 在 macOS / Linux 是死代码（-D warnings） | `cfg(any(windows, test))` |
+| 4 | 变异「去掉 http(s) 检查」没被单测抓到：测试里的非网页地址都没有主机名 | 加 `ftp://` / `chrome-extension://` 用例 |
+
+## 三轮
+
+- R1（静态 + 回归）：cargo test 全过（core 218 + 2 忽略、magpie 44）；clippy 0；CI d9dcbd4 macOS / Linux 绿；
+  T53（e2e/t53-origin.*）5/5：zip 显示「下载自 github.com」且链接指向发布页、yaml 只显示 file.wx.qq.com 无链接、
+  md 无此行、页面 HTML 里不出现签名 token、索引外路径被拒。真机套件 T42/T44/T46/T48/T49/T51/T52/T38 全过
+  （在 #3 修复前的构建上跑；#3 只改非 Windows 的编译条件，Windows 产物不变）。
+- R2（机制存活）：origin.rs 变异 3 处（网页不给链接、去掉 http(s) 检查、不读 ReferrerUrl）全被抓到 3/3；T38 59/59。
+- R3（可复现）：T53 连跑 3 次，整段输出 SHA-256 前 16 位均为 79FBEE9C97B01244。
+
+遗留：macOS、Linux 的读取只经 CI 编译，未在真机读到过属性。
+
+---
 # 验收记录 2026-10-03（添加常用位置；后台刷新不再打乱选中项；添加文件夹不再漏索引）
 
 ## 实现
