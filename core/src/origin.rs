@@ -125,6 +125,8 @@ mod tests {
         assert_eq!(o, Origin { host: "example.org".into(), page: None });
         assert_eq!(pick(None, None), None);
         assert_eq!(pick(Some("file:///C:/x".into()), Some("not a url".into())), None);
+        // a host is not enough: only the web is shown or opened
+        assert_eq!(pick(Some("ftp://files.example.org/x".into()), Some("chrome-extension://abc/x".into())), None);
     }
 
     #[test]
