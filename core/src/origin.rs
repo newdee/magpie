@@ -48,6 +48,7 @@ fn web(u: &str) -> Option<String> {
 }
 
 /// (page, file) from a `Zone.Identifier` stream.
+#[cfg(any(windows, test))]
 fn parse_zone_identifier(text: &str) -> (Option<String>, Option<String>) {
     let mut page = None;
     let mut file = None;
