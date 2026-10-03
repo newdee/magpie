@@ -755,6 +755,50 @@ fn preview_thumb(path: String) -> Result<Option<String>, String> {
     Ok(files::thumb_b64_for(std::path::Path::new(&path)))
 }
 
+/// The part of `text` the preview shows: 2400 bytes, starting a little above
+/// the first match of `query` when there is one. Also whether text was left
+/// out before and after. `whole_lines` widens the start and narrows the end
+/// to line breaks, so a list never shows half a name at either edge.
+fn text_window<'a>(text: &'a str, query: Option<&str>, whole_lines: bool) -> (&'a str, bool, bool) {
+    let lower = text.to_lowercase();
+    let q = query.unwrap_or_default().trim().to_lowercase();
+    let hit = if q.is_empty() { None } else { lower.find(&q) };
+    let mut start = match hit {
+        Some(pos) if pos > 400 => {
+            // walk back to a char boundary near pos-400
+            let mut s = (pos - 400).min(text.len());
+            while s > 0 && !text.is_char_boundary(s) {
+                s -= 1;
+            }
+            s
+        }
+        _ => 0,
+    };
+    if whole_lines {
+        start = text[..start].rfind('\n').map_or(0, |i| i + 1);
+    }
+    let mut end = (start + 2400).min(text.len());
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    if whole_lines && end < text.len() {
+        // keep the matched line whole even when it runs past the window
+        // (`hit` counts in the lowercased text; snap onto a char of `text`)
+        let mut keep = hit.map_or(start, |pos| pos + q.len()).clamp(start, end);
+        while !text.is_char_boundary(keep) {
+            keep += 1;
+        }
+        if let Some(i) = text[keep..end].rfind('\n') {
+            end = keep + i;
+        } else if let Some(i) = text[end..].find('\n') {
+            end += i;
+        } else {
+            end = text.len();
+        }
+    }
+    (&text[start..end], start > 0, end < text.len())
+}
+
 /// Content for the preview pane. Everything comes from the local index (file
 /// text, repo metadata, video shots) or the file on disk (large image) — no
 /// network. `query` centres a text preview on its first match.
@@ -795,40 +839,37 @@ async fn get_preview(
                 .map_err(err_str)?;
                 return Ok(json!({ "kind": "image", "image": b64 }));
             }
-            // a zip's indexed text is its entry list, kept for search; the
-            // pane shows the file's details instead (a listing in the
-            // preview is not decided yet)
             if ext.as_deref().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
-                return Ok(json!({ "kind": "none" }));
+                // what the zip holds, read fresh from its central directory:
+                // the names (the matched one in view), how many files in all,
+                // and whether they need a password
+                drop(conn);
+                let z = tokio::task::spawn_blocking(move || {
+                    files::zip_contents(std::path::Path::new(&path), files::ARCHIVE_LIST_CAP)
+                })
+                .await
+                .map_err(err_str)?;
+                let Some(z) = z else { return Ok(json!({ "kind": "none" })) };
+                let (text, clipped_head, clipped_tail) = text_window(&z.names, query.as_deref(), true);
+                return Ok(json!({
+                    "kind": "archive",
+                    "files": z.files,
+                    "encrypted": z.encrypted,
+                    "text": text,
+                    "clipped_head": clipped_head,
+                    "clipped_tail": clipped_tail || z.names.lines().count() < z.files,
+                }));
             }
             let text = content.unwrap_or_default();
             if text.is_empty() {
                 return Ok(json!({ "kind": "none" }));
             }
-            // centre the window on the first query match when there is one
-            let lower = text.to_lowercase();
-            let q = query.unwrap_or_default().trim().to_lowercase();
-            let hit = if q.is_empty() { None } else { lower.find(&q) };
-            let (start, clipped_head) = match hit {
-                Some(pos) if pos > 400 => {
-                    // walk back to a char boundary near pos-400
-                    let mut s = pos - 400;
-                    while s > 0 && !text.is_char_boundary(s) {
-                        s -= 1;
-                    }
-                    (s, true)
-                }
-                _ => (0, false),
-            };
-            let mut end = (start + 2400).min(text.len());
-            while end < text.len() && !text.is_char_boundary(end) {
-                end += 1;
-            }
+            let (text, clipped_head, clipped_tail) = text_window(&text, query.as_deref(), false);
             Ok(json!({
                 "kind": "text",
-                "text": &text[start..end],
+                "text": text,
                 "clipped_head": clipped_head,
-                "clipped_tail": end < text.len(),
+                "clipped_tail": clipped_tail,
             }))
         }
         "clip" => {
@@ -2906,7 +2947,53 @@ fn player_seek_args(exe_stem: &str, path: &str, ts_ms: i64) -> Option<Vec<String
 
 #[cfg(test)]
 mod tests {
-    use super::player_seek_args;
+    use super::{player_seek_args, text_window};
+
+    #[test]
+    fn a_text_preview_window() {
+        // short text, no query: all of it
+        assert_eq!(text_window("hello\nworld", None, false), ("hello\nworld", false, false));
+        assert_eq!(text_window("hello\nworld", Some("  "), true), ("hello\nworld", false, false));
+        assert_eq!(text_window("", Some("x"), true), ("", false, false));
+        assert_eq!(text_window("", None, false), ("", false, false));
+        // a query that is not there: from the top
+        assert_eq!(text_window("a\nb", Some("zzz"), true), ("a\nb", false, false));
+        // long text: 400 bytes above the match, 2400 bytes in all
+        let text = format!("{}needle{}", "a".repeat(1000), "b".repeat(5000));
+        let (w, head, tail) = text_window(&text, Some("NEEDLE"), false);
+        assert_eq!((w.len(), head, tail), (2400, true, true));
+        assert!(w.starts_with(&"a".repeat(400)) && w[400..].starts_with("needle"), "{}", &w[..410]);
+        // a match near the top keeps the start
+        let (w, head, _) = text_window(&text, Some("aaa"), false);
+        assert_eq!((w.len(), head), (2400, false));
+        // multi-byte text never splits a char
+        let cjk = "汉".repeat(2000);
+        let (w, _, tail) = text_window(&cjk, None, false);
+        assert!(tail && w.len() <= 2402 && w.chars().all(|c| c == '汉'));
+    }
+
+    #[test]
+    fn a_list_window_shows_whole_lines() {
+        let names: Vec<String> = (0..300).map(|i| format!("folder/file-{i:03}.txt")).collect();
+        let list = names.join("\n");
+        let (w, head, tail) = text_window(&list, Some("file-150"), true);
+        assert!(head && tail);
+        let shown: Vec<&str> = w.lines().collect();
+        assert!(shown.iter().all(|l| names.iter().any(|n| n == l)), "only whole names: {w}");
+        assert!(shown.contains(&"folder/file-150.txt"));
+        assert_eq!(&list[list.find(w).unwrap()..][..w.len()], w);
+        // no query: from the first name
+        let (w, head, tail) = text_window(&list, None, true);
+        assert!(!head && tail && w.starts_with("folder/file-000.txt\n") && !w.ends_with('\n'));
+        // a matched name longer than the window stays whole
+        let long = format!("{}\nx{}needle{}\nlast", "a\n".repeat(300), "y".repeat(500), "z".repeat(3000));
+        let (w, _, tail) = text_window(&long, Some("needle"), true);
+        assert!(w.ends_with('z') && tail, "{}", &w[w.len() - 5..]);
+        // lowercasing that changes byte lengths does not split a char
+        let odd = format!("{}\n{}needle\nrest", "İ".repeat(700), "İ".repeat(700));
+        let _ = text_window(&odd, Some("needle"), true);
+        let _ = text_window(&odd, Some("needle"), false);
+    }
 
     #[test]
     fn seek_args_per_player() {

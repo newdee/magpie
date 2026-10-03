@@ -626,26 +626,56 @@ fn extract_office_text(path: &Path, char_cap: usize) -> Option<String> {
 pub const ARCHIVE_LIST_CAP: usize = 32 * 1024;
 
 fn zip_listing(path: &Path, char_cap: usize) -> Option<String> {
+    zip_contents(path, char_cap).map(|z| z.names)
+}
+
+/// A zip as its preview shows it: the file names (the indexed listing), how
+/// many files it holds in all, and whether they are password-protected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZipContents {
+    /// one path per line, whole names only, capped like the listing
+    pub names: String,
+    /// every file in the archive, past the cap too (directories not counted)
+    pub files: usize,
+    /// a listed file is encrypted: its name shows, its content cannot
+    pub encrypted: bool,
+}
+
+pub fn zip_contents(path: &Path, char_cap: usize) -> Option<ZipContents> {
     let file = std::fs::File::open(path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let cap = char_cap.min(ARCHIVE_LIST_CAP);
+    // the count comes from the central directory already in memory; listing
+    // an entry reads its local header too, so only the listed ones do that
+    let files = (0..archive.len())
+        .filter(|&i| archive.name_for_index(i).is_some_and(|n| !n.ends_with(['/', '\\'])))
+        .count();
     let mut out = String::new();
+    let mut encrypted = false;
     for i in 0..archive.len() {
+        if out.len() >= cap {
+            break;
+        }
         let Ok(entry) = archive.by_index_raw(i) else { continue };
         if entry.is_dir() {
             continue;
         }
+        encrypted |= entry.encrypted();
         out.push_str(&zip_entry_name(entry.name_raw()));
         out.push('\n');
-        if out.len() >= cap {
-            break;
-        }
     }
     let out = out.trim_end();
     if out.is_empty() {
         return None;
     }
-    Some(out.chars().take(cap).collect())
+    let mut names: String = out.chars().take(cap).collect();
+    if names.len() < out.len() {
+        // the cap fell inside a name: end on the last whole one
+        if let Some(nl) = names.rfind('\n') {
+            names.truncate(nl);
+        }
+    }
+    Some(ZipContents { names, files, encrypted })
 }
 
 /// An entry name as stored. Zips made by Windows' own "Send to" and many
@@ -1578,17 +1608,39 @@ mod tests {
         let z = dir.join("a.zip");
         make_zip(&z, &[("合同/", ""), ("合同/2026 季度合同.pdf", "x"), ("notes.txt", "hello")]);
         assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP).as_deref(), Some("合同/2026 季度合同.pdf\nnotes.txt"), "directories skipped");
+        assert_eq!(
+            zip_contents(&z, ARCHIVE_LIST_CAP),
+            Some(ZipContents { names: "合同/2026 季度合同.pdf\nnotes.txt".into(), files: 2, encrypted: false }),
+            "the count leaves the directory out"
+        );
         // the cap holds, on a char boundary
         let names: Vec<String> = (0..3000).map(|i| format!("文件夹/很长的文件名-{i:04}.txt")).collect();
         let entries: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "")).collect();
         make_zip(&z, &entries);
         let big = zip_listing(&z, CONTENT_CHAR_CAP).unwrap();
         assert!(big.chars().count() <= ARCHIVE_LIST_CAP && big.len() > ARCHIVE_LIST_CAP / 2, "{}", big.len());
+        // the count is not capped, and the listing ends on a whole name
+        let c = zip_contents(&z, ARCHIVE_LIST_CAP).unwrap();
+        let listed: Vec<&str> = c.names.lines().collect();
+        assert_eq!(c.files, 3000);
+        assert!(listed.len() < 3000, "{}", listed.len());
+        assert_eq!(listed, names[..listed.len()].iter().map(String::as_str).collect::<Vec<_>>(), "whole names, in order");
+        // a cap that falls inside a name drops that name
+        make_zip(&z, &[("aaaaaaaaaa.txt", ""), ("bbbbbbbbbb.txt", ""), ("cccccccccc.txt", "")]);
+        let c = zip_contents(&z, 20).unwrap();
+        assert_eq!((c.names.as_str(), c.files), ("aaaaaaaaaa.txt", 3));
         // not a zip, or an empty one: nothing
         std::fs::write(&z, "not a zip").unwrap();
         assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP), None);
         make_zip(&z, &[("empty/", "")]);
         assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP), None);
+        assert_eq!(zip_contents(&z, ARCHIVE_LIST_CAP), None, "only a folder: nothing to list");
+        assert_eq!(zip_contents(&dir.join("gone.zip"), ARCHIVE_LIST_CAP), None, "a file deleted since indexing");
+        // one name longer than the cap: cut, not dropped (no line to end on)
+        let long = "长".repeat(40);
+        make_zip(&z, &[(long.as_str(), "")]);
+        let c = zip_contents(&z, 20).unwrap();
+        assert_eq!((c.names.chars().count(), c.files), (20, 1));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1612,6 +1664,7 @@ mod tests {
         let mut a = zip::ZipArchive::new(std::fs::File::open(&z).unwrap()).unwrap();
         assert!(a.by_index_raw(0).unwrap().encrypted(), "the fixture is marked encrypted");
         assert_eq!(zip_listing(&z, CONTENT_CHAR_CAP).as_deref(), Some("机密/工资表.xlsx"));
+        assert!(zip_contents(&z, ARCHIVE_LIST_CAP).unwrap().encrypted, "the preview can say so");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

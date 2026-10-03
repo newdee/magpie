@@ -170,6 +170,8 @@ const ZH: Record<string, string> = {
   "Visited {n} times": "访问过 {n} 次",
   "earliest on record {d}": "最早记录 {d}",
   "latest {d}": "最近一次 {d}",
+  "Files inside: {n}": "包含 {n} 个文件",
+  "password-protected, names only": "有密码，只能看到文件名",
   Edit: "编辑",
   "Edit with {app}": "用 {app} 编辑",
   "Editing apps": "编辑用的软件",

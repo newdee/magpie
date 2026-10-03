@@ -274,7 +274,8 @@ name, and understood formats are searched in full text:
 - Word / Excel / PowerPoint (docx, xlsx, pptx)
 - ZIP archives by the names of the files inside, so a search for a file that
   only lives in a zip finds the zip (password-protected ones too: zip keeps
-  names in the clear; Chinese names from Windows' own zipping are read right)
+  names in the clear; Chinese names from Windows' own zipping are read right).
+  Its preview lists the files inside, with the one that matched in view
 - Everything else (video, other archives, binaries) indexes by filename
 - Scope pills (or `Shift+Tab`) narrow results: all / text / images / videos
 - Linked git worktrees are skipped when the checkout they belong to is
