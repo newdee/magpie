@@ -424,6 +424,16 @@ const PLACE_LABELS: Record<string, string> = {
 // how long the selection must rest on a local file before its preview loads
 const LOCAL_PREVIEW_DELAY_MS = 800;
 
+/// State fetched for one thing (a selected row, a path, an address), stored
+/// with that thing's key and read back only under it. Clearing it in the
+/// effect that refetches came one frame late: the new row rendered once with
+/// the previous row's preview, download source or bookmarks.
+function useKeyedState<T>(key: string | null): [T | null, (key: string, value: T) => void] {
+  const [state, setState] = useState<{ key: string; value: T } | null>(null);
+  const set = useCallback((k: string, value: T) => setState({ key: k, value }), []);
+  return [state !== null && key !== null && state.key === key ? state.value : null, set];
+}
+
 /// localStorage keys included in a settings export/import.
 const LOCAL_KEYS = [
   "magpie.bangs",
@@ -960,7 +970,6 @@ export default function App() {
     await getCurrentWindow().hide();
     setPreviewOpen(false);
   }, []);
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
 
   // sync the tray language once at startup ("auto" resolves per OS locale)
   useEffect(() => {
@@ -1889,26 +1898,24 @@ export default function App() {
   const previewKey = selHit
     ? `${hitKey(selHit)}@${"mtime" in selHit ? selHit.mtime : ""}|${query}`
     : "";
+  const [preview, setPreview] = useKeyedState<Record<string, unknown>>(previewKey);
   useEffect(() => {
     const justOpened = previewOpen && !previewWasOpen.current;
     previewWasOpen.current = previewOpen;
     if (!previewOpen) return;
     const hit = results[selected];
-    if (!hit) {
-      setPreview(null);
-      return;
-    }
+    if (!hit) return;
     const needsFetch =
       hit.kind === "file" ||
       hit.kind === "video" ||
       hit.kind === "repo" ||
       (hit.kind === "clip" && hit.clip_kind === "image");
-    // clear immediately so a slower fetch can never leave the previous hit's
-    // content rendered under the new selection
-    setPreview(null);
     if (!needsFetch) {
       return;
     }
+    // what arrives belongs to this key; a slower fetch for an earlier
+    // selection is dropped here and could not be read under the new key
+    const key = previewKey;
     let stale = false;
     const delay =
       justOpened || hit.kind === "repo"
@@ -1923,12 +1930,12 @@ export default function App() {
         query: queryRef.current,
       })
         .then((p) => {
-          if (!stale) setPreview(p);
+          if (!stale) setPreview(key, p);
         })
         .catch(() => {
           // "none", not null: null means still loading, and a failed
           // fetch should fall back to the file details, not spin forever
-          if (!stale) setPreview({ kind: "none" });
+          if (!stale) setPreview(key, { kind: "none" });
         });
     }, delay);
     return () => {
@@ -1939,16 +1946,15 @@ export default function App() {
 
   // where the previewed file was downloaded from, if a browser recorded it
   // (origin.rs): a metadata read, no wait needed
-  const [origin, setOrigin] = useState<FileOrigin | null>(null);
   const originPath =
     previewOpen && selHit && (selHit.kind === "file" || selHit.kind === "video") ? selHit.path : null;
+  const [origin, setOrigin] = useKeyedState<FileOrigin | null>(originPath);
   useEffect(() => {
-    setOrigin(null);
     if (!originPath) return;
     let stale = false;
     invoke<FileOrigin | null>("file_origin", { path: originPath })
       .then((o) => {
-        if (!stale) setOrigin(o);
+        if (!stale) setOrigin(originPath, o);
       })
       .catch(() => {});
     return () => {
@@ -1958,16 +1964,15 @@ export default function App() {
 
   // a bookmark or history row: what the index knows about its address
   // (webinfo.rs), so a page you forgot is described without opening it
-  const [webInfo, setWebInfo] = useState<WebInfo | null>(null);
   const webUrl =
     previewOpen && selHit && (selHit.kind === "bookmark" || selHit.kind === "history") ? selHit.url : null;
+  const [webInfo, setWebInfo] = useKeyedState<WebInfo>(webUrl);
   useEffect(() => {
-    setWebInfo(null);
     if (!webUrl) return;
     let stale = false;
     invoke<WebInfo>("web_details", { url: webUrl })
       .then((w) => {
-        if (!stale) setWebInfo(w);
+        if (!stale) setWebInfo(webUrl, w);
       })
       .catch(() => {});
     return () => {
@@ -6253,6 +6258,19 @@ function PreviewPane({
           {highlightQuery(data.text, query)}
           {data.clipped_tail ? " …" : ""}
         </pre>
+      ) : hit.kind === "file" && data?.kind === "archive" && typeof data.text === "string" ? (
+        // a zip: what it holds, the name that matched in view
+        <>
+          <p className="pv-meta">
+            {tf("Files inside: {n}", { n: Number(data.files) })}
+            {data.encrypted ? ` · ${t("password-protected, names only")}` : ""}
+          </p>
+          <pre className="pv-text">
+            {data.clipped_head ? "…\n" : ""}
+            {highlightQuery(data.text, query)}
+            {data.clipped_tail ? "\n…" : ""}
+          </pre>
+        </>
       ) : hit.kind === "video" && data?.kind === "image" && typeof data.image === "string" ? (
         // a video the index has not cut into shots yet: one frame of it
         <img className="pv-image" src={`data:image/jpeg;base64,${data.image}`} alt="" />
