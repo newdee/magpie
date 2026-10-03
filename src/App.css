@@ -1628,6 +1628,13 @@ kbd.keys {
   max-width: 100%;
   border-radius: 8px;
 }
+/* "Downloaded from github.com", above whatever the file shows */
+.pv-origin {
+  margin: 0 0 8px;
+}
+.pv-origin .link-btn {
+  font-size: inherit;
+}
 /* the 96 px index thumbnail, stretched while the full image loads: blurred
    so it reads as "loading", not as a bad picture */
 .pv-placeholder {

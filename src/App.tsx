@@ -389,6 +389,13 @@ const WINDOW_WIDTH = 720;
 const PREVIEW_PANE_WIDTH = 372;
 const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
 
+/// Where a file was downloaded from (origin.rs): the host to show, and the
+/// page to open when one was recorded.
+interface FileOrigin {
+  host: string;
+  page: string | null;
+}
+
 /// One row of "Add common places" (common_places in lib.rs).
 interface CommonPlace {
   kind: string;
@@ -1874,6 +1881,25 @@ export default function App() {
       clearTimeout(t);
     };
   }, [previewOpen, previewKey]);
+
+  // where the previewed file was downloaded from, if a browser recorded it
+  // (origin.rs): a metadata read, no wait needed
+  const [origin, setOrigin] = useState<FileOrigin | null>(null);
+  const originPath =
+    previewOpen && selHit && (selHit.kind === "file" || selHit.kind === "video") ? selHit.path : null;
+  useEffect(() => {
+    setOrigin(null);
+    if (!originPath) return;
+    let stale = false;
+    invoke<FileOrigin | null>("file_origin", { path: originPath })
+      .then((o) => {
+        if (!stale) setOrigin(o);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [originPath]);
 
   // keep selection visible
   useEffect(() => {
@@ -5466,6 +5492,12 @@ export default function App() {
               clipShown={clipShown}
               revealed={revealed}
               onReveal={toggleReveal}
+              origin={origin}
+              onOpenPage={(url) => {
+                invoke("open_repo", { url })
+                  .then(() => finishAction())
+                  .catch((e) => setLastError(String(e)));
+              }}
             />
           )}
           </>
@@ -5920,6 +5952,8 @@ function PreviewPane({
   clipShown,
   revealed,
   onReveal,
+  origin,
+  onOpenPage,
 }: {
   hit: Hit | undefined;
   data: Record<string, unknown> | null;
@@ -5927,10 +5961,29 @@ function PreviewPane({
   clipShown: (c: ClipHit) => string;
   revealed: ReadonlySet<number>;
   onReveal: (id: number) => void;
+  origin: FileOrigin | null;
+  onOpenPage: (url: string) => void;
 }) {
   if (!hit) return <div className="preview-pane" />;
   return (
     <div className="preview-pane">
+      {origin && (hit.kind === "file" || hit.kind === "video") && (
+        <p className="pv-meta pv-origin">
+          {t("Downloaded from")}{" "}
+          {origin.page ? (
+            <button
+              className="link-btn"
+              title={origin.page}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onOpenPage(origin.page as string)}
+            >
+              {origin.host}
+            </button>
+          ) : (
+            origin.host
+          )}
+        </p>
+      )}
       {hit.kind === "clip" && hit.clip_kind === "image" ? (
         <>
           {data?.kind === "image" && typeof data.image === "string" ? (

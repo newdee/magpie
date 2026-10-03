@@ -242,6 +242,8 @@ vaguely remember (or drop in an image), hit Enter.
 - **A preview pane, one keypress away**: `→` shows the selected result in
   place: file text with your terms highlighted, full-size images, a video's
   shot strip, README head for repos, complete clips. Confirm before you open.
+  A downloaded file also says where it came from (*Downloaded from
+  github.com*) when the browser recorded it; a click opens that page.
 - **Yours to arrange**: reorder the tabs and pick which one opens on launch.
 - **It teaches itself**: the empty palette shows a one-line tip, a shortcut
   or a hidden trick, fresh on every summon (off-switch in settings).

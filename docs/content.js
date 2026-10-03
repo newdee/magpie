@@ -212,11 +212,11 @@ window.FEATURES = {
       tag: "Preview",
       en: {
         t: "Preview first",
-        d: "<kbd>→</kbd> opens a preview beside the list: file text with your terms highlighted, the full image, a video's shots, the top of a README.",
+        d: "<kbd>→</kbd> opens a preview beside the list: file text with your terms highlighted, the full image, a video's shots, the top of a README. A download also says which site it came from.",
       },
       zh: {
         t: "先看一眼，再打开",
-        d: "按 <kbd>→</kbd> 在列表旁展开预览：文件正文带高亮，图片看大图，视频看镜头，仓库看 README 开头。",
+        d: "按 <kbd>→</kbd> 在列表旁展开预览：文件正文带高亮，图片看大图，视频看镜头，仓库看 README 开头。下载来的文件还会显示是从哪个网站下的。",
       },
     },
   ],

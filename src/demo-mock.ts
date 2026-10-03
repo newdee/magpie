@@ -341,6 +341,11 @@ mockIPC((cmd, args) => {
       return { ...status };
     case "list_folders":
       return folders;
+    case "file_origin":
+      // downloaded PDFs say where they came from
+      return /\.pdf$/i.test((args as { path?: string })?.path ?? "")
+        ? { host: "arxiv.org", page: "https://arxiv.org/abs/2401.00001" }
+        : null;
     case "common_places": {
       // "Add common places": one of each state, against the demo folders
       const added = (p: string) => folders.some((f) => f.path === p);

@@ -59,11 +59,18 @@ dirs = "7.0.0"
 regex = "1"
 # 农历, 节气 and festivals, computed locally (chinese_calendar.rs); MIT
 tyme4rs = "1.5"
+# where a download came from (origin.rs); already in the tree via reqwest
+url = "2.5"
 
 # runs on the main thread from its own main(): AppKit requires it on macOS
 [[test]]
 name = "app_icons_main"
 harness = false
+
+[target.'cfg(unix)'.dependencies]
+# the download origin browsers leave in extended attributes (origin.rs);
+# already in the tree via tar (ffmpeg-sidecar)
+xattr = "1.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Linux loads Microsoft's libonnxruntime at run time instead of linking ort's

@@ -3762,7 +3762,9 @@ dependencies = [
  "trash",
  "tyme4rs",
  "ureq",
+ "url",
  "windows 0.61.3",
+ "xattr",
  "zip 8.6.0",
 ]
 

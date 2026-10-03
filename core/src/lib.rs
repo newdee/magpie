@@ -20,6 +20,7 @@ pub mod history;
 pub mod launch;
 pub mod ocr;
 pub mod onnx;
+pub mod origin;
 pub mod places;
 pub mod search;
 pub mod secrets;

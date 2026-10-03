@@ -165,6 +165,7 @@ const ZH: Record<string, string> = {
     "递归扫描；跳过隐藏文件及 gitignore 路径。",
   "Add folder": "添加文件夹",
   "Add common places…": "添加常用位置…",
+  "Downloaded from": "下载自",
   "Where downloads, screenshots and files from chat apps usually land. Tick the ones to index.":
     "下载、截图和聊天软件收到的文件通常存在这些地方。勾选要索引的。",
   "Looking for common places…": "正在查找常用位置…",

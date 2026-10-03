@@ -1609,6 +1609,23 @@ const RUNNABLE_EXTS: &[&str] = &[
     "app", "command", "sh", "run", "appimage", "desktop",
 ];
 
+/// Where a file was downloaded from, for the preview (see origin.rs). Only
+/// paths inside indexed folders or Downloads; the address is never logged.
+#[tauri::command]
+async fn file_origin(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Option<magpie_core::origin::Origin>, String> {
+    let allowed = {
+        let conn = state.db.lock().await;
+        files::path_is_allowed(&conn, &path).map_err(err_str)?
+    };
+    if !allowed {
+        return Err("path is outside indexed folders".into());
+    }
+    Ok(magpie_core::origin::of(std::path::Path::new(&path)))
+}
+
 /// Open an indexed file with its default app (the row's Enter reveals it in
 /// the folder instead). Only paths inside indexed folders, never programs.
 #[tauri::command]
@@ -5721,6 +5738,7 @@ pub fn run() {
             add_folder,
             add_folders,
             common_places,
+            file_origin,
             remove_folder,
             index_local,
             rebuild_folder,
