@@ -1664,6 +1664,20 @@ kbd.keys {
   max-width: 100%;
   border-radius: 8px;
 }
+/* a bookmark or history row: the site, what the page says about itself,
+   and where and when it was saved and visited */
+.pv-host {
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.pv-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 /* "Downloaded from github.com", above whatever the file shows */
 .pv-origin {
   margin: 0 0 8px;

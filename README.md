@@ -246,7 +246,11 @@ vaguely remember (or drop in an image), hit Enter.
   place: file text with your terms highlighted, full-size images, a video's
   shot strip, README head for repos, complete clips. Confirm before you open.
   A downloaded file also says where it came from (*Downloaded from
-  github.com*) when the browser recorded it; a click opens that page.
+  github.com*) when the browser recorded it; a click opens that page. A
+  bookmark or a page from history shows its site, the summary Firefox kept
+  for it, where you bookmarked it and when, and how often you visited, from
+  the earliest visit your browser still remembers to the latest; all of it
+  from your browsers' own files, nothing fetched.
 - **Yours to arrange**: reorder the tabs and pick which one opens on launch.
 - **It teaches itself**: the empty palette shows a one-line tip, a shortcut
   or a hidden trick, fresh on every summon (off-switch in settings).

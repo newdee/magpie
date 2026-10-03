@@ -41,4 +41,5 @@ pub mod transform;
 pub mod typed_path;
 pub mod tz;
 pub mod volume;
+pub mod webinfo;
 pub mod worktree;

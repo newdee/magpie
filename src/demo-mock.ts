@@ -351,6 +351,27 @@ mockIPC((cmd, args) => {
       return { ...status };
     case "list_folders":
       return folders;
+    case "web_details": {
+      // the local facts about an address: one bookmarked and often read,
+      // with the summary Firefox keeps; anything else just its site
+      const url = (args as { url: string }).url;
+      const host = (() => {
+        try {
+          return new URL(url).hostname.replace(/^www\./, "");
+        } catch {
+          return "";
+        }
+      })();
+      const rich = /rust-lang|tokio|github/.test(url);
+      return {
+        host,
+        bookmarks: rich ? [{ browser: "Firefox", folder: "Reading/Rust", added_at: 1_694_000_000 }] : [],
+        visits: rich ? 37 : 2,
+        first_visit: rich ? 1_662_000_000 : 1_756_000_000,
+        last_visit: Math.floor(Date.now() / 1000) - 3 * 86_400,
+        description: rich ? "The official guide: ownership, borrowing, lifetimes and the rest, chapter by chapter." : null,
+      };
+    }
     case "app_choices":
       return demoEditApps;
     case "get_edit_rules":

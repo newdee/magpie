@@ -353,6 +353,10 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
     conn.execute("CREATE INDEX IF NOT EXISTS idx_files_changed ON files(changed)", [])?;
+    // web preview details (#13): the earliest visit a browser still keeps,
+    // and the page summary Firefox records; filled by the next history sync
+    ensure_column(conn, "history", "first_visit", "INTEGER")?;
+    ensure_column(conn, "history", "description", "TEXT")?;
     // zips indexed before their entry lists were: once, mark them changed so
     // the next walk reads them again (the walk re-reads a file whose mtime
     // differs from the index's)

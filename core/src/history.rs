@@ -43,6 +43,21 @@ struct RawHistory {
     browser: String,
     visit_count: i64,
     last_visit: Option<i64>,
+    /// the earliest visit the browser still keeps (Chrome drops visits
+    /// after about 90 days, so this is not always the very first)
+    first_visit: Option<i64>,
+    /// the page's own summary, which Firefox keeps (`og:description`)
+    description: Option<String>,
+}
+
+/// A page summary as shown: trimmed, short, empty treated as none.
+fn tidy_description(d: Option<String>) -> Option<String> {
+    let d = d?;
+    let d = d.trim();
+    if d.is_empty() {
+        return None;
+    }
+    Some(d.chars().take(500).collect())
 }
 
 // ---------- parsing ----------
@@ -64,11 +79,15 @@ fn read_copy<T>(path: &Path, f: impl FnOnce(&Connection) -> Result<T>) -> Result
 
 fn parse_chromium(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
     read_copy(path, |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT url, IFNULL(title,''), visit_count, last_visit_time
+        // every Chromium keeps `visits`; a fork without it still reads
+        let has_visits = conn.prepare("SELECT visit_time FROM visits LIMIT 0").is_ok();
+        let sql = format!(
+            "SELECT url, IFNULL(title,''), visit_count, last_visit_time, {}
              FROM urls WHERE url LIKE 'http%' AND visit_count > 0
              ORDER BY visit_count DESC LIMIT ?1",
-        )?;
+            if has_visits { "(SELECT MIN(visit_time) FROM visits WHERE visits.url = urls.id)" } else { "NULL" }
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([TOP_PER_PROFILE as i64], |r| {
             Ok(RawHistory {
                 url: r.get(0)?,
@@ -76,6 +95,8 @@ fn parse_chromium(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Resu
                 browser: browser.to_string(),
                 visit_count: r.get(2)?,
                 last_visit: webkit_to_unix(r.get::<_, i64>(3)?),
+                first_visit: r.get::<_, Option<i64>>(4)?.and_then(webkit_to_unix),
+                description: None,
             })
         })?;
         for row in rows {
@@ -87,11 +108,19 @@ fn parse_chromium(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Resu
 
 fn parse_firefox(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Result<()> {
     read_copy(path, |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT url, IFNULL(title,''), visit_count, last_visit_date
+        // `description` arrived in Firefox 63; an older profile has none
+        let has_description = conn
+            .prepare("SELECT description FROM moz_places LIMIT 0")
+            .is_ok();
+        let sql = format!(
+            "SELECT url, IFNULL(title,''), visit_count, last_visit_date,
+                    (SELECT MIN(visit_date) FROM moz_historyvisits WHERE place_id = moz_places.id),
+                    {}
              FROM moz_places WHERE url LIKE 'http%' AND visit_count > 0
              ORDER BY visit_count DESC LIMIT ?1",
-        )?;
+            if has_description { "description" } else { "NULL" }
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([TOP_PER_PROFILE as i64], |r| {
             Ok(RawHistory {
                 url: r.get(0)?,
@@ -99,6 +128,8 @@ fn parse_firefox(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Resul
                 browser: browser.to_string(),
                 visit_count: r.get(2)?,
                 last_visit: r.get::<_, Option<i64>>(3)?.map(|m| m / 1_000_000),
+                first_visit: r.get::<_, Option<i64>>(4)?.map(|m| m / 1_000_000),
+                description: tidy_description(r.get(5)?),
             })
         })?;
         for row in rows {
@@ -109,6 +140,40 @@ fn parse_firefox(browser: &str, path: &Path, out: &mut Vec<RawHistory>) -> Resul
 }
 
 // ---------- sync ----------
+
+/// One row per (browser, url): two profiles of one browser (Chrome's
+/// "Default" and "Profile 1") both visiting a page used to overwrite each
+/// other, the last profile read winning. Visits add up, the latest visit
+/// and its title win, the earliest visit is the earliest of all, and a
+/// summary is kept from whichever profile has one.
+fn merge_profiles(raw: Vec<RawHistory>) -> Vec<RawHistory> {
+    let mut out: Vec<RawHistory> = Vec::with_capacity(raw.len());
+    let mut at: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    for h in raw {
+        match at.get(&(h.browser.clone(), h.url.clone())) {
+            None => {
+                at.insert((h.browser.clone(), h.url.clone()), out.len());
+                out.push(h);
+            }
+            Some(&i) => {
+                let m = &mut out[i];
+                m.visit_count += h.visit_count;
+                if h.last_visit > m.last_visit {
+                    m.last_visit = h.last_visit;
+                    m.title = h.title;
+                }
+                m.first_visit = match (m.first_visit, h.first_visit) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                if m.description.is_none() {
+                    m.description = h.description;
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Read every discovered history store and mirror the top pages into the index.
 pub fn sync_history(conn: &Connection) -> Result<HistoryReport> {
@@ -130,17 +195,20 @@ pub fn sync_history(conn: &Connection) -> Result<HistoryReport> {
         }
     }
 
+    let raw = merge_profiles(raw);
     let tx = crate::db::write_tx(conn)?;
     let mut seen = Vec::new();
     for h in &raw {
         tx.execute(
-            "INSERT INTO history(url, title, browser, visit_count, last_visit)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO history(url, title, browser, visit_count, last_visit, first_visit, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(browser, url) DO UPDATE SET
                 title = excluded.title,
                 visit_count = excluded.visit_count,
-                last_visit = excluded.last_visit",
-            params![h.url, h.title, h.browser, h.visit_count, h.last_visit],
+                last_visit = excluded.last_visit,
+                first_visit = excluded.first_visit,
+                description = excluded.description",
+            params![h.url, h.title, h.browser, h.visit_count, h.last_visit, h.first_visit, h.description],
         )?;
         let id: i64 = tx.query_row(
             "SELECT id FROM history WHERE browser=?1 AND url=?2",
@@ -340,6 +408,105 @@ pub fn history_count(conn: &Connection) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fake_db(name: &str, sql: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("magpie-hist-{name}-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let c = Connection::open(&p).unwrap();
+        c.execute_batch(sql).unwrap();
+        drop(c);
+        p
+    }
+
+    #[test]
+    fn two_profiles_of_one_browser_add_up() {
+        let r = |browser: &str, url: &str, title: &str, n: i64, last: Option<i64>, first: Option<i64>, d: Option<&str>| RawHistory {
+            url: url.into(),
+            title: title.into(),
+            browser: browser.into(),
+            visit_count: n,
+            last_visit: last,
+            first_visit: first,
+            description: d.map(str::to_string),
+        };
+        let merged = merge_profiles(vec![
+            r("chrome", "https://a/", "Old title", 3, Some(200), Some(50), None),
+            r("chrome", "https://b/", "B", 1, Some(10), None, None),
+            r("chrome", "https://a/", "New title", 4, Some(300), Some(80), Some("about a")),
+            r("edge", "https://a/", "Edge A", 7, Some(100), None, None),
+            r("chrome", "https://a/", "Third", 1, None, None, Some("ignored")),
+        ]);
+        assert_eq!(merged.len(), 3, "chrome a, chrome b, edge a");
+        let a = merged.iter().find(|h| h.browser == "chrome" && h.url == "https://a/").unwrap();
+        assert_eq!((a.visit_count, a.last_visit, a.first_visit), (8, Some(300), Some(50)));
+        assert_eq!((a.title.as_str(), a.description.as_deref()), ("New title", Some("about a")), "the latest visit's title; the first summary found");
+        let e = merged.iter().find(|h| h.browser == "edge").unwrap();
+        assert_eq!(e.visit_count, 7, "another browser stays apart");
+        assert_eq!(merged[1].url, "https://b/", "order of first appearance kept");
+    }
+
+    #[test]
+    fn chromium_earliest_kept_visit() {
+        // webkit micros for unix 1_600_000_000 and 1_700_000_000
+        let (w1, w2) = ((1_600_000_000i64 + 11_644_473_600) * 1_000_000, (1_700_000_000i64 + 11_644_473_600) * 1_000_000);
+        let p = fake_db(
+            "chrome",
+            &format!(
+                "CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER);
+                 CREATE TABLE visits(id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+                 INSERT INTO urls VALUES (1, 'https://a.example/', 'A', 2, {w2}), (2, 'https://b.example/', 'B', 1, {w2});
+                 INSERT INTO visits(url, visit_time) VALUES (1, {w2}), (1, {w1});"
+            ),
+        );
+        let mut out = Vec::new();
+        parse_chromium("chrome", &p, &mut out).unwrap();
+        let a = out.iter().find(|h| h.url == "https://a.example/").unwrap();
+        assert_eq!((a.first_visit, a.last_visit, a.description.as_deref()), (Some(1_600_000_000), Some(1_700_000_000), None));
+        let b = out.iter().find(|h| h.url == "https://b.example/").unwrap();
+        assert_eq!(b.first_visit, None, "no visits kept");
+        // a fork without `visits` still reads
+        let p2 = fake_db(
+            "fork",
+            &format!("CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER);
+                      INSERT INTO urls VALUES (1, 'https://a.example/', 'A', 2, {w2});"),
+        );
+        let mut out2 = Vec::new();
+        parse_chromium("fork", &p2, &mut out2).unwrap();
+        assert_eq!((out2.len(), out2[0].first_visit), (1, None));
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&p2);
+    }
+
+    #[test]
+    fn firefox_first_visit_and_description() {
+        let schema = |desc: bool| {
+            format!(
+                "CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_date INTEGER{});
+                 CREATE TABLE moz_historyvisits(id INTEGER PRIMARY KEY, place_id INTEGER, visit_date INTEGER);
+                 INSERT INTO moz_historyvisits(place_id, visit_date) VALUES (1, 1700000000000000), (1, 1500000000000000);",
+                if desc { ", description TEXT" } else { "" }
+            )
+        };
+        let p = fake_db(
+            "ff",
+            &(schema(true)
+                + "INSERT INTO moz_places VALUES (1, 'https://a.example/', 'A', 2, 1700000000000000, '  A page about things.  '),
+                                                 (2, 'https://b.example/', 'B', 1, 1700000000000000, '   ');"),
+        );
+        let mut out = Vec::new();
+        parse_firefox("firefox", &p, &mut out).unwrap();
+        let a = out.iter().find(|h| h.url == "https://a.example/").unwrap();
+        assert_eq!((a.first_visit, a.last_visit), (Some(1_500_000_000), Some(1_700_000_000)));
+        assert_eq!(a.description.as_deref(), Some("A page about things."), "trimmed");
+        assert_eq!(out.iter().find(|h| h.url == "https://b.example/").unwrap().description, None, "blank is none");
+        // a profile from before Firefox 63: no description column
+        let p2 = fake_db("ff-old", &(schema(false) + "INSERT INTO moz_places VALUES (1, 'https://a.example/', 'A', 2, 1700000000000000);"));
+        let mut out2 = Vec::new();
+        parse_firefox("firefox", &p2, &mut out2).unwrap();
+        assert_eq!((out2[0].first_visit, out2[0].description.clone()), (Some(1_500_000_000), None));
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&p2);
+    }
 
     #[test]
     fn history_roundtrip_and_fts() {

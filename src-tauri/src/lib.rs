@@ -1616,6 +1616,15 @@ const RUNNABLE_EXTS: &[&str] = &[
     "app", "command", "sh", "run", "appimage", "desktop",
 ];
 
+/// What the index knows about a web address, for the preview of a bookmark
+/// or history row (#13): read from the browsers' mirrored data, never from
+/// the web.
+#[tauri::command]
+async fn web_details(state: State<'_, AppState>, url: String) -> Result<magpie_core::webinfo::WebInfo, String> {
+    let conn = state.db.lock().await;
+    magpie_core::webinfo::of(&conn, &url).map_err(err_str)
+}
+
 /// Where a file was downloaded from, for the preview (see origin.rs). Only
 /// paths inside indexed folders or Downloads; the address is never logged.
 #[tauri::command]
@@ -5804,6 +5813,7 @@ pub fn run() {
             add_folders,
             common_places,
             file_origin,
+            web_details,
             app_choices,
             get_edit_rules,
             set_edit_rules,

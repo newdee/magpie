@@ -389,6 +389,16 @@ const WINDOW_WIDTH = 720;
 const PREVIEW_PANE_WIDTH = 372;
 const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
 
+/// What the index knows about a web address (webinfo.rs).
+interface WebInfo {
+  host: string;
+  bookmarks: { browser: string; folder: string; added_at: number | null }[];
+  visits: number;
+  first_visit: number | null;
+  last_visit: number | null;
+  description: string | null;
+}
+
 /// Where a file was downloaded from (origin.rs): the host to show, and the
 /// page to open when one was recorded.
 interface FileOrigin {
@@ -1945,6 +1955,25 @@ export default function App() {
       stale = true;
     };
   }, [originPath]);
+
+  // a bookmark or history row: what the index knows about its address
+  // (webinfo.rs), so a page you forgot is described without opening it
+  const [webInfo, setWebInfo] = useState<WebInfo | null>(null);
+  const webUrl =
+    previewOpen && selHit && (selHit.kind === "bookmark" || selHit.kind === "history") ? selHit.url : null;
+  useEffect(() => {
+    setWebInfo(null);
+    if (!webUrl) return;
+    let stale = false;
+    invoke<WebInfo>("web_details", { url: webUrl })
+      .then((w) => {
+        if (!stale) setWebInfo(w);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [webUrl]);
 
   // keep selection visible
   useEffect(() => {
@@ -5633,6 +5662,7 @@ export default function App() {
               revealed={revealed}
               onReveal={toggleReveal}
               origin={origin}
+              webInfo={webInfo}
               onOpenPage={(url) => {
                 invoke("open_repo", { url })
                   .then(() => finishAction())
@@ -6093,6 +6123,7 @@ function PreviewPane({
   revealed,
   onReveal,
   origin,
+  webInfo,
   onOpenPage,
 }: {
   hit: Hit | undefined;
@@ -6102,6 +6133,7 @@ function PreviewPane({
   revealed: ReadonlySet<number>;
   onReveal: (id: number) => void;
   origin: FileOrigin | null;
+  webInfo: WebInfo | null;
   onOpenPage: (url: string) => void;
 }) {
   if (!hit) return <div className="preview-pane" />;
@@ -6158,12 +6190,34 @@ function PreviewPane({
       ) : hit.kind === "bookmark" || hit.kind === "history" ? (
         <>
           <p className="pv-title">{hit.title || hit.url}</p>
+          {webInfo?.host && <p className="pv-host">{webInfo.host}</p>}
           <p className="pv-link">{hit.url}</p>
-          <p className="pv-meta">
-            {hit.kind === "bookmark"
-              ? `${t("Bookmark")} · ${hit.folder || "—"} · ${hitBrowsers(hit).join(", ")}`
-              : `${t("History")} · ${hit.visit_count}× · ${hitBrowsers(hit).join(", ")}`}
-          </p>
+          {webInfo?.description && <p className="pv-desc">{webInfo.description}</p>}
+          {webInfo ? (
+            <div className="pv-facts">
+              {webInfo.bookmarks.map((b, i) => (
+                <p key={i} className="pv-meta">
+                  {tf("Bookmarked in {where}", { where: [b.browser, b.folder].filter(Boolean).join(" › ") })}
+                  {b.added_at != null && ` · ${new Date(b.added_at * 1000).toISOString().slice(0, 10)}`}
+                </p>
+              ))}
+              {webInfo.visits > 0 && (
+                <p className="pv-meta">
+                  {tf("Visited {n} times", { n: webInfo.visits })}
+                  {webInfo.first_visit != null &&
+                    ` · ${tf("earliest on record {d}", { d: new Date(webInfo.first_visit * 1000).toISOString().slice(0, 10) })}`}
+                  {webInfo.last_visit != null &&
+                    ` · ${tf("latest {d}", { d: new Date(webInfo.last_visit * 1000).toISOString().slice(0, 10) })}`}
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="pv-meta">
+              {hit.kind === "bookmark"
+                ? `${t("Bookmark")} · ${hit.folder || "—"} · ${hitBrowsers(hit).join(", ")}`
+                : `${t("History")} · ${hit.visit_count}× · ${hitBrowsers(hit).join(", ")}`}
+            </p>
+          )}
         </>
       ) : hit.kind === "app" ? (
         <>
