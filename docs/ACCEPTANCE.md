@@ -1,3 +1,38 @@
+# 验收记录 2026-10-03（Ctrl+E / ⌘E 用选定的软件编辑，#14）
+
+## 实现
+
+- `core/src/edit.rs`：规则表「扩展名 → 应用」（meta `edit_with`，JSON）；默认一行图片扩展名（png jpg jpeg gif
+  webp bmp tif tiff heic psd）、未选应用；扩展名规范化（小写、去点、去重，带 `/` 或 `.` 的丢弃）；`app_for` 取第一行
+  列出该扩展名且选了应用的。`launch::default_edit`：Windows 用 shell 的 `edit` 动词，无关联（31）退回 `open`；macOS
+  `open`，Linux `xdg-open`。
+- 后端 `app_choices`、`get_edit_rules`、`set_edit_rules`（保存时不拒绝已卸载的应用，免得表存不了）、`edit_file`
+  （只在索引目录内；只运行安装列表里的应用，否则退回系统编辑）。`edit_with` 纳入设置导出。
+- 前端：设置 → 本地文件「编辑用的软件」表（扩展名输入、应用下拉含「系统默认」与「（未安装）」、删除、添加类型）；
+  Ctrl+E / ⌘E；Ctrl+K 菜单加「用 X 编辑」/「编辑」并标出快捷键（`RowAction.shortcut`）。README 中英文、站点同步。
+
+## 开发中发现并修复
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 1 | clippy：`iter().any(== )` | `contains` |
+| 2 | 保存时校验「必须是已安装应用」会让带旧条目（卸载或导入）的表整张存不了 | 保存只整理扩展名，执行时才检查是否已安装 |
+| 3 | 样式替换脚本按 LF 匹配，文件是 CRLF，未生效 | 改用编辑工具 |
+| 4 | T55 期望值没考虑 dry run 里参数按 Debug 引号输出（反斜杠成双） | 按 JSON 引号比对 |
+
+## 三轮
+
+- R1（静态 + 回归）：cargo test 全过（core 222 + 2 忽略、magpie 44）；clippy 0；tsc 0；a1、文档对照 0 FAIL；
+  CI 82faff8 macOS / Linux 绿；demo T37 62/62、T50 18/18、T54（e2e/t54-edit-demo.mjs）14/14；真机 T42 4/4、T44 4/4、
+  T46 7/7、T48 8/8、T49 5/5、T51 14/14、T52 7/7、T53 5/5、T55（e2e/t55-edit-real.*）7/7、T38 59/59。
+- R2（机制存活）：edit.rs 变异 4 处（空应用也算、扩展名不转小写、不去点、解析失败不回默认）全被抓到 4/4；T55 7/7
+  （其中「表里的应用未安装时退回系统编辑」验证执行时的检查）；T54 14/14。
+- R3（可复现）：T55 连跑 3 次 66CE807EB3BA6AFB；T54 连跑 3 次 B14DE5D643BFD6F5。
+
+遗留：真正调用 Windows `edit` 动词及无关联时退回 `open` 只在 dry run 下走过（实测会在用户会话里打开画图 / 记事本并改动
+其状态，未做）；macOS / Linux 只经 CI 编译与单测。
+
+---
 # 验收记录 2026-10-03（预览显示下载来源）
 
 ## 实现
