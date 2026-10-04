@@ -78,9 +78,11 @@ vaguely remember (or drop in an image), hit Enter.
   dropped image or a description finds the exact scene, with its time range.
 - **A real app launcher**: type an app name (prefix, substring, or acronym
   like `vsc`) and `Enter` launches it from the Start Menu, `/Applications`,
-  or a Linux `.desktop` entry. Chinese app names match by pinyin too: `wx`,
-  `weixin`, or `txhy` launch 微信 and 腾讯会议 without switching your input
-  method.
+  or a Linux `.desktop` entry. Windows Store apps are there too (Notepad,
+  Calculator, Paint, Terminal, Settings); Windows' own ones answer to their
+  English and Chinese names whatever the system language. Chinese app names
+  match by pinyin too: `wx`, `weixin`, or `txhy` launch 微信 and 腾讯会议
+  without switching your input method.
 - **Speaks your language**: the whole UI (tray menu included) is available in
   English and 简体中文, following your OS by default and switchable in
   settings.
