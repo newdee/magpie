@@ -43,4 +43,5 @@ pub mod typed_path;
 pub mod tz;
 pub mod volume;
 pub mod webinfo;
+pub mod workspace;
 pub mod worktree;

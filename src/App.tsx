@@ -238,6 +238,26 @@ interface ProcessHit {
   group?: { count: number; memory: number };
 }
 
+/// One thing in a workspace (workspace.rs): a file opens in its default
+/// app, an app launches, a url opens in the browser.
+interface WsItem {
+  kind: "file" | "app" | "url";
+  target: string;
+  title: string;
+}
+
+interface Workspace {
+  name: string;
+  items: WsItem[];
+  updated: number;
+}
+
+/// A workspace matching the query: Enter opens everything in it.
+interface WorkspaceHit extends Workspace {
+  kind: "workspace";
+  score: number;
+}
+
 type Hit =
   | RepoHit
   | FileHit
@@ -247,7 +267,26 @@ type Hit =
   | AppHit
   | VideoHit
   | CommandHit
-  | ProcessHit;
+  | ProcessHit
+  | WorkspaceHit;
+
+/// What a row adds to a workspace, if it can be in one.
+function wsItemOf(h: Hit): WsItem | null {
+  switch (h.kind) {
+    case "file":
+    case "video":
+      return { kind: "file", target: h.path, title: h.name };
+    case "app":
+      return { kind: "app", target: h.target, title: h.name };
+    case "bookmark":
+    case "history":
+      return { kind: "url", target: h.url, title: h.title || h.url };
+    case "repo":
+      return { kind: "url", target: h.html_url, title: h.full_name };
+    default:
+      return null;
+  }
+}
 
 /// The recall card's line: when it was kept, in the words of its kind.
 function recallText(r: Recall, kind: "bookmark" | "repo"): string {
@@ -272,6 +311,8 @@ function hitKey(r: Hit): string {
       return `command-${r.id}`;
     case "process":
       return `process-${r.pid}`;
+    case "workspace":
+      return `workspace-${r.name.toLowerCase()}`;
     default:
       return `${r.kind}-${r.id}`;
   }
@@ -995,6 +1036,7 @@ export default function App() {
   const hidePalette = useCallback(async () => {
     await getCurrentWindow().hide();
     setPreviewOpen(false);
+    setWsNaming(null);
   }, []);
 
   // sync the tray language once at startup ("auto" resolves per OS locale)
@@ -1021,6 +1063,17 @@ export default function App() {
   const [bangHit, setBangHit] = useState<BangMatch | null>(null);
   // `note …`: Enter appends the text to the notes file instead of searching
   const [noteHit, setNoteHit] = useState<NoteMatch | null>(null);
+  // workspaces (workspace.rs): the list for the "Add to workspace" actions,
+  // and the item waiting for a new workspace's name while the box asks for it
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const loadWorkspaces = useCallback(
+    () => invoke<Workspace[]>("list_workspaces").then(setWorkspaces).catch(() => {}),
+    [],
+  );
+  useEffect(() => {
+    void loadWorkspaces();
+  }, [loadWorkspaces]);
+  const [wsNaming, setWsNaming] = useState<WsItem | null>(null);
   const [recentsOn, setRecentsOn] = useState(recentsEnabled);
   const [recallOn, setRecallOn] = useState(recallEnabled);
   // settings drafts for the selection-search chord and the notes file
@@ -1352,17 +1405,19 @@ export default function App() {
         const live = () => seq === searchSeqRef.current && sourceRef.current === srcIdx;
         let apps: Hit[] | null = null;
         let cmds: Hit[] | null = null;
+        let wss: Hit[] | null = null;
         let files: Hit[] | null = null;
         let painted = false;
         let shown: Hit[] | null = null; // the list this search last handed to React
         const paint = () => {
           if (!live()) return;
-          // system commands and apps share one scale; the better match leads
-          const top = [...(cmds ?? []), ...(apps ?? [])].sort(
+          // workspaces, system commands and apps share one scale; the better
+          // match leads (a stable sort: a workspace wins a tie)
+          const top = [...(wss ?? []), ...(cmds ?? []), ...(apps ?? [])].sort(
             (a, b) => (b as { score: number }).score - (a as { score: number }).score,
           );
           const list = [...top, ...(files ?? [])];
-          const allIn = apps !== null && cmds !== null && files !== null;
+          const allIn = apps !== null && cmds !== null && wss !== null && files !== null;
           // nothing to show yet: keep the previous list rather than blank it
           if (list.length === 0 && !allIn) return;
           // a refresh keeps the list on screen until all of it is in, so the
@@ -1406,6 +1461,12 @@ export default function App() {
             .catch(() => [] as Omit<CommandHit, "kind">[])
             .then((c) => {
               cmds = c.map((x) => ({ ...x, kind: "command" as const }));
+              paint();
+            }),
+          invoke<Omit<WorkspaceHit, "kind">[]>("search_workspaces", { query: q })
+            .catch(() => [] as Omit<WorkspaceHit, "kind">[])
+            .then((w) => {
+              wss = w.map((x) => ({ ...x, kind: "workspace" as const }));
               paint();
             }),
           invoke<Hit[]>("search_local", { query: q, scope: localScopeRef.current })
@@ -1743,7 +1804,10 @@ export default function App() {
         refreshStatus();
         refreshResults();
       }),
-      listen("palette-hidden", () => setPreviewOpen(false)),
+      listen("palette-hidden", () => {
+        setPreviewOpen(false);
+        setWsNaming(null); // an unnamed new workspace is dropped with the palette
+      }),
       listen("palette-shown", () => {
         // hidden by something outside magpie (the OS, another tool): the
         // pane goes now, at the cost of a frame or two of it on screen
@@ -2128,6 +2192,23 @@ export default function App() {
       await runRisky(hit);
       return;
     }
+    if (hit.kind === "workspace") {
+      // everything in it opens; what could not is named, and the palette
+      // stays so the user sees it
+      try {
+        const report = await invoke<string[]>("open_workspace", { name: hit.name });
+        if (report.length === 0) {
+          await finishAction();
+        } else if (report.every((r) => r.startsWith("dry run:"))) {
+          setNotice(report.join("\n"));
+        } else {
+          setLastError(tf("Some could not open: {list}", { list: report.join("; ") }));
+        }
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return;
+    }
     // frecency: remember what actually gets opened (stable identity per kind)
     const frecencyKey =
       hit.kind === "app"
@@ -2416,15 +2497,92 @@ export default function App() {
             { key: "copy-pid", label: t("Copy PID"), run: () => copy(String(hit.pid)) },
             ...(hit.exe ? [{ key: "copy-path", label: t("Copy path"), run: () => copy(hit.exe ?? "") }] : []),
           ];
+        case "workspace": {
+          const changed = () => {
+            void loadWorkspaces();
+            refresh();
+          };
+          return [
+            { key: "open", label: t("Open everything"), run: () => openHit(hit) },
+            ...hit.items.map((it, i) => ({
+              key: `ws-out-${i}`,
+              label: tf("Take “{title}” out", { title: it.title }),
+              run: () => act(invoke("workspace_remove_item", { name: hit.name, kind: it.kind, target: it.target }).then(changed)),
+            })),
+            {
+              key: "ws-delete",
+              label: t("Delete this workspace"),
+              risky: true,
+              run: async () => {
+                const k = hitKey(hit);
+                if (armedRef.current !== k) {
+                  setArmed(k);
+                  return;
+                }
+                setArmed(null);
+                await act(invoke("workspace_delete", { name: hit.name }).then(changed));
+              },
+            },
+          ];
+        }
       }
     },
-    [openHit, runRisky, finishAction, refreshResults, editors, revealed, toggleReveal, editAppName, editFile],
+    [openHit, runRisky, finishAction, refreshResults, editors, revealed, toggleReveal, editAppName, editFile, loadWorkspaces],
   );
 
-  const menuActions = useMemo(
-    () => (actionsOpen && results[selected] ? rowActions(results[selected]) : []),
-    [actionsOpen, results, selected, rowActions],
+  // the add-to-workspace entries any openable row gets: the three most
+  // recent workspaces by name, then a new one (the box asks for its name)
+  const wsActions = useCallback(
+    (item: WsItem): RowAction[] => [
+      ...workspaces.slice(0, 3).map((w) => ({
+        key: `ws-add-${w.name}`,
+        label: tf("Add to workspace “{name}”", { name: w.name }),
+        run: async () => {
+          try {
+            const saved = await invoke<Workspace>("workspace_add", { name: w.name, item });
+            setNotice(tf("“{name}” now holds {n}", { name: saved.name, n: saved.items.length }));
+            void loadWorkspaces();
+          } catch (e) {
+            setLastError(String(e));
+          }
+        },
+      })),
+      {
+        key: "ws-new",
+        label: t("Add to a new workspace…"),
+        run: () => {
+          setWsNaming(item);
+          setQuery("");
+          inputRef.current?.focus();
+        },
+      },
+    ],
+    [workspaces, loadWorkspaces],
   );
+
+  const menuActions = useMemo(() => {
+    if (!actionsOpen || !results[selected]) return [];
+    const hit = results[selected];
+    const item = wsItemOf(hit);
+    return item ? [...rowActions(hit), ...wsActions(item)] : rowActions(hit);
+  }, [actionsOpen, results, selected, rowActions, wsActions]);
+
+  // Enter while the box asks for a new workspace's name: make it with the
+  // waiting item in it (an existing name just takes the item)
+  const saveWsName = useCallback(async () => {
+    const item = wsNaming;
+    const name = queryRef.current.trim();
+    if (!item || !name) return;
+    try {
+      const saved = await invoke<Workspace>("workspace_add", { name, item });
+      setWsNaming(null);
+      setQuery("");
+      setNotice(tf("“{name}” now holds {n}", { name: saved.name, n: saved.items.length }));
+      void loadWorkspaces();
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, [wsNaming, loadWorkspaces]);
 
   // the menu belongs to one row: it closes when the selection moves to another
   useEffect(() => {
@@ -2718,7 +2876,10 @@ export default function App() {
           break;
         case "Enter":
           e.preventDefault();
-          if (emojiHits && emojiHits.length > 0) {
+          if (wsNaming && !e.ctrlKey && !e.metaKey) {
+            // the box is asking for a new workspace's name
+            void saveWsName();
+          } else if (emojiHits && emojiHits.length > 0) {
             // emoji mode: Enter copies the first match (click copies any)
             void invoke("copy_clip", { text: emojiHits[0].emoji }).then(finishAction);
           } else if (topRowActive && noteHit && !e.ctrlKey && !e.metaKey) {
@@ -2811,7 +2972,10 @@ export default function App() {
         }
         case "Escape":
           e.preventDefault();
-          if (imageQuery) {
+          if (wsNaming) {
+            setWsNaming(null); // no new workspace after all
+            setQuery("");
+          } else if (imageQuery) {
             setImageQuery(null); // first Esc clears the image query
           } else if (showSettings) {
             setShowSettings(false); // then close settings, then hide
@@ -2846,7 +3010,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, editFile, finishAction, actionsOpen, actionSel, menuActions, runMenuAction],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, editFile, finishAction, actionsOpen, actionSel, menuActions, runMenuAction, wsNaming, saveWsName],
   );
 
   const refresh = useCallback(async () => {
@@ -5372,7 +5536,7 @@ export default function App() {
           ))}
         </div>
       ) : (
-        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null) && (
+        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null) && (
           <>
           <div
             className="body-row"
@@ -5421,6 +5585,25 @@ export default function App() {
                   <span className="row-sub">{bangHit.url}</span>
                 </div>
                 <span className="badge">{t("web")}</span>
+              </div>
+            )}
+            {wsNaming && (
+              // the box is asking for a new workspace's name; Enter makes it
+              <div className="row extra-row selected ws-naming" onClick={() => void saveWsName()}>
+                <div className="row-lead">
+                  <span className="app-icon cmd-glyph">🗂️</span>
+                  <div className="row-main">
+                    <span className="row-title">
+                      {query.trim()
+                        ? tf("New workspace “{name}”", { name: query.trim() })
+                        : t("Type a name for the new workspace")}
+                    </span>
+                    <span className="row-sub">
+                      {tf("Enter puts “{title}” in it · Esc cancels", { title: wsNaming.title })}
+                    </span>
+                  </div>
+                </div>
+                <span className="badge">{t("Workspace")}</span>
               </div>
             )}
             {noteHit && (
@@ -5507,7 +5690,7 @@ export default function App() {
               <div
                 key={hitKey(r)}
                 data-idx={i}
-                className={`row ${i >= selLo && i <= selHi && !(topRowActive && (calcHit || bangHit)) ? "selected" : ""} ${armed === hitKey(r) ? "armed" : ""}`}
+                className={`row ${i >= selLo && i <= selHi && !(topRowActive && (calcHit || bangHit)) && !wsNaming ? "selected" : ""} ${armed === hitKey(r) ? "armed" : ""}`}
                 onMouseMove={() => {
                   // hover selects only when the pointer really moved: a
                   // move event at the same spot (a touchpad twitch, or the
@@ -5534,6 +5717,23 @@ export default function App() {
                     </div>
                     <div className="row-meta">
                       <span className="app-badge">{t("Command")}</span>
+                    </div>
+                  </>
+                ) : r.kind === "workspace" ? (
+                  <>
+                    <div className="row-lead">
+                      <span className="app-icon cmd-glyph">🗂️</span>
+                      <div className="row-main">
+                        <span className="row-title">{r.name}</span>
+                        <span className="row-sub">
+                          {armed === hitKey(r)
+                            ? t("Press Enter again to confirm")
+                            : `${tf("Opens {n}", { n: r.items.length })} · ${r.items.map((it) => it.title).join(", ")}`}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="row-meta">
+                      <span className="app-badge">{t("Workspace")}</span>
                     </div>
                   </>
                 ) : r.kind === "process" ? (
@@ -5787,7 +5987,7 @@ export default function App() {
         )
       )}
 
-      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && !noteHit && (
+      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && !noteHit && !wsNaming && (
         <div className="empty">
           {source === "github-stars"
             ? t("No matches in your stars")
@@ -6336,6 +6536,19 @@ function PreviewPane({
         <>
           <p className="pv-title">{hit.name}</p>
           <p className="pv-meta mono-wrap">{hit.target}</p>
+        </>
+      ) : hit.kind === "workspace" ? (
+        <>
+          <p className="pv-title">{hit.name}</p>
+          <p className="pv-meta">{tf("Opens {n}", { n: hit.items.length })}</p>
+          <ul className="pv-ws">
+            {hit.items.map((it) => (
+              <li key={`${it.kind}-${it.target}`}>
+                <span className="pv-ws-title">{it.title}</span>
+                <span className="pv-meta mono-wrap">{it.target}</span>
+              </li>
+            ))}
+          </ul>
         </>
       ) : hit.kind === "repo" && data?.kind === "repo" ? (
         <>

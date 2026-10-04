@@ -1023,6 +1023,23 @@ input.query:active {
   min-width: 0;
   padding: 4px 6px;
 }
+/* a workspace's preview: what Enter opens, in order */
+.pv-ws {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pv-ws li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pv-ws-title {
+  font-size: 13px;
+}
 /* the daily recall card's "kept N years ago" */
 .recall-tag {
   color: var(--accent);

@@ -35,6 +35,17 @@ let demoEditRules: { exts: string[]; app: string }[] = [
   { exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "psd"], app: "" },
 ];
 let demoRecallSkipped = false;
+let demoWorkspaces: { name: string; items: { kind: string; target: string; title: string }[]; updated: number }[] = [
+  {
+    name: "论文",
+    items: [
+      { kind: "file", target: "C:\\Users\\dfine\\Documents\\projects\\paper\\rag-survey.pdf", title: "rag-survey.pdf" },
+      { kind: "file", target: "C:\\Users\\dfine\\Documents\\projects\\notes\\vector-search.md", title: "vector-search.md" },
+      { kind: "url", target: "https://sqlite.org/fts5.html", title: "SQLite FTS5 Extension" },
+    ],
+    updated: 1,
+  },
+];
 
 /// like edit.rs `view`: per row, the extensions another row decides
 function demoRuleView() {
@@ -482,6 +493,52 @@ mockIPC((cmd, args) => {
       return ql && ("vector search".startsWith(ql) || ql.includes("vector"))
         ? fileHits.map((f) => ({ kind: "file", ...f }))
         : [];
+    }
+    // workspaces, in memory, by workspace.rs's rules
+    case "list_workspaces":
+      return [...demoWorkspaces].sort((a, b) => b.updated - a.updated);
+    case "search_workspaces": {
+      const q = String((args as { query?: string }).query ?? "").trim().toLowerCase();
+      if (!q) return [];
+      const all = [...demoWorkspaces].sort((a, b) => b.updated - a.updated);
+      if (["ws", "workspace", "workspaces", "现场", "工作现场"].includes(q)) return all.map((w) => ({ ...w, score: 0.95 }));
+      return all
+        .map((w) => {
+          const n = w.name.toLowerCase();
+          const score = n === q ? 1 : n.startsWith(q) ? 0.9 : n.includes(q) ? 0.7 : 0;
+          return { ...w, score };
+        })
+        .filter((w) => w.score > 0)
+        .sort((a, b) => b.score - a.score);
+    }
+    case "workspace_add": {
+      const a = args as { name: string; item: { kind: string; target: string; title: string } };
+      const name = a.name.split(/\s+/).filter(Boolean).join(" ").slice(0, 60);
+      let w = demoWorkspaces.find((x) => x.name.toLowerCase() === name.toLowerCase());
+      if (!w) {
+        w = { name, items: [], updated: 0 };
+        demoWorkspaces.push(w);
+      }
+      if (!w.items.some((i) => i.kind === a.item.kind && i.target === a.item.target)) w.items.push(a.item);
+      w.updated = Date.now();
+      return w;
+    }
+    case "workspace_remove_item": {
+      const a = args as { name: string; kind: string; target: string };
+      const w = demoWorkspaces.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
+      if (w) w.items = w.items.filter((i) => !(i.kind === a.kind && i.target === a.target));
+      demoWorkspaces = demoWorkspaces.filter((x) => x.items.length > 0);
+      return null;
+    }
+    case "workspace_delete": {
+      const name = (args as { name: string }).name.toLowerCase();
+      demoWorkspaces = demoWorkspaces.filter((x) => x.name.toLowerCase() !== name);
+      return null;
+    }
+    case "open_workspace": {
+      const name = (args as { name: string }).name.toLowerCase();
+      const w = demoWorkspaces.find((x) => x.name.toLowerCase() === name);
+      return w ? w.items.map((i) => `dry run: open ${i.kind} ${i.target}`) : [];
     }
     case "recall_today":
       // the empty box's card from long ago: a bookmark kept two years ago today

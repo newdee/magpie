@@ -271,6 +271,7 @@ const EXPORTABLE_META: &[&str] = &[
     "term_notify",
     magpie_core::semantic::META_KEY,
     magpie_core::edit::META_KEY,
+    magpie_core::workspace::META_KEY,
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -1438,6 +1439,125 @@ async fn recall_today(state: State<'_, AppState>) -> Result<Option<serde_json::V
     };
     row["recall"] = serde_json::to_value(&pick.why).map_err(err_str)?;
     Ok(Some(row))
+}
+
+// ---------- workspaces (workspace.rs) ----------
+
+/// A workspace as a result row: its name, what is in it, the match score.
+#[derive(serde::Serialize)]
+struct WorkspaceHit {
+    #[serde(flatten)]
+    ws: magpie_core::workspace::Workspace,
+    score: f32,
+}
+
+#[tauri::command]
+async fn search_workspaces(state: State<'_, AppState>, query: String) -> Result<Vec<WorkspaceHit>, String> {
+    let conn = state.db.lock().await;
+    Ok(magpie_core::workspace::search(&conn, &query)
+        .map_err(err_str)?
+        .into_iter()
+        .map(|(ws, score)| WorkspaceHit { ws, score })
+        .collect())
+}
+
+#[tauri::command]
+async fn list_workspaces(state: State<'_, AppState>) -> Result<Vec<magpie_core::workspace::Workspace>, String> {
+    let conn = state.db.lock().await;
+    magpie_core::workspace::list(&conn).map_err(err_str)
+}
+
+#[tauri::command]
+async fn workspace_add(
+    state: State<'_, AppState>,
+    name: String,
+    item: magpie_core::workspace::Item,
+) -> Result<magpie_core::workspace::Workspace, String> {
+    let conn = state.db.lock().await;
+    magpie_core::workspace::add(&conn, &name, item, unix_now()).map_err(err_str)
+}
+
+#[tauri::command]
+async fn workspace_remove_item(state: State<'_, AppState>, name: String, kind: String, target: String) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    magpie_core::workspace::remove_item(&conn, &name, &kind, &target, unix_now()).map_err(err_str)
+}
+
+#[tauri::command]
+async fn workspace_delete(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    magpie_core::workspace::delete(&conn, &name).map_err(err_str)
+}
+
+/// Open everything in a workspace, in its order, by the same rules as
+/// opening each one alone: files only inside indexed folders and never a
+/// program, apps only while installed, pages only over http(s). One that
+/// cannot open does not stop the rest; the answer lists those (and, under
+/// `MAGPIE_OPEN_DRYRUN`, what would have opened). The palette goes away
+/// once everything opened.
+#[tauri::command]
+async fn open_workspace(app: AppHandle, state: State<'_, AppState>, name: String) -> Result<Vec<String>, String> {
+    let ws = {
+        let conn = state.db.lock().await;
+        magpie_core::workspace::list(&conn)
+            .map_err(err_str)?
+            .into_iter()
+            .find(|w| w.name.to_lowercase() == name.to_lowercase())
+            .ok_or("no such workspace")?
+    };
+    let dry = open_dry_run();
+    let mut report = Vec::new();
+    for item in &ws.items {
+        let t = item.target.as_str();
+        let outcome: Result<(), String> = match item.kind.as_str() {
+            "file" => {
+                let allowed = {
+                    let conn = state.db.lock().await;
+                    files::path_is_allowed(&conn, t).map_err(err_str)?
+                };
+                let ext = Path::new(t).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                if !allowed {
+                    Err("outside indexed folders".into())
+                } else if RUNNABLE_EXTS.contains(&ext.as_str()) {
+                    Err("a program, not opened from here".into())
+                } else if !Path::new(t).exists() {
+                    Err("no longer there".into())
+                } else if dry {
+                    Ok(())
+                } else {
+                    tauri_plugin_opener::open_path(t, None::<&str>).map_err(err_str)
+                }
+            }
+            "app" => {
+                let installed = state.apps.lock().unwrap().iter().any(|a| a.target == t);
+                if !installed || !Path::new(t).exists() {
+                    Err("not installed".into())
+                } else if dry {
+                    Ok(())
+                } else {
+                    magpie_core::apps::launch_app(t).map_err(err_str)
+                }
+            }
+            "url" if t.starts_with("https://") || t.starts_with("http://") => {
+                if dry {
+                    Ok(())
+                } else {
+                    use tauri_plugin_opener::OpenerExt;
+                    app.opener().open_url(t, None::<&str>).map_err(err_str)
+                }
+            }
+            _ => Err("cannot be opened".into()),
+        };
+        match outcome {
+            Ok(()) if dry => report.push(format!("dry run: open {} {t}", item.kind)),
+            Ok(()) => {}
+            Err(e) => report.push(format!("{}: {e}", item.title)),
+        }
+    }
+    if report.is_empty() {
+        hide_palette(&app);
+    }
+    Ok(report)
 }
 
 /// "Don't show this again" on the recall card.
@@ -5941,6 +6061,12 @@ pub fn run() {
             web_details,
             recall_today,
             recall_skip,
+            search_workspaces,
+            list_workspaces,
+            workspace_add,
+            workspace_remove_item,
+            workspace_delete,
+            open_workspace,
             app_choices,
             get_edit_rules,
             set_edit_rules,
