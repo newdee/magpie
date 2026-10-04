@@ -951,6 +951,8 @@ export default function App() {
   const [starsProgress, setStarsProgress] = useState<StarsProgress | null>(null);
   const [localProgress, setLocalProgress] = useState<LocalProgress | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  // the error a star sync put on screen, which its next progress may clear
+  const syncErrorRef = useRef<string | null>(null);
   // auto-update: idle -> checking -> available -> downloading -> done|error
   const [updPhase, setUpdPhase] = useState<
     "idle" | "checking" | "none" | "available" | "downloading" | "error"
@@ -1826,7 +1828,11 @@ export default function App() {
     const subs = [
       listen<StarsProgress>("sync-progress", (e) => {
         setStarsProgress(e.payload);
-        setLastError(null);
+        // a sync that runs again takes back its own earlier failure, and
+        // only that: a script's or a workspace's error stays on screen
+        const mine = syncErrorRef.current;
+        syncErrorRef.current = null;
+        if (mine != null) setLastError((cur) => (cur === mine ? null : cur));
       }),
       listen("sync-done", () => {
         setStarsProgress(null);
@@ -1835,6 +1841,7 @@ export default function App() {
       }),
       listen<string>("sync-error", (e) => {
         setStarsProgress(null);
+        syncErrorRef.current = e.payload;
         setLastError(e.payload);
         refreshStatus();
       }),
