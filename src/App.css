@@ -1023,6 +1023,40 @@ input.query:active {
   min-width: 0;
   padding: 4px 6px;
 }
+.scripts-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+/* a full-output script's answer, in place of the list */
+.script-out {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+}
+.script-out-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.script-out-bad {
+  color: var(--accent);
+}
+.script-out-text {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
 /* a workspace's preview: what Enter opens, in order */
 .pv-ws {
   list-style: none;

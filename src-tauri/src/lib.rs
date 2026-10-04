@@ -272,6 +272,7 @@ const EXPORTABLE_META: &[&str] = &[
     magpie_core::semantic::META_KEY,
     magpie_core::edit::META_KEY,
     magpie_core::workspace::META_KEY,
+    magpie_core::scripts::META_KEY,
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -1439,6 +1440,106 @@ async fn recall_today(state: State<'_, AppState>) -> Result<Option<serde_json::V
     };
     row["recall"] = serde_json::to_value(&pick.why).map_err(err_str)?;
     Ok(Some(row))
+}
+
+// ---------- script commands (scripts.rs) ----------
+
+/// The scripts folder: the one picked in settings, else `scripts` next to
+/// the index.
+fn scripts_dir(conn: &magpie_core::rusqlite::Connection, db_path: &Path) -> PathBuf {
+    db::meta_get(conn, magpie_core::scripts::META_KEY)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| db_path.parent().unwrap_or(Path::new(".")).join("scripts"))
+}
+
+async fn current_scripts_dir(state: &AppState) -> PathBuf {
+    let conn = state.db.lock().await;
+    scripts_dir(&conn, &state.db_path)
+}
+
+#[tauri::command]
+async fn search_scripts(state: State<'_, AppState>, query: String) -> Result<Vec<magpie_core::scripts::Match>, String> {
+    let dir = current_scripts_dir(&state).await;
+    tokio::task::spawn_blocking(move || magpie_core::scripts::matches(&magpie_core::scripts::list(&dir), &query))
+        .await
+        .map_err(err_str)
+}
+
+/// Run one script from the folder with these arguments. Only a script the
+/// folder lists runs: the path is looked up there, never taken as given.
+#[tauri::command]
+async fn run_script(
+    state: State<'_, AppState>,
+    path: String,
+    given: Vec<String>,
+) -> Result<magpie_core::scripts::Output, String> {
+    let dir = current_scripts_dir(&state).await;
+    tokio::task::spawn_blocking(move || {
+        let script = magpie_core::scripts::list(&dir)
+            .into_iter()
+            .find(|s| s.path == path)
+            .ok_or("that script is not in the scripts folder")?;
+        magpie_core::scripts::run(&script, &given, magpie_core::scripts::RUN_TIMEOUT).map_err(err_str)
+    })
+    .await
+    .map_err(err_str)?
+}
+
+#[derive(serde::Serialize)]
+struct ScriptsFolder {
+    dir: String,
+    /// the folder picked in settings, not the default one
+    custom: bool,
+    count: usize,
+}
+
+#[tauri::command]
+async fn scripts_folder(state: State<'_, AppState>) -> Result<ScriptsFolder, String> {
+    let (dir, custom) = {
+        let conn = state.db.lock().await;
+        let custom = db::meta_get(&conn, magpie_core::scripts::META_KEY).map_err(err_str)?.is_some_and(|s| !s.trim().is_empty());
+        (scripts_dir(&conn, &state.db_path), custom)
+    };
+    let d = dir.clone();
+    let count = tokio::task::spawn_blocking(move || magpie_core::scripts::list(&d).len()).await.map_err(err_str)?;
+    Ok(ScriptsFolder { dir: dir.to_string_lossy().into_owned(), custom, count })
+}
+
+/// Show the scripts folder; the default one is made on first use, with an
+/// example script in it.
+#[tauri::command]
+async fn open_scripts_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let dir = current_scripts_dir(&state).await;
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(err_str)?;
+        let (name, body) = magpie_core::scripts::example();
+        std::fs::write(dir.join(name), body).map_err(err_str)?;
+    }
+    if open_dry_run() {
+        return Ok(());
+    }
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(err_str)
+}
+
+/// Pick another scripts folder (it must exist), or None for the default.
+#[tauri::command]
+async fn set_scripts_folder(state: State<'_, AppState>, dir: Option<String>) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    match dir.filter(|d| !d.trim().is_empty()) {
+        Some(d) => {
+            if !Path::new(&d).is_dir() {
+                return Err("not a folder".into());
+            }
+            db::meta_set(&conn, magpie_core::scripts::META_KEY, &d).map_err(err_str)
+        }
+        None => {
+            conn.execute("DELETE FROM meta WHERE key = ?1", [magpie_core::scripts::META_KEY]).map_err(err_str)?;
+            Ok(())
+        }
+    }
 }
 
 // ---------- workspaces (workspace.rs) ----------
@@ -6061,6 +6162,11 @@ pub fn run() {
             web_details,
             recall_today,
             recall_skip,
+            search_scripts,
+            run_script,
+            scripts_folder,
+            open_scripts_folder,
+            set_scripts_folder,
             search_workspaces,
             list_workspaces,
             workspace_add,

@@ -494,6 +494,35 @@ mockIPC((cmd, args) => {
         ? fileHits.map((f) => ({ kind: "file", ...f }))
         : [];
     }
+    // script commands: one example, matched by its keyword or its title
+    case "search_scripts": {
+      const q = String((args as { query?: string }).query ?? "").trimStart();
+      const ql = q.toLowerCase();
+      const hello = {
+        path: "C:\\Users\\dfine\\AppData\\Roaming\\com.dfine.magpie\\scripts\\hello.ps1",
+        title: "Hello",
+        mode: "fullOutput",
+        package: null,
+        description: "An example script command. Change it or delete it.",
+        icon: null,
+        keyword: "hello",
+        args: [{ placeholder: "name", optional: true }],
+        confirm: false,
+        cwd: null,
+        runner: "pwsh",
+      };
+      if (ql.startsWith("hello ")) return [{ ...hello, score: 0.99, given: [q.slice(6).trim()].filter(Boolean) }];
+      return ql.length >= 2 && "hello".startsWith(ql) ? [{ ...hello, score: 0.9, given: [] }] : [];
+    }
+    case "run_script": {
+      const name = (args as { given?: string[] }).given?.[0] || "world";
+      return { ok: true, code: 0, stdout: `Hello, ${name}!\nToday is ${new Date().toISOString().slice(0, 10)}.\n`, stderr: "", timed_out: false };
+    }
+    case "scripts_folder":
+      return { dir: "C:\\Users\\dfine\\AppData\\Roaming\\com.dfine.magpie\\scripts", custom: false, count: 1 };
+    case "open_scripts_folder":
+    case "set_scripts_folder":
+      return null;
     // workspaces, in memory, by workspace.rs's rules
     case "list_workspaces":
       return [...demoWorkspaces].sort((a, b) => b.updated - a.updated);

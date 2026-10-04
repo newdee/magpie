@@ -23,6 +23,7 @@ pub mod ocr;
 pub mod onnx;
 pub mod origin;
 pub mod places;
+pub mod scripts;
 pub mod search;
 pub mod secrets;
 pub mod selection;

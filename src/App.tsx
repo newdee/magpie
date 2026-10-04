@@ -258,6 +258,32 @@ interface WorkspaceHit extends Workspace {
   score: number;
 }
 
+/// A script command from the scripts folder (scripts.rs), with the
+/// arguments typed after its keyword.
+interface ScriptHit {
+  kind: "script";
+  path: string;
+  title: string;
+  mode: "fullOutput" | "compact" | "silent";
+  package: string | null;
+  description: string | null;
+  icon: string | null;
+  keyword: string | null;
+  args: { placeholder: string; optional: boolean }[];
+  confirm: boolean;
+  runner: string | null;
+  score: number;
+  given: string[];
+}
+
+interface ScriptOutput {
+  ok: boolean;
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timed_out: boolean;
+}
+
 type Hit =
   | RepoHit
   | FileHit
@@ -268,7 +294,8 @@ type Hit =
   | VideoHit
   | CommandHit
   | ProcessHit
-  | WorkspaceHit;
+  | WorkspaceHit
+  | ScriptHit;
 
 /// What a row adds to a workspace, if it can be in one.
 function wsItemOf(h: Hit): WsItem | null {
@@ -313,6 +340,8 @@ function hitKey(r: Hit): string {
       return `process-${r.pid}`;
     case "workspace":
       return `workspace-${r.name.toLowerCase()}`;
+    case "script":
+      return `script-${r.path}`;
     default:
       return `${r.kind}-${r.id}`;
   }
@@ -1074,8 +1103,24 @@ export default function App() {
     void loadWorkspaces();
   }, [loadWorkspaces]);
   const [wsNaming, setWsNaming] = useState<WsItem | null>(null);
+  // a full-output script's answer, shown in place of the list until the
+  // query changes or Esc
+  const [scriptOut, setScriptOut] = useState<{ title: string; out: ScriptOutput } | null>(null);
+  useEffect(() => setScriptOut(null), [query]);
   const [recentsOn, setRecentsOn] = useState(recentsEnabled);
   const [recallOn, setRecallOn] = useState(recallEnabled);
+  // the scripts folder (scripts.rs) and how many commands it holds
+  const [scriptsInfo, setScriptsInfo] = useState<{ dir: string; custom: boolean; count: number } | null>(null);
+  const loadScriptsInfo = useCallback(
+    () =>
+      invoke<{ dir: string; custom: boolean; count: number }>("scripts_folder")
+        .then(setScriptsInfo)
+        .catch(() => {}),
+    [],
+  );
+  useEffect(() => {
+    if (showSettings) void loadScriptsInfo();
+  }, [showSettings, loadScriptsInfo]);
   // settings drafts for the selection-search chord and the notes file
   const [selDraft, setSelDraft] = useState("");
   const [selMsg, setSelMsg] = useState<string | null>(null);
@@ -1406,18 +1451,19 @@ export default function App() {
         let apps: Hit[] | null = null;
         let cmds: Hit[] | null = null;
         let wss: Hit[] | null = null;
+        let scs: Hit[] | null = null;
         let files: Hit[] | null = null;
         let painted = false;
         let shown: Hit[] | null = null; // the list this search last handed to React
         const paint = () => {
           if (!live()) return;
-          // workspaces, system commands and apps share one scale; the better
-          // match leads (a stable sort: a workspace wins a tie)
-          const top = [...(wss ?? []), ...(cmds ?? []), ...(apps ?? [])].sort(
+          // workspaces, scripts, system commands and apps share one scale;
+          // the better match leads (a stable sort: the earlier kind wins a tie)
+          const top = [...(wss ?? []), ...(scs ?? []), ...(cmds ?? []), ...(apps ?? [])].sort(
             (a, b) => (b as { score: number }).score - (a as { score: number }).score,
           );
           const list = [...top, ...(files ?? [])];
-          const allIn = apps !== null && cmds !== null && wss !== null && files !== null;
+          const allIn = apps !== null && cmds !== null && wss !== null && scs !== null && files !== null;
           // nothing to show yet: keep the previous list rather than blank it
           if (list.length === 0 && !allIn) return;
           // a refresh keeps the list on screen until all of it is in, so the
@@ -1461,6 +1507,12 @@ export default function App() {
             .catch(() => [] as Omit<CommandHit, "kind">[])
             .then((c) => {
               cmds = c.map((x) => ({ ...x, kind: "command" as const }));
+              paint();
+            }),
+          invoke<Omit<ScriptHit, "kind">[]>("search_scripts", { query: q })
+            .catch(() => [] as Omit<ScriptHit, "kind">[])
+            .then((s) => {
+              scs = s.map((x) => ({ ...x, kind: "script" as const }));
               paint();
             }),
           invoke<Omit<WorkspaceHit, "kind">[]>("search_workspaces", { query: q })
@@ -1807,6 +1859,7 @@ export default function App() {
       listen("palette-hidden", () => {
         setPreviewOpen(false);
         setWsNaming(null); // an unnamed new workspace is dropped with the palette
+        setScriptOut(null);
       }),
       listen("palette-shown", () => {
         // hidden by something outside magpie (the OS, another tool): the
@@ -2186,8 +2239,67 @@ export default function App() {
     [finishAction, refreshResults],
   );
 
+  /// Enter on a script command. Missing arguments: the box gets its keyword
+  /// to type them after. Otherwise it runs (twice Enter when it asks for
+  /// confirmation) and shows what it printed as its mode says.
+  const runScriptHit = useCallback(
+    async (hit: ScriptHit) => {
+      const missing = hit.args.some((a, i) => !a.optional && !(hit.given[i] ?? "").trim());
+      if (missing) {
+        setQuery(`${hit.keyword ?? hit.title} `);
+        setNotice(
+          tf("Type {what} after the name, then Enter", {
+            what: hit.args.map((a) => a.placeholder || "…").join(", "),
+          }),
+        );
+        inputRef.current?.focus();
+        return;
+      }
+      if (!hit.runner) {
+        setLastError(t("Nothing on this computer runs this script"));
+        return;
+      }
+      const key = hitKey(hit);
+      if (hit.confirm && armedRef.current !== key) {
+        setArmed(key);
+        return;
+      }
+      setArmed(null);
+      if (hit.mode === "silent") {
+        await finishAction();
+      } else {
+        setNotice(tf("Running {title}…", { title: hit.title }));
+      }
+      const lastLine = (s: string) => s.trim().split("\n").filter((l) => l.trim()).pop() ?? "";
+      try {
+        const out = await invoke<ScriptOutput>("run_script", { path: hit.path, given: hit.given });
+        setNotice(null);
+        if (!out.ok && hit.mode !== "fullOutput") {
+          const why = out.timed_out
+            ? t("Stopped after a minute")
+            : tf("Exited with code {code}", { code: String(out.code ?? "?") });
+          const said = lastLine(out.stderr) || lastLine(out.stdout);
+          setLastError(`${hit.title}: ${why}${said ? ` · ${said}` : ""}`);
+        } else if (hit.mode === "compact") {
+          setNotice(lastLine(out.stdout) || t("Done"));
+        } else if (hit.mode === "fullOutput") {
+          setScriptOut({ title: hit.title, out });
+          setResults([]);
+        }
+      } catch (e) {
+        setNotice(null);
+        setLastError(String(e));
+      }
+    },
+    [finishAction],
+  );
+
   const openHit = useCallback(async (hit: Hit | undefined) => {
     if (!hit) return;
+    if (hit.kind === "script") {
+      await runScriptHit(hit);
+      return;
+    }
     if (hit.kind === "command" || hit.kind === "process") {
       await runRisky(hit);
       return;
@@ -2254,7 +2366,7 @@ export default function App() {
         setLastError(msg);
       }
     }
-  }, [finishAction, refreshResults, runRisky]);
+  }, [finishAction, refreshResults, runRisky, runScriptHit]);
 
   /// What the action menu (Ctrl/Cmd+K) offers for a row. The first entry is
   /// what Enter does on the row itself.
@@ -2496,6 +2608,16 @@ export default function App() {
             { key: "end", label: t("End process"), risky: true, run: () => runRisky(hit) },
             { key: "copy-pid", label: t("Copy PID"), run: () => copy(String(hit.pid)) },
             ...(hit.exe ? [{ key: "copy-path", label: t("Copy path"), run: () => copy(hit.exe ?? "") }] : []),
+          ];
+        case "script":
+          return [
+            { key: "run", label: t("Run"), risky: hit.confirm, run: () => openHit(hit) },
+            { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
+            {
+              key: "folder",
+              label: t("Open the scripts folder"),
+              run: () => act(invoke("open_scripts_folder").then(finishAction)),
+            },
           ];
         case "workspace": {
           const changed = () => {
@@ -2879,6 +3001,11 @@ export default function App() {
           if (wsNaming && !e.ctrlKey && !e.metaKey) {
             // the box is asking for a new workspace's name
             void saveWsName();
+          } else if (scriptOut && !e.ctrlKey && !e.metaKey) {
+            // a script's output on screen: Enter copies it
+            const o = scriptOut.out;
+            const text = o.ok ? o.stdout.trimEnd() : [o.stdout.trimEnd(), o.stderr.trimEnd()].filter(Boolean).join("\n");
+            void invoke("copy_clip", { text }).then(finishAction);
           } else if (emojiHits && emojiHits.length > 0) {
             // emoji mode: Enter copies the first match (click copies any)
             void invoke("copy_clip", { text: emojiHits[0].emoji }).then(finishAction);
@@ -2975,6 +3102,9 @@ export default function App() {
           if (wsNaming) {
             setWsNaming(null); // no new workspace after all
             setQuery("");
+          } else if (scriptOut) {
+            setScriptOut(null); // back to the list it ran from
+            void refreshResults();
           } else if (imageQuery) {
             setImageQuery(null); // first Esc clears the image query
           } else if (showSettings) {
@@ -3010,7 +3140,7 @@ export default function App() {
           break;
       }
     },
-    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, editFile, finishAction, actionsOpen, actionSel, menuActions, runMenuAction, wsNaming, saveWsName],
+    [results, selected, selAnchor, selLo, selHi, sourceIdx, sources, imageQuery, showSettings, source, localScope, webScope, repoSort, previewOpen, openHit, openWeb, switchSource, setScope, setWebScope, deleteSelectedClips, calcHit, bangHit, noteHit, saveNote, emojiHits, topRowActive, refreshResults, editFile, finishAction, actionsOpen, actionSel, menuActions, runMenuAction, wsNaming, saveWsName, scriptOut],
   );
 
   const refresh = useCallback(async () => {
@@ -3936,6 +4066,67 @@ export default function App() {
                           {t(o.label)}
                         </button>
                       ))}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="set-eyebrow">{t("Script commands")}</p>
+                <div className="set-group">
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">{t("Scripts folder")}</span>
+                        <span className="set-desc">
+                          {t(
+                            "A script in this folder becomes a command: put its name at the top in a comment, as # @raycast.title My Command. Raycast's script commands work as they are.",
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    {scriptsInfo && (
+                      <div className="scripts-folder">
+                        <span className="mono-wrap">{scriptsInfo.dir}</span>
+                        <span className="set-desc">{tf("{n} scripts found", { n: scriptsInfo.count })}</span>
+                      </div>
+                    )}
+                    <div className="pill-row">
+                      <button
+                        className="ghost-btn"
+                        onClick={() =>
+                          invoke("open_scripts_folder")
+                            .then(loadScriptsInfo)
+                            .catch((e) => setLastError(String(e)))
+                        }
+                      >
+                        {t("Open the scripts folder")}
+                      </button>
+                      <button
+                        className="ghost-btn"
+                        onClick={async () => {
+                          const dir = await holdOpen(() => openDialog({ directory: true, multiple: false }));
+                          if (typeof dir !== "string") return;
+                          try {
+                            await invoke("set_scripts_folder", { dir });
+                            await loadScriptsInfo();
+                          } catch (e) {
+                            setLastError(String(e));
+                          }
+                        }}
+                      >
+                        {t("Use another folder…")}
+                      </button>
+                      {scriptsInfo?.custom && (
+                        <button
+                          className="ghost-btn"
+                          onClick={() =>
+                            invoke("set_scripts_folder", { dir: null })
+                              .then(loadScriptsInfo)
+                              .catch((e) => setLastError(String(e)))
+                          }
+                        >
+                          {t("Back to the default folder")}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -5536,7 +5727,7 @@ export default function App() {
           ))}
         </div>
       ) : (
-        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null) && (
+        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null || scriptOut != null) && (
           <>
           <div
             className="body-row"
@@ -5585,6 +5776,25 @@ export default function App() {
                   <span className="row-sub">{bangHit.url}</span>
                 </div>
                 <span className="badge">{t("web")}</span>
+              </div>
+            )}
+            {scriptOut && (
+              <div className="script-out">
+                <div className="script-out-head">
+                  <span className="row-title">📜 {scriptOut.title}</span>
+                  <span className={scriptOut.out.ok ? "row-sub" : "row-sub script-out-bad"}>
+                    {scriptOut.out.ok
+                      ? t("Done")
+                      : scriptOut.out.timed_out
+                        ? t("Stopped after a minute")
+                        : tf("Exited with code {code}", { code: String(scriptOut.out.code ?? "?") })}
+                  </span>
+                </div>
+                <pre className="script-out-text">
+                  {scriptOut.out.stdout.trimEnd() || (scriptOut.out.ok ? t("(no output)") : "")}
+                  {!scriptOut.out.ok && scriptOut.out.stderr.trim() && `\n${scriptOut.out.stderr.trimEnd()}`}
+                </pre>
+                <span className="row-sub">{t("Enter copies the output · Esc closes")}</span>
               </div>
             )}
             {wsNaming && (
@@ -5717,6 +5927,30 @@ export default function App() {
                     </div>
                     <div className="row-meta">
                       <span className="app-badge">{t("Command")}</span>
+                    </div>
+                  </>
+                ) : r.kind === "script" ? (
+                  <>
+                    <div className="row-lead">
+                      <span className="app-icon cmd-glyph">{r.icon ?? "📜"}</span>
+                      <div className="row-main">
+                        <span className="row-title">{r.title}</span>
+                        <span className="row-sub">
+                          {armed === hitKey(r)
+                            ? t("Press Enter again to confirm")
+                            : !r.runner
+                              ? t("Nothing on this computer runs this script")
+                              : r.args.length > 0
+                                ? r.args
+                                    .map((a, j) => (r.given[j] ? `${a.placeholder || "…"}: ${r.given[j]}` : `${a.placeholder || "…"}${a.optional ? "?" : ""}`))
+                                    .join(" · ")
+                                : (r.description ?? r.package ?? t("Script command"))}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="row-meta">
+                      {r.keyword && <span className="mono">{r.keyword}</span>}
+                      <span className="app-badge">{t("Script")}</span>
                     </div>
                   </>
                 ) : r.kind === "workspace" ? (
