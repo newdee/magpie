@@ -136,7 +136,7 @@ pub fn parse(path: &Path, text: &str) -> Option<Script> {
     }
     args.sort_by_key(|(n, _)| *n);
     s.args = args.into_iter().map(|(_, a)| a).collect();
-    s.runner = runner_for(path, text).map(|(p, _)| program_label(&p));
+    s.runner = runner_for(path, text).map(|(p, _)| if p == path { "cmd".to_string() } else { program_label(&p) });
     Some(s)
 }
 
@@ -182,7 +182,10 @@ fn runner_for(path: &Path, text: &str) -> Option<(PathBuf, Vec<String>)> {
     };
     match ext.as_str() {
         "ps1" => pick(&["pwsh", "powershell"], &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]),
-        "bat" | "cmd" if cfg!(windows) => pick(&["cmd"], &["/D", "/C"]),
+        // run as itself: the standard library then hands the arguments to
+        // cmd with its own quoting (and refuses ones it cannot quote), where
+        // `cmd /C script args` let a quote and an & in an argument run more
+        "bat" | "cmd" if cfg!(windows) => Some((path.to_path_buf(), Vec::new())),
         "py" => pick(&["python3", "python", "py"], &[]),
         "js" | "mjs" | "cjs" => pick(&["node"], &[]),
         "ts" => pick(&["deno", "bun"], &["run"]),
@@ -198,13 +201,32 @@ fn is_hidden(name: &str) -> bool {
     name.starts_with('.') || name.starts_with('~')
 }
 
+/// Files that can be scripts: the extensions a runner exists for, more
+/// script languages a shebang may name, and none at all (a shebang script).
+/// The rest (notes, images, archives) is not opened, so a scripts folder
+/// picked by mistake, Downloads say, does not cost a read per file per key.
+const SCRIPT_EXTS: &[&str] = &[
+    "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "py", "js", "mjs", "cjs", "ts", "rb", "pl", "php", "lua",
+    "applescript", "scpt", "swift",
+];
+/// At most this many files of a folder are looked at.
+const SCAN_MAX: usize = 500;
+
+fn may_be_script(path: &Path) -> bool {
+    match path.extension() {
+        None => true,
+        Some(e) => SCRIPT_EXTS.contains(&e.to_string_lossy().to_lowercase().as_str()),
+    }
+}
+
 /// Every script command in `dir` (not its subfolders), by title.
 pub fn list(dir: &Path) -> Vec<Script> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out: Vec<Script> = rd
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .filter(|e| !is_hidden(&e.file_name().to_string_lossy()))
+        .filter(|e| !is_hidden(&e.file_name().to_string_lossy()) && may_be_script(&e.path()))
+        .take(SCAN_MAX)
         .filter_map(|e| {
             let mut buf = vec![0u8; HEADER_BYTES];
             let n = std::fs::File::open(e.path()).ok()?.read(&mut buf).ok()?;
@@ -430,7 +452,10 @@ pub fn run(script: &Script, given: &[String], timeout: Duration) -> Result<Outpu
         .or_else(|| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
     let mut cmd = Command::new(&program);
-    cmd.args(&pre).arg(path).args(&args).current_dir(&dir).env("MAGPIE", "1");
+    if program != path {
+        cmd.args(&pre).arg(path);
+    }
+    cmd.args(&args).current_dir(&dir).env("MAGPIE", "1");
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -648,6 +673,44 @@ mod tests {
             let zh = all.iter().find(|s| s.title == "中文标题").expect("the GBK header reads right");
             assert_eq!(run(zh, &[], RUN_TIMEOUT).unwrap().stdout.trim(), "你好", "and so does its output");
         }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_batch_argument_cannot_run_more() {
+        let d = tmp("batarg");
+        std::fs::write(d.join("echo.cmd"), "@echo off\r\nREM @raycast.title Echo Arg\r\nREM @raycast.argument1 {\"placeholder\":\"x\"}\r\necho arg=%1\r\n").unwrap();
+        let s = list(&d).pop().unwrap();
+        assert_eq!(s.runner.as_deref(), Some("cmd"));
+        for given in ["a & echo INJECTED", "a\" & echo INJECTED & \"b", "100% | echo INJECTED"] {
+            match run(&s, &[given.to_string()], RUN_TIMEOUT) {
+                // run: the whole argument reached %1, nothing else ran
+                Ok(out) => assert!(
+                    !out.stdout.lines().any(|l| l.trim() == "INJECTED") && out.stdout.contains("arg="),
+                    "{given:?} -> {out:?}"
+                ),
+                // or refused, as the standard library does with what it cannot quote
+                Err(e) => assert!(!e.to_string().is_empty()),
+            }
+        }
+        let out = run(&s, &["plain words".into()], RUN_TIMEOUT).unwrap();
+        assert_eq!(out.stdout.trim(), "arg=\"plain words\"");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn only_files_that_can_be_scripts_are_read() {
+        let d = tmp("many");
+        for i in 0..300 {
+            std::fs::write(d.join(format!("photo-{i}.jpg")), "# @raycast.title Not A Script").unwrap();
+        }
+        std::fs::write(d.join("notes.md"), "# @raycast.title Notes").unwrap();
+        std::fs::write(d.join("run"), "#!/bin/sh\n# @raycast.title No Extension\n").unwrap();
+        std::fs::write(d.join("go.sh"), "# @raycast.title Go\n").unwrap();
+        let titles: Vec<String> = list(&d).into_iter().map(|s| s.title).collect();
+        assert_eq!(titles, vec!["Go", "No Extension"]);
+        assert!(may_be_script(Path::new("a.PS1")) && !may_be_script(Path::new("a.txt")));
         std::fs::remove_dir_all(&d).unwrap();
     }
 
