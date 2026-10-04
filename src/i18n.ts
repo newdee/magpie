@@ -180,6 +180,7 @@ const ZH: Record<string, string> = {
   "Starred {n} months ago": "{n} 个月前 star 的",
   "Bookmarked {n} months ago": "{n} 个月前收藏的",
   "Don't show this again": "不再提醒这条",
+  "Store app": "商店应用",
   Workspace: "工作现场",
   "Opens {n}": "打开 {n} 项",
   "Open everything": "全部打开",

@@ -91,6 +91,25 @@ const NAME_GROUPS: &[&[&str]] = &[
     &["Visual Studio Code", "VS Code", "VSCode"],
     &["Google Chrome", "Chrome", "谷歌浏览器"],
     &["Microsoft Edge", "Edge"],
+    // Windows' own Store apps, listed under the system language's name
+    &["记事本", "Notepad"],
+    &["计算器", "Calculator", "calc"],
+    &["画图", "Paint", "mspaint"],
+    &["终端", "Terminal", "Windows Terminal"],
+    &["设置", "Settings"],
+    &["截图工具", "Snipping Tool"],
+    &["照片", "Photos"],
+    &["相机", "Camera"],
+    &["时钟", "Clock"],
+    &["录音机", "Sound Recorder"],
+    &["天气", "Weather"],
+    &["便笺", "Sticky Notes"],
+    &["媒体播放器", "Media Player"],
+    &["手机连接", "Phone Link"],
+    &["反馈中心", "Feedback Hub"],
+    &["获取帮助", "Get Help"],
+    &["Windows 安全中心", "Windows Security"],
+    &["快速助手", "Quick Assist"],
 ];
 
 /// Short names people use for well-known apps whose installed names do not
@@ -301,6 +320,10 @@ pub fn list_apps_with(extra: &[PathBuf]) -> Vec<AppEntry> {
                     push(stem.to_string(), entry.clone(), Vec::new(), Vec::new());
                 }
             }
+        }
+        // after the shortcuts: an app with both keeps its shortcut
+        for (name, id) in windows_store::apps() {
+            push(name, PathBuf::from(format!("{STORE_APP_PREFIX}{id}")), Vec::new(), Vec::new());
         }
     }
     #[cfg(target_os = "macos")]
@@ -769,6 +792,10 @@ pub fn icon(target: &str, px: u32) -> Option<Icon> {
 /// elsewhere the Start Menu shortcut or the .desktop file. 0 when it cannot
 /// be read, and a 0 stamp never counts as a cache hit.
 pub fn icon_stamp(target: &str) -> i64 {
+    // a Store app has no file to date: its icon, read once, is kept
+    if is_store_app(target) {
+        return 1;
+    }
     let path = std::path::Path::new(target);
     let plist = path.join("Contents").join("Info.plist");
     let file = if plist.is_file() { plist } else { path.to_path_buf() };
@@ -858,6 +885,88 @@ fn unpremultiply(rgba: &mut [u8]) {
             }
         }
     }
+}
+
+/// Store apps and other packaged (MSIX) apps on Windows: Notepad and
+/// Calculator on Windows 11, Windows Terminal, apps from the Microsoft
+/// Store. They have no shortcut in the Start Menu folders, so the .lnk walk
+/// never saw them. The shell's Apps folder lists every app with its
+/// display name in the system's language; a packaged one is known by its
+/// application user model ID, which has a `!` (`Package_hash!App`).
+#[cfg(target_os = "windows")]
+mod windows_store {
+    use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{
+        BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, SHGetKnownFolderItem, KF_FLAG_DEFAULT,
+        SIGDN, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
+    };
+
+    /// (display name, app user model ID) of every packaged app.
+    pub fn apps() -> Vec<(String, String)> {
+        // SAFETY: COM calls on this thread only; the init is paired with its
+        // uninit and every string the shell allocates is freed in `text`.
+        unsafe {
+            let inited = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+            let out = list().unwrap_or_default();
+            if inited {
+                CoUninitialize();
+            }
+            out
+        }
+    }
+
+    unsafe fn text(item: &IShellItem, how: SIGDN) -> Option<String> {
+        let p = item.GetDisplayName(how).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s
+    }
+
+    unsafe fn list() -> windows::core::Result<Vec<(String, String)>> {
+        let folder: IShellItem = SHGetKnownFolderItem(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, None)?;
+        let items: IEnumShellItems = folder.BindToHandler(None, &BHID_EnumItems)?;
+        let mut out = Vec::new();
+        loop {
+            let mut one = [None];
+            let mut fetched = 0u32;
+            if items.Next(&mut one, Some(&mut fetched)).is_err() || fetched == 0 {
+                break;
+            }
+            let Some(item) = one[0].take() else { break };
+            let (Some(name), Some(id)) = (text(&item, SIGDN_NORMALDISPLAY), text(&item, SIGDN_PARENTRELATIVEPARSING)) else {
+                continue;
+            };
+            if super::is_packaged_id(&id) && !name.trim().is_empty() {
+                out.push((name, id));
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// The launch target of a packaged Windows app: the shell resolves it to the
+/// app, for launching and for its icon.
+pub const STORE_APP_PREFIX: &str = "shell:AppsFolder\\";
+
+/// A packaged app's ID: `Name_publisherhash!AppId`. Desktop programs in the
+/// Apps folder carry paths or plain IDs without the `!`.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn is_packaged_id(id: &str) -> bool {
+    match id.split_once('!') {
+        Some((pkg, app)) => pkg.contains('_') && !app.is_empty() && !id.contains(['\\', '/', ':']),
+        None => false,
+    }
+}
+
+/// A Store (packaged) app target, which is no file on disk.
+pub fn is_store_app(target: &str) -> bool {
+    target.starts_with(STORE_APP_PREFIX)
+}
+
+/// Whether an app target can still be launched: a file that is there, or a
+/// Store app (those come from the shell's own list at each scan).
+pub fn target_exists(target: &str) -> bool {
+    is_store_app(target) || std::path::Path::new(target).exists()
 }
 
 #[cfg(target_os = "windows")]
@@ -1126,6 +1235,50 @@ mod tests {
             target: format!("/x/{name}"),
             aliases: builtin_aliases(name),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn store_app_ids_and_targets() {
+        assert!(is_packaged_id("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"));
+        assert!(is_packaged_id("windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel"));
+        for not in [
+            "Microsoft.Windows.Explorer",
+            "{6D809377-6AF0-444B-8957-A3773F02200E}\\Git\\git-bash.exe",
+            "C:\\Program Files\\x!y_z\\a.exe",
+            "Chrome",
+            "a_b!",
+            "",
+        ] {
+            assert!(!is_packaged_id(not), "{not}");
+        }
+        let t = format!("{STORE_APP_PREFIX}Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+        assert!(is_store_app(&t) && !is_store_app("C:\\x\\Calculator.lnk"));
+        assert!(target_exists(&t), "a Store app is no file and still exists");
+        assert!(!target_exists("C:\\nowhere\\gone.lnk"));
+        assert_eq!(icon_stamp(&t), 1, "its icon is kept once read");
+    }
+
+    #[test]
+    fn windows_own_apps_answer_to_both_names() {
+        let apps = vec![app("记事本"), app("计算器"), app("终端"), app("截图工具")];
+        let top = |q: &str| match_apps(&apps, q, 1, true).first().map(|a| a.name.clone());
+        assert_eq!(top("notepad").as_deref(), Some("记事本"));
+        assert_eq!(top("calc").as_deref(), Some("计算器"));
+        assert_eq!(top("terminal").as_deref(), Some("终端"));
+        assert_eq!(top("snipping").as_deref(), Some("截图工具"));
+        assert_eq!(top("jsb").as_deref(), Some("记事本"), "pinyin initials as before");
+        // and the other way round, an English system's name
+        assert!(builtin_aliases("Notepad").contains(&"记事本".to_string()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_apps_folder_lists_store_apps() {
+        // every desktop Windows 10/11 has some (Settings at least); a bare
+        // server image may not, so this only checks what it finds
+        for (name, id) in windows_store::apps() {
+            assert!(!name.trim().is_empty() && is_packaged_id(&id), "{name} {id}");
         }
     }
 

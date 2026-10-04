@@ -297,6 +297,12 @@ type Hit =
   | WorkspaceHit
   | ScriptHit;
 
+/// A Windows Store (packaged) app: its target is the shell's name for it,
+/// not a file (apps.rs `STORE_APP_PREFIX`).
+function isStoreApp(target: string): boolean {
+  return target.startsWith("shell:AppsFolder\\");
+}
+
 /// What a row adds to a workspace, if it can be in one.
 function wsItemOf(h: Hit): WsItem | null {
   switch (h.kind) {
@@ -2509,15 +2515,22 @@ export default function App() {
             ...openElsewhere(hit.path),
             trashAction(hit),
           ];
-        case "app":
+        case "app": {
+          // a Store app (apps.rs STORE_APP_PREFIX) is no file: no folder to
+          // show, no elevation, and its target is no path to copy
+          const store = isStoreApp(hit.target);
           return [
             { key: "open", label: t("Open"), run: () => openHit(hit) },
-            {
-              key: "reveal",
-              label: t("Show in folder"),
-              run: () => act(invoke("reveal_app", { target: hit.target }).then(finishAction)),
-            },
-            ...(IS_WIN
+            ...(store
+              ? []
+              : [
+                  {
+                    key: "reveal",
+                    label: t("Show in folder"),
+                    run: () => act(invoke("reveal_app", { target: hit.target }).then(finishAction)),
+                  },
+                ]),
+            ...(IS_WIN && !store
               ? [
                   {
                     key: "admin",
@@ -2526,8 +2539,9 @@ export default function App() {
                   },
                 ]
               : []),
-            { key: "copy-path", label: t("Copy path"), run: () => copy(hit.target) },
+            ...(store ? [] : [{ key: "copy-path", label: t("Copy path"), run: () => copy(hit.target) }]),
           ];
+        }
         case "repo":
           return [
             { key: "open", label: t("Open in browser"), run: () => openHit(hit) },
@@ -6067,7 +6081,7 @@ export default function App() {
                       <AppIcon key={iconEpoch} target={r.target} name={r.name} />
                       <div className="row-main">
                         <span className="row-title">{r.name}</span>
-                        <span className="row-sub">{t("Application")}</span>
+                        <span className="row-sub">{isStoreApp(r.target) ? t("Store app") : t("Application")}</span>
                       </div>
                     </div>
                     <div className="row-meta">

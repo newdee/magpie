@@ -1631,7 +1631,7 @@ async fn open_workspace(app: AppHandle, state: State<'_, AppState>, name: String
             }
             "app" => {
                 let installed = state.apps.lock().unwrap().iter().any(|a| a.target == t);
-                if !installed || !Path::new(t).exists() {
+                if !installed || !magpie_core::apps::target_exists(t) {
                     Err("not installed".into())
                 } else if dry {
                     Ok(())
@@ -1858,7 +1858,7 @@ fn cached_app_icons(state: State<'_, AppState>) -> std::collections::HashMap<Str
 fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
     // moved or uninstalled since the last scan (issue #4: an app moved into
     // a folder still listed and would not open): rescan now and say so
-    if !std::path::Path::new(&target).exists() {
+    if !magpie_core::apps::target_exists(&target) {
         spawn_app_scan(app);
         return Err("this app has moved or been removed; the app list is refreshed now".into());
     }
@@ -2017,6 +2017,9 @@ fn reveal_app(state: State<'_, AppState>, target: String) -> Result<(), String> 
     if !known_app(&state, &target) {
         return Err("not an installed app".into());
     }
+    if magpie_core::apps::is_store_app(&target) {
+        return Err("a Store app has no folder to show".into());
+    }
     tauri_plugin_opener::reveal_item_in_dir(&target).map_err(err_str)
 }
 
@@ -2026,6 +2029,9 @@ fn reveal_app(state: State<'_, AppState>, target: String) -> Result<(), String> 
 fn run_app_as_admin(app: AppHandle, state: State<'_, AppState>, target: String) -> Result<(), String> {
     if !known_app(&state, &target) {
         return Err("not an installed app".into());
+    }
+    if magpie_core::apps::is_store_app(&target) {
+        return Err("a Store app does not run as administrator".into());
     }
     #[cfg(windows)]
     {
@@ -4779,7 +4785,9 @@ async fn open_in_editor(app: AppHandle, state: State<'_, AppState>, path: String
 #[tauri::command]
 fn app_choices(state: State<'_, AppState>) -> Vec<serde_json::Value> {
     let apps = state.apps.lock().unwrap();
-    let mut v: Vec<&magpie_core::apps::AppEntry> = apps.iter().collect();
+    // a Store app cannot be handed a file to open this way: not offered
+    let mut v: Vec<&magpie_core::apps::AppEntry> =
+        apps.iter().filter(|a| !magpie_core::apps::is_store_app(&a.target)).collect();
     v.sort_by_key(|a| a.name.to_lowercase());
     v.dedup_by(|a, b| a.target == b.target);
     v.into_iter().map(|a| json!({ "name": a.name, "target": a.target })).collect()
