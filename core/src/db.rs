@@ -329,6 +329,13 @@ fn migrate(conn: &Connection) -> Result<()> {
             last_used INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (kind, key)
         );
+
+        -- things the user asked the daily recall card never to show again
+        CREATE TABLE IF NOT EXISTS recall_skip (
+            kind TEXT NOT NULL,
+            key  TEXT NOT NULL,
+            PRIMARY KEY (kind, key)
+        );
         "#,
     )
     .context("run migrations")?;

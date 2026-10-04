@@ -1023,6 +1023,10 @@ input.query:active {
   min-width: 0;
   padding: 4px 6px;
 }
+/* the daily recall card's "kept N years ago" */
+.recall-tag {
+  color: var(--accent);
+}
 /* a type another row decides (#18) */
 .edit-rule-note {
   margin: 2px 0 0 2px;

@@ -21,9 +21,15 @@ import {
   type NoteMatch,
   recentsEnabled,
   setRecentsEnabled,
+  recallEnabled,
+  setRecallEnabled,
 } from "./extras";
 import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
 import "./App.css";
+
+/// Why the daily recall card (recall.rs) shows this row: kept on this date
+/// years ago, or kept long ago. Nothing else is claimed.
+type Recall = { why: "anniversary"; years: number } | { why: "long_ago"; months: number };
 
 interface RepoHit {
   kind: "repo";
@@ -36,6 +42,7 @@ interface RepoHit {
   archived: boolean;
   pushed_at: string | null;
   score: number;
+  recall?: Recall;
 }
 
 interface FileHit {
@@ -64,6 +71,7 @@ interface BookmarkHit {
   score: number;
   /** found by meaning alone, no word in common with the query */
   fuzzy?: boolean;
+  recall?: Recall;
 }
 
 interface HistoryHit {
@@ -240,6 +248,19 @@ type Hit =
   | VideoHit
   | CommandHit
   | ProcessHit;
+
+/// The recall card's line: when it was kept, in the words of its kind.
+function recallText(r: Recall, kind: "bookmark" | "repo"): string {
+  const star = kind === "repo";
+  if (r.why === "anniversary") {
+    if (r.years === 1) return t(star ? "A year ago today you starred this" : "A year ago today you bookmarked this");
+    return tf(star ? "{n} years ago today you starred this" : "{n} years ago today you bookmarked this", { n: r.years });
+  }
+  if (r.months >= 24) {
+    return tf(star ? "Starred {n} years ago" : "Bookmarked {n} years ago", { n: Math.floor(r.months / 12) });
+  }
+  return tf(star ? "Starred {n} months ago" : "Bookmarked {n} months ago", { n: r.months });
+}
 
 /// A stable identity per row, for React keys and for the "press Enter
 /// again" confirmation.
@@ -441,6 +462,7 @@ const LOCAL_KEYS = [
   "magpie.bangs",
   "magpie.tips",
   "magpie.recents",
+  "magpie.recall",
   "magpie.taborder",
   "magpie.tabhidden",
   "magpie.defaulttab",
@@ -1000,6 +1022,7 @@ export default function App() {
   // `note …`: Enter appends the text to the notes file instead of searching
   const [noteHit, setNoteHit] = useState<NoteMatch | null>(null);
   const [recentsOn, setRecentsOn] = useState(recentsEnabled);
+  const [recallOn, setRecallOn] = useState(recallEnabled);
   // settings drafts for the selection-search chord and the notes file
   const [selDraft, setSelDraft] = useState("");
   const [selMsg, setSelMsg] = useState<string | null>(null);
@@ -1277,16 +1300,25 @@ export default function App() {
       return;
     }
     if (q.trim() === "" && srcId !== "clips") {
+      const mainTab = srcId === "local" || srcId === "github-stars" || srcId === "web";
       // opt-in: the empty box lists what you opened most recently from this
       // tab, so "back to that file from a minute ago" is two keystrokes
-      if (recentsEnabled() && (srcId === "local" || srcId === "github-stars" || srcId === "web")) {
-        try {
-          const recents = await invoke<Hit[]>("recent_hits", { source: srcId });
-          if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-            show(Array.isArray(recents) ? recents : []);
-          }
-        } catch {
-          /* keep the bare box */
+      const wantRecents = recentsEnabled() && mainTab;
+      // on unless turned off: today's card from long ago leads (recall.rs)
+      const wantRecall = recallEnabled() && mainTab;
+      if (wantRecents || wantRecall) {
+        const [recall, recents] = await Promise.all([
+          wantRecall ? invoke<Hit | null>("recall_today").catch(() => null) : Promise.resolve(null),
+          wantRecents ? invoke<Hit[]>("recent_hits", { source: srcId }).catch(() => null) : Promise.resolve([]),
+        ]);
+        if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
+          // a failed recent list keeps the bare box, as before the card
+          const list = Array.isArray(recents) ? recents : [];
+          const card = recall ? [recall] : [];
+          // the same page bookmarked twice has two row ids: compare addresses
+          const same = (a: Hit, b: Hit) =>
+            a.kind === "bookmark" && b.kind === "bookmark" ? a.url === b.url : hitKey(a) === hitKey(b);
+          show([...card, ...list.filter((h) => !recall || !same(h, recall))]);
         }
         return;
       }
@@ -2173,6 +2205,17 @@ export default function App() {
           run: () => editFile(path),
         };
       };
+      // the recall card: never this one again; the list gets today's next
+      const recallSkip = (h: RepoHit | BookmarkHit, key: string): RowAction[] =>
+        h.recall
+          ? [
+              {
+                key: "recall-skip",
+                label: t("Don't show this again"),
+                run: () => act(invoke("recall_skip", { kind: h.kind, key }).then(refresh)),
+              },
+            ]
+          : [];
       // to the OS trash, on a second Enter; the row leaves the list
       const trashAction = (h: FileHit | VideoHit): RowAction => ({
         key: "trash",
@@ -2287,6 +2330,7 @@ export default function App() {
             { key: "open", label: t("Open in browser"), run: () => openHit(hit) },
             { key: "copy-url", label: t("Copy URL"), run: () => copy(hit.html_url) },
             { key: "copy-clone", label: t("Copy clone command"), run: () => copy(`git clone ${hit.html_url}.git`) },
+            ...recallSkip(hit, String(hit.id)),
           ];
         case "bookmark":
         case "history":
@@ -2298,6 +2342,7 @@ export default function App() {
               label: t("Copy as Markdown link"),
               run: () => copy(`[${(hit.title || hit.url).replace(/[[\]]/g, "")}](${hit.url})`),
             },
+            ...(hit.kind === "bookmark" ? recallSkip(hit, hit.url) : []),
           ];
         case "clip":
           return [
@@ -3691,6 +3736,36 @@ export default function App() {
                             // the list behind the settings page was built under the
                             // old setting; rebuild it now, or it lingers until the
                             // next keystroke or tab switch
+                            void refreshResults();
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("From long ago on the empty box")}</span>
+                      <span className="set-desc">
+                        {tf(
+                          "With nothing typed, one bookmark or starred repo you kept long ago comes up first, a different one each day. {key} on it can stop it from coming back.",
+                          { key: IS_MAC ? "⌘K" : "Ctrl+K" },
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${recallOn === o.on ? "active" : ""}`}
+                          onClick={() => {
+                            setRecallOn(o.on);
+                            setRecallEnabled(o.on);
                             void refreshResults();
                           }}
                         >
@@ -5549,6 +5624,7 @@ export default function App() {
                     <div className="row-main">
                       <span className="row-title">{r.title}</span>
                       <span className="row-sub">
+                        {r.recall && <span className="recall-tag">{recallText(r.recall, "bookmark")} · </span>}
                         {r.folder && <span className="dim-prefix">{r.folder} · </span>}
                         {r.url}
                       </span>
@@ -5622,7 +5698,17 @@ export default function App() {
                         {r.full_name.split("/")[1]}
                         {r.archived && <span className="badge">{t("archived")}</span>}
                       </span>
-                      {r.description && <span className="row-sub">{r.description}</span>}
+                      {(r.description || r.recall) && (
+                        <span className="row-sub">
+                          {r.recall && (
+                            <span className="recall-tag">
+                              {recallText(r.recall, "repo")}
+                              {r.description ? " · " : ""}
+                            </span>
+                          )}
+                          {r.description}
+                        </span>
+                      )}
                     </div>
                     <div className="row-meta">
                       {relTime(r.pushed_at) && (

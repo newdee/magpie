@@ -34,6 +34,8 @@ const demoVolume = { level: 38, muted: false };
 let demoEditRules: { exts: string[]; app: string }[] = [
   { exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "psd"], app: "" },
 ];
+let demoRecallSkipped = false;
+
 /// like edit.rs `view`: per row, the extensions another row decides
 function demoRuleView() {
   const winner = (ext: string) => demoEditRules.findIndex((r) => r.app && r.exts.includes(ext));
@@ -481,6 +483,24 @@ mockIPC((cmd, args) => {
         ? fileHits.map((f) => ({ kind: "file", ...f }))
         : [];
     }
+    case "recall_today":
+      // the empty box's card from long ago: a bookmark kept two years ago today
+      return demoRecallSkipped
+        ? null
+        : {
+            kind: "bookmark",
+            id: 3,
+            url: "https://doc.rust-lang.org/book/",
+            title: "The Rust Programming Language",
+            folder: "Reading",
+            browser: "firefox",
+            added_at: now - 730 * day,
+            score: 0,
+            recall: { why: "anniversary", years: 2 },
+          };
+    case "recall_skip":
+      demoRecallSkipped = true;
+      return null;
     case "recent_hits":
       // the empty-box "recent opens" list: a few file rows for the local tab
       return (args as { source?: string })?.source === "local"

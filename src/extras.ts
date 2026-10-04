@@ -91,6 +91,28 @@ export function setRecentsEnabled(on: boolean): void {
   }
 }
 
+// ---------- the daily recall card on the empty box ----------
+
+export const RECALL_KEY = "magpie.recall";
+
+/** On unless turned off: one card a day costs nothing and is how the
+ *  feature is found at all. */
+export function recallEnabled(): boolean {
+  try {
+    return localStorage.getItem(RECALL_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function setRecallEnabled(on: boolean): void {
+  try {
+    localStorage.setItem(RECALL_KEY, on ? "1" : "0");
+  } catch {
+    /* the choice just won't persist */
+  }
+}
+
 // ---------- launch tips ----------
 
 export const TIPS_KEY = "magpie.tips";

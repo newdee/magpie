@@ -1364,42 +1364,9 @@ fn recent_rows_timed(
     limit: usize,
 ) -> Result<Vec<(i64, String, serde_json::Value)>> {
     let keys = magpie_core::frecency::recent(conn, kinds, limit * 2)?;
-    let tag = |mut v: serde_json::Value, kind: &str| {
-        v["kind"] = serde_json::Value::from(kind);
-        if v.get("score").is_none() {
-            v["score"] = serde_json::Value::from(0.0);
-        }
-        v
-    };
     let mut out = Vec::with_capacity(limit);
     for (kind, key, last_used) in keys {
-        let row = match kind.as_str() {
-            // a video opened from a shot comes back as its file row: the shot
-            // itself is not a stable identity, the path is
-            "file" | "video" => files::file_by_path(conn, &key)?
-                .and_then(|f| serde_json::to_value(&f).ok())
-                .map(|v| tag(v, "file")),
-            "app" => apps
-                .iter()
-                .find(|a| a.target == key)
-                .and_then(|a| serde_json::to_value(a).ok())
-                .map(|v| tag(v, "app")),
-            "repo" => key
-                .parse::<i64>()
-                .ok()
-                .and_then(|id| db::repos_by_ids(conn, &[id]).ok())
-                .and_then(|mut r| r.pop())
-                .and_then(|r| serde_json::to_value(&r).ok())
-                .map(|v| tag(v, "repo")),
-            "bookmark" => bookmarks::bookmark_by_url(conn, &key)?
-                .and_then(|b| serde_json::to_value(&b).ok())
-                .map(|v| tag(v, "bookmark")),
-            "history" => history::history_by_url(conn, &key)?
-                .and_then(|h| serde_json::to_value(&h).ok())
-                .map(|v| tag(v, "history")),
-            _ => None,
-        };
-        if let Some(v) = row {
+        if let Some(v) = hit_row(conn, apps, &kind, &key)? {
             out.push((last_used, key, v));
             if out.len() >= limit {
                 break;
@@ -1407,6 +1374,77 @@ fn recent_rows_timed(
         }
     }
     Ok(out)
+}
+
+/// One result row from a stable identity (the hit_stats kinds and keys:
+/// file/video → path, app → target, repo → id, bookmark/history → url),
+/// tagged for the mixed list. None when it no longer exists.
+fn hit_row(
+    conn: &magpie_core::rusqlite::Connection,
+    apps: &[magpie_core::apps::AppEntry],
+    kind: &str,
+    key: &str,
+) -> Result<Option<serde_json::Value>> {
+    let tag = |mut v: serde_json::Value, kind: &str| {
+        v["kind"] = serde_json::Value::from(kind);
+        if v.get("score").is_none() {
+            v["score"] = serde_json::Value::from(0.0);
+        }
+        v
+    };
+    Ok(match kind {
+        // a video opened from a shot comes back as its file row: the shot
+        // itself is not a stable identity, the path is
+        "file" | "video" => files::file_by_path(conn, key)?
+            .and_then(|f| serde_json::to_value(&f).ok())
+            .map(|v| tag(v, "file")),
+        "app" => apps
+            .iter()
+            .find(|a| a.target == key)
+            .and_then(|a| serde_json::to_value(a).ok())
+            .map(|v| tag(v, "app")),
+        "repo" => key
+            .parse::<i64>()
+            .ok()
+            .and_then(|id| db::repos_by_ids(conn, &[id]).ok())
+            .and_then(|mut r| r.pop())
+            .and_then(|r| serde_json::to_value(&r).ok())
+            .map(|v| tag(v, "repo")),
+        "bookmark" => bookmarks::bookmark_by_url(conn, key)?
+            .and_then(|b| serde_json::to_value(&b).ok())
+            .map(|v| tag(v, "bookmark")),
+        "history" => history::history_by_url(conn, key)?
+            .and_then(|h| serde_json::to_value(&h).ok())
+            .map(|v| tag(v, "history")),
+        _ => None,
+    })
+}
+
+/// The daily recall card (recall.rs) as a result row, with `recall` saying
+/// why it is there. Days are local: `MAGPIE_TEST_NOW` stands in for the
+/// clock, as for the solar-term reminder. On the main connection: it writes
+/// the day's choice, and the search connection's ticket would cancel the
+/// recent list asked for at the same moment.
+#[tauri::command]
+async fn recall_today(state: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
+    let conn = state.db.lock().await;
+    let (day, now, tz) = magpie_core::recall::local_clock();
+    let Some(pick) = magpie_core::recall::today(&conn, day, now, tz).map_err(err_str)? else {
+        return Ok(None);
+    };
+    let apps = state.apps.lock().unwrap();
+    let Some(mut row) = hit_row(&conn, &apps, &pick.kind, &pick.key).map_err(err_str)? else {
+        return Ok(None);
+    };
+    row["recall"] = serde_json::to_value(&pick.why).map_err(err_str)?;
+    Ok(Some(row))
+}
+
+/// "Don't show this again" on the recall card.
+#[tauri::command]
+async fn recall_skip(state: State<'_, AppState>, kind: String, key: String) -> Result<(), String> {
+    let conn = state.db.lock().await;
+    magpie_core::recall::skip(&conn, &kind, &key).map_err(err_str)
 }
 
 #[tauri::command]
@@ -5901,6 +5939,8 @@ pub fn run() {
             common_places,
             file_origin,
             web_details,
+            recall_today,
+            recall_skip,
             app_choices,
             get_edit_rules,
             set_edit_rules,

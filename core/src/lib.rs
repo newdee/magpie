@@ -30,6 +30,7 @@ pub mod semantic;
 pub mod frecency;
 pub mod notes;
 pub mod procs;
+pub mod recall;
 pub mod siglip;
 pub mod videos;
 pub mod sync;
