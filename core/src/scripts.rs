@@ -84,6 +84,8 @@ fn emoji_icon(v: &str) -> Option<String> {
 
 /// The header of one script; None without a title (not a script command).
 pub fn parse(path: &Path, text: &str) -> Option<Script> {
+    // Notepad and PowerShell ISE save UTF-8 with a byte-order mark
+    let text = text.trim_start_matches('\u{feff}');
     let mut s = Script {
         path: path.to_string_lossy().into_owned(),
         title: String::new(),
@@ -145,6 +147,7 @@ fn program_label(p: &Path) -> String {
 /// What runs a script: the program and the arguments before the script's
 /// path. The shebang wins; else the extension.
 fn runner_for(path: &Path, text: &str) -> Option<(PathBuf, Vec<String>)> {
+    let text = text.trim_start_matches('\u{feff}');
     let first = text.lines().next().unwrap_or("");
     if let Some(sb) = first.strip_prefix("#!") {
         let mut words = sb.split_whitespace();
@@ -206,7 +209,7 @@ pub fn list(dir: &Path) -> Vec<Script> {
             let mut buf = vec![0u8; HEADER_BYTES];
             let n = std::fs::File::open(e.path()).ok()?.read(&mut buf).ok()?;
             buf.truncate(n);
-            parse(&e.path(), &String::from_utf8_lossy(&buf))
+            parse(&e.path(), &decode_output(&buf))
         })
         .collect();
     out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.path.cmp(&b.path)));
@@ -301,6 +304,56 @@ pub struct Output {
     pub timed_out: bool,
 }
 
+/// What a script printed, or the script's own header, as text. UTF-8 when
+/// it is UTF-8 (a cut at a size cap may split the last character; that still
+/// counts). Otherwise, on Windows, the system code page: cmd and PowerShell
+/// print in it when their output goes to a pipe, and a .cmd file saved by
+/// Notepad on a Chinese system is GBK. Read as UTF-8, every Chinese
+/// character came out as "�".
+fn decode_output(b: &[u8]) -> String {
+    match std::str::from_utf8(b) {
+        Ok(s) => return s.to_string(),
+        Err(e) if e.error_len().is_none() => return String::from_utf8_lossy(b).into_owned(),
+        Err(_) => {}
+    }
+    match console_encoding() {
+        Some(enc) => enc.decode(b).0.into_owned(),
+        None => String::from_utf8_lossy(b).into_owned(),
+    }
+}
+
+/// The encoding behind the system's console (OEM) code page, for the ones
+/// encoding_rs knows.
+fn console_encoding() -> Option<&'static encoding_rs::Encoding> {
+    #[cfg(windows)]
+    {
+        let cp = unsafe { windows::Win32::Globalization::GetOEMCP() };
+        encoding_for_code_page(cp)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn encoding_for_code_page(cp: u32) -> Option<&'static encoding_rs::Encoding> {
+    use encoding_rs as e;
+    Some(match cp {
+        936 => e::GB18030,
+        950 => e::BIG5,
+        932 => e::SHIFT_JIS,
+        949 => e::EUC_KR,
+        866 => e::IBM866,
+        1250 => e::WINDOWS_1250,
+        1251 => e::WINDOWS_1251,
+        // the Western DOS pages differ from 1252 only in the box-drawing range
+        437 | 850 | 858 | 1252 => e::WINDOWS_1252,
+        65001 => e::UTF_8,
+        _ => return None,
+    })
+}
+
 /// Colours and cursor moves a terminal would act on; the palette shows text.
 fn strip_ansi(s: &str) -> String {
     let re = regex::Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07").unwrap();
@@ -356,7 +409,7 @@ pub fn run(script: &Script, given: &[String], timeout: Duration) -> Result<Outpu
     let mut head = vec![0u8; HEADER_BYTES];
     let n = std::fs::File::open(path)?.read(&mut head)?;
     head.truncate(n);
-    let (program, pre) = runner_for(path, &String::from_utf8_lossy(&head))
+    let (program, pre) = runner_for(path, &decode_output(&head))
         .ok_or_else(|| anyhow!("nothing on this computer runs {}", path.display()))?;
     for (i, a) in script.args.iter().enumerate() {
         if !a.optional && given.get(i).is_none_or(|g| g.trim().is_empty()) {
@@ -419,7 +472,7 @@ pub fn run(script: &Script, given: &[String], timeout: Duration) -> Result<Outpu
     while readers.iter().any(|r| !r.is_finished()) && grace.elapsed() < Duration::from_secs(1) {
         std::thread::sleep(Duration::from_millis(10));
     }
-    let decode = |b: &std::sync::Mutex<Vec<u8>>| strip_ansi(&String::from_utf8_lossy(&b.lock().unwrap())).replace("\r\n", "\n");
+    let decode = |b: &std::sync::Mutex<Vec<u8>>| strip_ansi(&decode_output(&b.lock().unwrap())).replace("\r\n", "\n");
     let stdout = decode(&out_buf);
     let stderr = decode(&err_buf);
     Ok(Output { ok: code == Some(0) && !timed_out, code, stdout, stderr, timed_out })
@@ -559,6 +612,43 @@ mod tests {
         assert_eq!(split_args("a  b c", 2), vec!["a".to_string(), "b c".to_string()]);
         assert_eq!(split_args("one", 3), vec!["one".to_string()]);
         assert!(split_args("   ", 2).is_empty());
+    }
+
+    #[test]
+    fn output_in_the_console_code_page_reads_right() {
+        let (gbk, _, _) = encoding_rs::GBK.encode("你好 世界");
+        assert_eq!(encoding_for_code_page(936).unwrap().decode(&gbk).0, "你好 世界");
+        assert_eq!(decode_output("你好".as_bytes()), "你好", "UTF-8 stays UTF-8");
+        // a cut inside the last character is still UTF-8, not GBK
+        let cut = &"你好".as_bytes()[..4];
+        assert_eq!(decode_output(cut), "你\u{FFFD}");
+        assert_eq!(encoding_for_code_page(12345), None);
+        // on this system: what the console prints comes back as written
+        #[cfg(windows)]
+        if unsafe { windows::Win32::Globalization::GetOEMCP() } == 936 {
+            assert_eq!(decode_output(&gbk), "你好 世界");
+        }
+    }
+
+    #[test]
+    fn a_byte_order_mark_or_a_gbk_file_still_parses() {
+        let s = parse(Path::new("a.ps1"), "\u{feff}# @raycast.title With Bom\r\n'x'").unwrap();
+        assert_eq!(s.title, "With Bom");
+        let d = tmp("enc");
+        std::fs::write(d.join("bom.ps1"), "\u{feff}# @raycast.title 带 BOM\r\n'x'\r\n").unwrap();
+        #[cfg(windows)]
+        if unsafe { windows::Win32::Globalization::GetOEMCP() } == 936 {
+            let (gbk, _, _) = encoding_rs::GBK.encode("@echo off\r\nREM @raycast.title 中文标题\r\necho 你好\r\n");
+            std::fs::write(d.join("zh.cmd"), &gbk).unwrap();
+        }
+        let all = list(&d);
+        assert!(all.iter().any(|s| s.title == "带 BOM"), "{all:?}");
+        #[cfg(windows)]
+        if unsafe { windows::Win32::Globalization::GetOEMCP() } == 936 {
+            let zh = all.iter().find(|s| s.title == "中文标题").expect("the GBK header reads right");
+            assert_eq!(run(zh, &[], RUN_TIMEOUT).unwrap().stdout.trim(), "你好", "and so does its output");
+        }
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

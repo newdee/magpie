@@ -107,6 +107,8 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dwm",
   # selection search (selection.rs): is the hotkey's modifier still held
   "Win32_UI_Input_KeyboardAndMouse",
+  # script commands (scripts.rs): the code page console programs print in
+  "Win32_Globalization",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
