@@ -37,7 +37,7 @@ let demoEditRules: { exts: string[]; app: string }[] = [
 let demoRecallSkipped = false;
 let demoWorkspaces: { name: string; items: { kind: string; target: string; title: string }[]; updated: number }[] = [
   {
-    name: "论文",
+    name: "Paper",
     items: [
       { kind: "file", target: "C:\\Users\\dfine\\Documents\\projects\\paper\\rag-survey.pdf", title: "rag-survey.pdf" },
       { kind: "file", target: "C:\\Users\\dfine\\Documents\\projects\\notes\\vector-search.md", title: "vector-search.md" },

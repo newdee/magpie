@@ -1074,6 +1074,14 @@ input.query:active {
 .pv-ws-title {
   font-size: 13px;
 }
+/* one line each, so a short panel still shows several */
+.pv-ws-target {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* the file name end of a long path stays in view */
+  text-align: left;
+}
 /* the daily recall card's "kept N years ago" */
 .recall-tag {
   color: var(--accent);

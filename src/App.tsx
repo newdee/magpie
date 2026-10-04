@@ -6221,7 +6221,7 @@ export default function App() {
         )
       )}
 
-      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && !noteHit && !wsNaming && (
+      {!needsToken && !showSettings && results.length === 0 && query.trim() !== "" && !noteHit && !wsNaming && !scriptOut && (
         <div className="empty">
           {source === "github-stars"
             ? t("No matches in your stars")
@@ -6779,7 +6779,9 @@ function PreviewPane({
             {hit.items.map((it) => (
               <li key={`${it.kind}-${it.target}`}>
                 <span className="pv-ws-title">{it.title}</span>
-                <span className="pv-meta mono-wrap">{it.target}</span>
+                <span className="pv-meta pv-ws-target" title={it.target}>
+                  {it.target}
+                </span>
               </li>
             ))}
           </ul>

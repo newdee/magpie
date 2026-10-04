@@ -227,6 +227,26 @@ vaguely remember (or drop in an image), hit Enter.
   keystrokes. The Local tab also lists files in your folders that are new or
   changed this week, so a screenshot or download you just saved is there
   even if you never opened it through magpie.
+- **From long ago**: with nothing typed, the first row is a bookmark or
+  starred repo you kept long ago, a different one each day. One kept on this
+  date in an earlier year comes first ("2 years ago today you bookmarked
+  this"); otherwise one kept at least half a year ago that you have not
+  opened from magpie. The row says only when you kept it. `Ctrl+K` →
+  "Don't show this again" retires it; settings can turn the row off.
+- **Workspaces**: keep the files, pages, apps and repos you open together
+  under one name, "taxes" say. `Ctrl+K` on any result → "Add to workspace",
+  an existing one or a new one. Type the name and press `Enter`: everything
+  opens. What cannot (a deleted file, an uninstalled app) is named and the
+  rest still opens. `ws` lists them all. A settings export carries them.
+- **Script commands**: a script in the scripts folder (Settings → Script
+  commands) whose top comment names it becomes a command in the box. The
+  header is Raycast's script-command format (`@raycast.title`,
+  `@raycast.mode`, `@raycast.argument1`, …), so Raycast scripts work as they
+  are; `@magpie.keyword tr` adds a short trigger, and `tr hello` passes
+  `hello` as its argument. The interpreter comes from the shebang or the
+  extension (PowerShell, bash, Python, Node, …); it runs in the script's
+  folder for at most a minute, and a run that goes over is stopped with
+  whatever it started. Nothing runs until you press `Enter` on it.
 - **Bang-style web shortcuts**: `gh magpie` searches GitHub, `g …` Google,
   `bd …` Baidu. Prefixes are editable rules in settings (`prefix = URL
   with {q}`).
@@ -270,7 +290,8 @@ name, and understood formats are searched in full text:
 - ~80 plain-text and code formats, read whole (size cap configurable, up to
   unlimited)
 - PDF via [pdf-inspector](https://github.com/firecrawl/pdf-inspector)
-  (scanned/garbled PDFs stay findable by name)
+  (scanned pages are read when OCR and its "Scanned PDFs" switch are on;
+  otherwise such PDFs stay findable by name)
 - Word / Excel / PowerPoint (docx, xlsx, pptx)
 - ZIP archives by the names of the files inside, so a search for a file that
   only lives in a zip finds the zip (password-protected ones too: zip keeps

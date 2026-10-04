@@ -272,6 +272,49 @@ window.FEATURES = {
   ],
   g4: [
     {
+      img: "recall.png",
+      tag: "From long ago",
+      en: {
+        t: "What you kept and forgot",
+        d: "A search only finds what you remember having. With nothing typed, the first row is a bookmark or starred repo you kept long ago, a different one each day: one kept on this date in an earlier year, or one you kept months ago and have not opened since. Retire any of them with one key, or turn the row off.",
+      },
+      zh: {
+        t: "存过又忘了的，它替你记着",
+        d: "搜索只找得到你还记得的东西。搜索框空着时，最上面一行是很久以前收藏的书签或 star 的仓库，每天换一条：几年前的今天收藏的，或者几个月前存下、之后没再打开的。不想再看到的按一下就不再出现，也可以整个关掉。",
+      },
+    },
+    {
+      img: "workspace.png",
+      tag: "Workspaces",
+      en: {
+        t: "One name opens the whole job",
+        d: "Keep the files, pages, apps and repos you open together under one name. Type it, press Enter, and they all open. Anything that has gone missing is named, and the rest still opens.",
+      },
+      zh: {
+        t: "一个名字，打开一整套",
+        d: "把常一起打开的文件、网页、应用和仓库存成一组，起个名字。输入名字按回车，全部打开；哪个找不到了会告诉你，其余照常打开。",
+      },
+    },
+    {
+      id: "scripts",
+      tag: "Script commands",
+      code: [
+        "# @raycast.title Translate",
+        "# @raycast.mode compact",
+        "# @raycast.argument1 { \"type\": \"text\", \"placeholder\": \"text\" }",
+        "# @magpie.keyword tr",
+        "$ tr 你好",
+      ],
+      en: {
+        t: "Your scripts as commands",
+        d: "Drop a script into the scripts folder and name it in a comment at the top. It becomes a command in the box, with arguments typed after its keyword. The header is Raycast's script-command format, so scripts written for Raycast work as they are.",
+      },
+      zh: {
+        t: "自己的脚本，变成命令",
+        d: "把脚本放进脚本文件夹，在开头的注释里写上名字，它就成了搜索框里的命令，参数跟在触发词后面输入。格式和 Raycast 的脚本命令一样，为 Raycast 写的脚本直接能用。",
+      },
+    },
+    {
       img: "tips.png",
       tag: "Tips",
       en: {
