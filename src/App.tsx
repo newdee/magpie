@@ -421,8 +421,10 @@ const PLACE_LABELS: Record<string, string> = {
   wechat: "Files received in WeChat",
   qq: "Files received in QQ",
 };
-// how long the selection must rest on a local file before its preview loads
-const LOCAL_PREVIEW_DELAY_MS = 800;
+// how long the selection must rest on a local file before its preview loads:
+// key repeat is 30–50 ms a step, so this tells passing over a row from
+// stopping on it (800 ms felt slow on a Mac, #13)
+const LOCAL_PREVIEW_DELAY_MS = 350;
 
 /// State fetched for one thing (a selected row, a path, an address), stored
 /// with that thing's key and read back only under it. Clearing it in the
@@ -553,6 +555,8 @@ interface RowAction {
 interface EditRule {
   exts: string[];
   app: string;
+  /** from the backend: extensions this row lists but another row opens (#18) */
+  shadowed?: { ext: string; by: number }[];
 }
 const EDIT_SHORTCUT = IS_MAC ? "⌘E" : "Ctrl+E";
 
@@ -4335,7 +4339,8 @@ export default function App() {
                     {editRules.length > 0 && (
                       <div className="edit-rules">
                         {editRules.map((r, i) => (
-                          <div key={i} className="edit-rule">
+                          <div key={i} className="edit-rule-wrap">
+                          <div className="edit-rule">
                             <input
                               // re-mounted when the saved value comes back tidied
                               key={r.exts.join(",")}
@@ -4381,6 +4386,23 @@ export default function App() {
                             >
                               ✕
                             </button>
+                          </div>
+                          {/* a type listed twice opens with one row's app only:
+                              say which, so the row does not look like it works */}
+                          {[...new Set((r.shadowed ?? []).map((s) => s.by))].map((by) => {
+                            // the deciding row always has an app (edit.rs `winner`)
+                            const app =
+                              appChoices.find((a) => a.target === editRules[by]?.app)?.name ?? t("(not installed)");
+                            const exts = (r.shadowed ?? []).filter((s) => s.by === by).map((s) => s.ext);
+                            return (
+                              <div key={by} className="edit-rule-note">
+                                {tf(by < i ? "{exts} already open with {app} above, not here" : "{exts} open with {app} below, not here", {
+                                  exts: exts.join(", "),
+                                  app,
+                                })}
+                              </div>
+                            );
+                          })}
                           </div>
                         ))}
                       </div>

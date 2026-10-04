@@ -1023,6 +1023,12 @@ input.query:active {
   min-width: 0;
   padding: 4px 6px;
 }
+/* a type another row decides (#18) */
+.edit-rule-note {
+  margin: 2px 0 0 2px;
+  font-size: 11px;
+  color: var(--accent);
+}
 
 /* "Add common places": a checklist under the folder header */
 .places {

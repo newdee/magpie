@@ -4528,10 +4528,10 @@ fn app_choices(state: State<'_, AppState>) -> Vec<serde_json::Value> {
 
 /// The "Edit with" table (#14): which app opens which file types on Ctrl+E.
 #[tauri::command]
-async fn get_edit_rules(state: State<'_, AppState>) -> Result<Vec<magpie_core::edit::EditRule>, String> {
+async fn get_edit_rules(state: State<'_, AppState>) -> Result<Vec<magpie_core::edit::RuleView>, String> {
     let conn = state.db.lock().await;
     let stored = db::meta_get(&conn, magpie_core::edit::META_KEY).map_err(err_str)?;
-    Ok(magpie_core::edit::parse_rules(stored.as_deref()))
+    Ok(magpie_core::edit::view(magpie_core::edit::parse_rules(stored.as_deref())))
 }
 
 /// Save the table, extensions tidied. An app is kept as given, even one
@@ -4542,14 +4542,14 @@ async fn get_edit_rules(state: State<'_, AppState>) -> Result<Vec<magpie_core::e
 async fn set_edit_rules(
     state: State<'_, AppState>,
     rules: Vec<magpie_core::edit::EditRule>,
-) -> Result<Vec<magpie_core::edit::EditRule>, String> {
+) -> Result<Vec<magpie_core::edit::RuleView>, String> {
     let rules: Vec<magpie_core::edit::EditRule> = rules
         .into_iter()
         .map(|r| magpie_core::edit::EditRule { exts: magpie_core::edit::normalize_exts(&r.exts), app: r.app })
         .collect();
     let conn = state.db.lock().await;
     db::meta_set(&conn, magpie_core::edit::META_KEY, &serde_json::to_string(&rules).map_err(err_str)?).map_err(err_str)?;
-    Ok(rules)
+    Ok(magpie_core::edit::view(rules))
 }
 
 /// Ctrl+E / ⌘E on a file: the app picked for its type, or the system's own

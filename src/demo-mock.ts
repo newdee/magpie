@@ -34,6 +34,17 @@ const demoVolume = { level: 38, muted: false };
 let demoEditRules: { exts: string[]; app: string }[] = [
   { exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "psd"], app: "" },
 ];
+/// like edit.rs `view`: per row, the extensions another row decides
+function demoRuleView() {
+  const winner = (ext: string) => demoEditRules.findIndex((r) => r.app && r.exts.includes(ext));
+  return demoEditRules.map((r, i) => ({
+    ...r,
+    shadowed: r.exts.flatMap((ext) => {
+      const by = winner(ext);
+      return by >= 0 && by !== i ? [{ ext, by }] : [];
+    }),
+  }));
+}
 const demoEditApps = [
   { name: "Adobe Photoshop 2026", target: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Adobe Photoshop 2026.lnk" },
   { name: "Paint", target: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Paint.lnk" },
@@ -375,7 +386,7 @@ mockIPC((cmd, args) => {
     case "app_choices":
       return demoEditApps;
     case "get_edit_rules":
-      return demoEditRules;
+      return demoRuleView();
     case "set_edit_rules": {
       // tidied like the backend: lower case, no dots, each once
       const rules = (args as { rules: { exts: string[]; app: string }[] }).rules;
@@ -391,7 +402,7 @@ mockIPC((cmd, args) => {
         ],
         app: r.app,
       }));
-      return demoEditRules;
+      return demoRuleView();
     }
     case "edit_file": {
       const path = (args as { path: string }).path;

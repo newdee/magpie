@@ -171,6 +171,8 @@ const ZH: Record<string, string> = {
   "earliest on record {d}": "最早记录 {d}",
   "latest {d}": "最近一次 {d}",
   "Files inside: {n}": "包含 {n} 个文件",
+  "{exts} already open with {app} above, not here": "{exts} 已在上面设为用 {app} 打开，这一行对它们不生效",
+  "{exts} open with {app} below, not here": "{exts} 会用下面那行的 {app} 打开，这一行对它们不生效",
   "password-protected, names only": "有密码，只能看到文件名",
   Edit: "编辑",
   "Edit with {app}": "用 {app} 编辑",
