@@ -479,6 +479,9 @@ const WINDOW_WIDTH = 720;
 // the tab strip and the query row never reflow when the pane opens
 const PREVIEW_PANE_WIDTH = 372;
 const WINDOW_WIDTH_PREVIEW = WINDOW_WIDTH + PREVIEW_PANE_WIDTH;
+// the list area is at least this tall while the pane is open, so a single
+// result still gets a preview worth reading (about 12 lines of text)
+const PREVIEW_MIN_HEIGHT = 260;
 
 /// What the index knows about a web address (webinfo.rs).
 interface WebInfo {
@@ -5731,8 +5734,19 @@ export default function App() {
           <>
           <div
             className="body-row"
-            // the menu floats over the list; a short list grows to hold it
-            style={actionsOpen ? { minHeight: menuActions.length * 34 + 28 } : undefined}
+            // the menu floats over the list; a short list grows to hold it.
+            // So it does for the preview: one result alone left the pane a
+            // few lines tall, its content cut off at the bottom
+            style={
+              actionsOpen || paneLaidOut
+                ? {
+                    minHeight: Math.max(
+                      actionsOpen ? menuActions.length * 34 + 28 : 0,
+                      paneLaidOut ? PREVIEW_MIN_HEIGHT : 0,
+                    ),
+                  }
+                : undefined
+            }
           >
           {actionsOpen && menuActions.length > 0 && (
             <div className="action-menu" role="menu">
