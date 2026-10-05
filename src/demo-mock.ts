@@ -35,6 +35,7 @@ let demoEditRules: { exts: string[]; app: string }[] = [
   { exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "psd"], app: "" },
 ];
 const demoRecallSkipped = new Set<string>();
+let demoPins: string[] = [];
 let demoWorkspaces: { name: string; items: { kind: string; target: string; title: string }[]; updated: number }[] = [
   {
     name: "Paper",
@@ -590,6 +591,28 @@ mockIPC((cmd, args) => {
       if ((source === "local" || source === "web") && !demoRecallSkipped.has("bookmark")) out.push(bookmark);
       if ((source === "local" || source === "github-stars") && !demoRecallSkipped.has("repo")) out.push(repo);
       return out;
+    }
+    // pinned folders, in memory, by pins.rs's rules (no disk to check here)
+    case "get_pinned_folders":
+      return [...demoPins];
+    case "set_pinned_folders": {
+      const paths = (args as { paths: string[] }).paths.map((p) => p.trim()).filter(Boolean);
+      const once = paths.filter((p, i) => paths.findIndex((q) => q.toLowerCase() === p.toLowerCase()) === i);
+      if (once.length > 4) throw new Error("at most 4 pinned folders");
+      demoPins = once;
+      return [...demoPins];
+    }
+    case "pinned_rows":
+      return demoPins.map((p) => ({ kind: "folder", path: p, name: p.split(/[\\/]/).filter(Boolean).pop() ?? p, score: 0 }));
+    case "open_pinned_folder": {
+      const path = (args as { path: string }).path;
+      if (!demoPins.includes(path)) throw new Error("not a pinned folder");
+      return `dry run: open folder ${path}`;
+    }
+    case "today_line": {
+      // the browser's own today; no Chinese calendar here rather than a made-up one
+      const d = new Date();
+      return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), weekday: ((d.getDay() + 6) % 7) + 1, hour: d.getHours(), lunar: null };
     }
     case "recall_skip":
       demoRecallSkipped.add((args as { kind: string }).kind);

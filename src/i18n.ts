@@ -181,6 +181,17 @@ const ZH: Record<string, string> = {
   "Bookmarked {n} months ago": "{n} 个月前收藏的",
   "Don't show this again": "不再提醒这条",
   "Store app": "商店应用",
+  "Date line on the empty box": "空框显示日期",
+  Pinned: "置顶",
+  "Pinned folders": "置顶文件夹",
+  "Up to {n} folders at the top of the empty box, in this order; Enter opens one. They need not be indexed.":
+    "最多 {n} 个，按这个顺序显示在空搜索框的最上面，回车打开。不需要在索引文件夹里。",
+  "Pin a folder…": "置顶文件夹…",
+  "Move up": "上移",
+  "Move down": "下移",
+  "Unpin the folder": "取消置顶",
+  "With nothing typed, the top line shows today's date and weekday, the Chinese calendar in Chinese, and a word for the hour.":
+    "搜索框为空时，最上面一行显示今天的日期、星期和农历，夜里、早上、中午还会有一句问候。",
   "The row from long ago changes every day; Ctrl+K on it stops one from coming back":
     "空搜索框里那条旧物每天换一条；在它上面按 Ctrl+K 可以让它不再出现",
   "Ctrl+K on a result adds it to a workspace; type the name and Enter opens it all — gzxc or ws lists them":
@@ -218,8 +229,8 @@ const ZH: Record<string, string> = {
   "(no output)": "（没有输出）",
   "Enter copies the output · Esc closes": "按 Enter 复制输出 · Esc 关闭",
   "From long ago on the empty box": "旧物重现",
-  "With nothing typed, one bookmark or starred repo you kept long ago comes up first, a different one each day. {key} on it can stop it from coming back.":
-    "搜索框为空时，最上面显示一条很久以前收藏的书签或 star 的仓库，每天换一条。在它上面按 {key} 可以让它不再出现。",
+  "With nothing typed, a bookmark and a starred repo you kept long ago come up first, different ones each day: Web shows the bookmark, Stars the repo, Local both. {key} on one can stop it from coming back.":
+    "搜索框为空时，最上面显示很久以前收藏的书签和 star 的仓库，每天换：Web 页签显示书签，Stars 页签显示仓库，本地文件页签两个都有。在它上面按 {key} 可以让它不再出现。",
   "{exts} already open with {app} above, not here": "{exts} 已在上面设为用 {app} 打开，这一行对它们不生效",
   "{exts} open with {app} below, not here": "{exts} 会用下面那行的 {app} 打开，这一行对它们不生效",
   "password-protected, names only": "有密码，只能看到文件名",
@@ -702,6 +713,12 @@ export function setLang(l: Lang) {
 
 export function t(s: string): string {
   return current === "zh" ? (ZH[s] ?? s) : s;
+}
+
+/// The interface language in use, for what is worded differently rather
+/// than translated (the date line: the Chinese calendar only in Chinese).
+export function currentLang(): Lang {
+  return current;
 }
 
 export function tf(s: string, vars: Record<string, string | number>): string {

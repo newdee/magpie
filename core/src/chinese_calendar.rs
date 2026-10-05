@@ -284,6 +284,50 @@ pub fn term_notice_now(clock: Option<&str>, enabled: bool, last_shown: Option<&s
     Some(TermNotice { day: now.date().format("%Y-%m-%d").to_string(), term, line, source })
 }
 
+/// What the date line at the top of the empty box shows (#13): today, the
+/// weekday (1 = Monday), the hour the greeting goes by, and the
+/// Chinese-calendar day. The page words it in the interface language.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TodayLine {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub weekday: u32,
+    pub hour: u32,
+    pub lunar: Option<String>,
+}
+
+pub fn today_line(now: chrono::NaiveDateTime) -> TodayLine {
+    use chrono::Timelike;
+    let d = now.date();
+    TodayLine {
+        year: d.year(),
+        month: d.month(),
+        day: d.day(),
+        weekday: d.weekday().number_from_monday(),
+        hour: now.hour(),
+        lunar: lunar_short(d),
+    }
+}
+
+/// `day` in the Chinese calendar, short, for the date line on the empty box
+/// (#13): the month and day (八月廿四), then the day's festivals and the
+/// solar term when one begins (八月十五 · 中秋节). None outside the years
+/// answered.
+pub fn lunar_short(day: NaiveDate) -> Option<String> {
+    let s = solar(day)?;
+    let l = s.get_lunar_day();
+    let mut parts = vec![format!("{}{}", l.get_lunar_month().get_name(), l.get_name())];
+    for name in [l.get_festival().map(|f| f.get_name()), s.get_festival().map(|f| f.get_name())].into_iter().flatten() {
+        parts.push(name);
+    }
+    let td = s.get_term_day();
+    if td.get_day_index() == 0 {
+        parts.push(td.get_solar_term().get_name());
+    }
+    Some(parts.join(" · "))
+}
+
 /// The term that begins on `day` with this year's couplet, for the tips on
 /// the empty box (all day, not only from nine).
 pub fn term_of_day(day: NaiveDate) -> Option<TermNotice> {
@@ -634,6 +678,20 @@ mod tests {
         let a = answer("农历 2026年腊月三十", t).unwrap();
         assert!(a.error && a.value.contains("没有腊月三十"), "{a:?}");
         assert!(answer("农历 2300-1-1", t).unwrap().error);
+    }
+
+    #[test]
+    fn the_short_lunar_date() {
+        assert_eq!(lunar_short(day(2026, 10, 5)).as_deref(), Some("八月廿五"));
+        assert_eq!(lunar_short(day(2026, 9, 25)).as_deref(), Some("八月十五 · 中秋节"), "a festival comes along");
+        assert_eq!(lunar_short(day(2026, 10, 8)).as_deref(), Some("八月廿八 · 寒露"), "a term on the day it begins");
+        assert_eq!(lunar_short(day(2026, 10, 9)).as_deref(), Some("八月廿九"), "not on the days after");
+        assert_eq!(lunar_short(day(1800, 1, 1)), None);
+        let t = today_line(day(2026, 10, 5).and_hms_opt(23, 40, 0).unwrap());
+        assert_eq!(
+            t,
+            TodayLine { year: 2026, month: 10, day: 5, weekday: 1, hour: 23, lunar: Some("八月廿五".into()) }
+        );
     }
 
     #[test]

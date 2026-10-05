@@ -273,6 +273,7 @@ const EXPORTABLE_META: &[&str] = &[
     magpie_core::edit::META_KEY,
     magpie_core::workspace::META_KEY,
     magpie_core::scripts::META_KEY,
+    magpie_core::pins::META_KEY,
 ];
 
 /// Write a settings snapshot (backend meta + the frontend's localStorage
@@ -1671,6 +1672,67 @@ async fn open_workspace(app: AppHandle, state: State<'_, AppState>, name: String
         hide_palette(&app);
     }
     Ok(report)
+}
+
+// ---------- pinned folders (pins.rs) ----------
+
+#[tauri::command]
+async fn get_pinned_folders(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().await;
+    magpie_core::pins::list(&conn).map_err(err_str)
+}
+
+/// The whole list as the settings page has it now (added, removed, moved).
+#[tauri::command]
+async fn set_pinned_folders(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<String>, String> {
+    let conn = state.db.lock().await;
+    magpie_core::pins::set(&conn, &paths).map_err(err_str)
+}
+
+/// The pinned folders that are still there, as rows for the local tab's
+/// empty box, in the user's order.
+#[tauri::command]
+async fn pinned_rows(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let pins = {
+        let conn = state.db.lock().await;
+        magpie_core::pins::list(&conn).map_err(err_str)?
+    };
+    Ok(pins
+        .into_iter()
+        .filter(|p| Path::new(p).is_dir())
+        .map(|p| {
+            let name = Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
+            json!({ "kind": "folder", "path": p, "name": name, "score": 0.0 })
+        })
+        .collect())
+}
+
+/// Open a pinned folder. Only a folder on the pinned list opens here: the
+/// pins are how a folder outside the indexed ones gets opened at all.
+#[tauri::command]
+async fn open_pinned_folder(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let pinned = {
+        let conn = state.db.lock().await;
+        magpie_core::pins::is_pinned(&conn, &path).map_err(err_str)?
+    };
+    if !pinned || !Path::new(&path).is_dir() {
+        return Err("not a pinned folder".into());
+    }
+    if open_dry_run() {
+        return Ok(format!("dry run: open folder {path}"));
+    }
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)?;
+    hide_palette(&app);
+    Ok(String::new())
+}
+
+/// The date line at the top of the empty box (#13): today, the weekday
+/// (1 = Monday), the hour for the greeting, and the Chinese-calendar day.
+/// The clock is the one tests set in `MAGPIE_TEST_NOW`, as for the recall
+/// card and the solar-term reminder.
+#[tauri::command]
+fn today_line() -> magpie_core::chinese_calendar::TodayLine {
+    magpie_core::chinese_calendar::today_line(magpie_core::chinese_calendar::local_now())
 }
 
 /// "Don't show this again" on the recall card.
@@ -6182,6 +6244,11 @@ pub fn run() {
             web_details,
             recall_today,
             recall_skip,
+            today_line,
+            get_pinned_folders,
+            set_pinned_folders,
+            pinned_rows,
+            open_pinned_folder,
             search_scripts,
             run_script,
             scripts_folder,

@@ -23,8 +23,12 @@ import {
   setRecentsEnabled,
   recallEnabled,
   setRecallEnabled,
+  todayLineEnabled,
+  setTodayLineEnabled,
+  todayText,
+  type TodayLine,
 } from "./extras";
-import { loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
+import { currentLang, loadLangPref, resolveLang, setLang, t, tf, type LangPref } from "./i18n";
 import "./App.css";
 
 /// Why the daily recall card (recall.rs) shows this row: kept on this date
@@ -295,7 +299,16 @@ type Hit =
   | CommandHit
   | ProcessHit
   | WorkspaceHit
-  | ScriptHit;
+  | ScriptHit
+  | FolderHit;
+
+/// A pinned folder (pins.rs) at the top of the local tab's empty box.
+interface FolderHit {
+  kind: "folder";
+  path: string;
+  name: string;
+  score: number;
+}
 
 /// A Windows Store (packaged) app: its target is the shell's name for it,
 /// not a file (apps.rs `STORE_APP_PREFIX`).
@@ -348,6 +361,8 @@ function hitKey(r: Hit): string {
       return `workspace-${r.name.toLowerCase()}`;
     case "script":
       return `script-${r.path}`;
+    case "folder":
+      return `folder-${r.path}`;
     default:
       return `${r.kind}-${r.id}`;
   }
@@ -542,6 +557,7 @@ const LOCAL_KEYS = [
   "magpie.tips",
   "magpie.recents",
   "magpie.recall",
+  "magpie.todayline",
   "magpie.taborder",
   "magpie.tabhidden",
   "magpie.defaulttab",
@@ -1120,6 +1136,9 @@ export default function App() {
   useEffect(() => setScriptOut(null), [query]);
   const [recentsOn, setRecentsOn] = useState(recentsEnabled);
   const [recallOn, setRecallOn] = useState(recallEnabled);
+  // the date line on the empty box (#13), fetched each time the box empties
+  const [todayOn, setTodayOn] = useState(todayLineEnabled);
+  const [todayLine, setTodayLine] = useState<TodayLine | null>(null);
   // the scripts folder (scripts.rs) and how many commands it holds
   const [scriptsInfo, setScriptsInfo] = useState<{ dir: string; custom: boolean; count: number } | null>(null);
   const loadScriptsInfo = useCallback(
@@ -1132,6 +1151,18 @@ export default function App() {
   useEffect(() => {
     if (showSettings) void loadScriptsInfo();
   }, [showSettings, loadScriptsInfo]);
+  // pinned folders (pins.rs), as the settings page lists and edits them
+  const [pinnedFolders, setPinnedFolders] = useState<string[]>([]);
+  useEffect(() => {
+    if (showSettings) void invoke<string[]>("get_pinned_folders").then(setPinnedFolders).catch(() => {});
+  }, [showSettings]);
+  const savePins = useCallback(async (paths: string[]) => {
+    try {
+      setPinnedFolders(await invoke<string[]>("set_pinned_folders", { paths }));
+    } catch (e) {
+      setLastError(String(e));
+    }
+  }, []);
   // settings drafts for the selection-search chord and the notes file
   const [selDraft, setSelDraft] = useState("");
   const [selMsg, setSelMsg] = useState<string | null>(null);
@@ -1410,13 +1441,21 @@ export default function App() {
     }
     if (q.trim() === "" && srcId !== "clips") {
       const mainTab = srcId === "local" || srcId === "github-stars" || srcId === "web";
+      // the date line: read fresh, so it turns over at midnight and the
+      // greeting follows the hour
+      if (mainTab && todayLineEnabled()) {
+        void invoke<TodayLine>("today_line").then(setTodayLine).catch(() => setTodayLine(null));
+      }
       // opt-in: the empty box lists what you opened most recently from this
       // tab, so "back to that file from a minute ago" is two keystrokes
       const wantRecents = recentsEnabled() && mainTab;
-      // on unless turned off: today's card from long ago leads (recall.rs)
+      // on unless turned off: today's cards from long ago lead (recall.rs)
       const wantRecall = recallEnabled() && mainTab;
-      if (wantRecents || wantRecall) {
-        const [recall, recents] = await Promise.all([
+      // the folders the user pinned, first on the local tab (pins.rs)
+      const wantPins = srcId === "local";
+      if (wantRecents || wantRecall || wantPins) {
+        const [pins, recall, recents] = await Promise.all([
+          wantPins ? invoke<Hit[]>("pinned_rows").catch(() => []) : Promise.resolve([]),
           wantRecall ? invoke<Hit[]>("recall_today", { source: srcId }).catch(() => []) : Promise.resolve([]),
           wantRecents ? invoke<Hit[]>("recent_hits", { source: srcId }).catch(() => null) : Promise.resolve([]),
         ]);
@@ -1427,7 +1466,7 @@ export default function App() {
           // the same page bookmarked twice has two row ids: compare addresses
           const same = (a: Hit, b: Hit) =>
             a.kind === "bookmark" && b.kind === "bookmark" ? a.url === b.url : hitKey(a) === hitKey(b);
-          show([...cards, ...list.filter((h) => !cards.some((c) => same(h, c)))]);
+          show([...(Array.isArray(pins) ? pins : []), ...cards, ...list.filter((h) => !cards.some((c) => same(h, c)))]);
         }
         return;
       }
@@ -1575,6 +1614,10 @@ export default function App() {
   // settings, or dropping an image stops the timer instead of burning one
   // in the background
   const tipsIdle = showTips && !showSettings && query.trim() === "" && !imageQuery;
+  // the date line heads the empty box of the main tabs; it is no result, so
+  // the selection starts on the row under it
+  const todayShown =
+    todayOn && todayLine != null && !showSettings && query.trim() === "" && !imageQuery && !wsNaming && source !== "clips";
   useEffect(() => {
     if (!tipsIdle) {
       // leaving the empty state mid-hand-off would strand the phase on
@@ -2316,6 +2359,16 @@ export default function App() {
       await runScriptHit(hit);
       return;
     }
+    if (hit.kind === "folder") {
+      try {
+        const said = await invoke<string>("open_pinned_folder", { path: hit.path });
+        if (said.startsWith("dry run:")) setNotice(said);
+        else await finishAction();
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return;
+    }
     if (hit.kind === "command" || hit.kind === "process") {
       await runRisky(hit);
       return;
@@ -2632,6 +2685,24 @@ export default function App() {
             { key: "end", label: t("End process"), risky: true, run: () => runRisky(hit) },
             { key: "copy-pid", label: t("Copy PID"), run: () => copy(String(hit.pid)) },
             ...(hit.exe ? [{ key: "copy-path", label: t("Copy path"), run: () => copy(hit.exe ?? "") }] : []),
+          ];
+        case "folder":
+          return [
+            { key: "open", label: t("Open"), run: () => openHit(hit) },
+            { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
+            {
+              key: "unpin",
+              label: t("Unpin the folder"),
+              run: () =>
+                act(
+                  invoke<string[]>("get_pinned_folders")
+                    .then((all) => invoke<string[]>("set_pinned_folders", { paths: all.filter((p) => p !== hit.path) }))
+                    .then((left) => {
+                      setPinnedFolders(left);
+                      refresh();
+                    }),
+                ),
+            },
           ];
         case "script":
           return [
@@ -4092,6 +4163,35 @@ export default function App() {
                       ))}
                     </div>
                   </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Date line on the empty box")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "With nothing typed, the top line shows today's date and weekday, the Chinese calendar in Chinese, and a word for the hour.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${todayOn === o.on ? "active" : ""}`}
+                          onClick={() => {
+                            setTodayOn(o.on);
+                            setTodayLineEnabled(o.on);
+                            void refreshResults();
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
 
                 <p className="set-eyebrow">{t("Script commands")}</p>
@@ -4763,6 +4863,73 @@ export default function App() {
                               onClick={() => removeFolder(f.id)}
                               title={t("Remove from index")}
                               aria-label={`Remove ${f.path}`}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="set-row stack">
+                    <div className="set-head">
+                      <div className="set-label">
+                        <span className="set-name">{t("Pinned folders")}</span>
+                        <span className="set-desc">
+                          {tf(
+                            "Up to {n} folders at the top of the empty box, in this order; Enter opens one. They need not be indexed.",
+                            { n: 4 },
+                          )}
+                        </span>
+                      </div>
+                      <button
+                        className="ghost-btn"
+                        disabled={pinnedFolders.length >= 4}
+                        onClick={async () => {
+                          const dir = await holdOpen(() => openDialog({ directory: true, multiple: false }));
+                          if (typeof dir === "string") await savePins([...pinnedFolders, dir]);
+                        }}
+                      >
+                        {t("Pin a folder…")}
+                      </button>
+                    </div>
+                    {pinnedFolders.length > 0 && (
+                      <div className="folder-list">
+                        {pinnedFolders.map((p, i) => (
+                          <div key={p} className="folder-row pin-row">
+                            <span className="folder-path mono-wrap">{p}</span>
+                            <button
+                              className="folder-remove"
+                              title={t("Move up")}
+                              aria-label={t("Move up")}
+                              disabled={i === 0}
+                              onClick={() => {
+                                const v = [...pinnedFolders];
+                                [v[i - 1], v[i]] = [v[i], v[i - 1]];
+                                void savePins(v);
+                              }}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className="folder-remove"
+                              title={t("Move down")}
+                              aria-label={t("Move down")}
+                              disabled={i === pinnedFolders.length - 1}
+                              onClick={() => {
+                                const v = [...pinnedFolders];
+                                [v[i], v[i + 1]] = [v[i + 1], v[i]];
+                                void savePins(v);
+                              }}
+                            >
+                              ↓
+                            </button>
+                            <button
+                              className="folder-remove"
+                              title={t("Unpin the folder")}
+                              aria-label={t("Unpin the folder")}
+                              onClick={() => void savePins(pinnedFolders.filter((_, j) => j !== i))}
                             >
                               ✕
                             </button>
@@ -5751,7 +5918,7 @@ export default function App() {
           ))}
         </div>
       ) : (
-        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null || scriptOut != null) && (
+        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null || scriptOut != null || todayShown) && (
           <>
           <div
             className="body-row"
@@ -5811,6 +5978,11 @@ export default function App() {
                   <span className="row-sub">{bangHit.url}</span>
                 </div>
                 <span className="badge">{t("web")}</span>
+              </div>
+            )}
+            {todayShown && todayLine && (
+              <div className="row today-row" aria-live="off">
+                <span className="today-text">{todayText(todayLine, currentLang())}</span>
               </div>
             )}
             {scriptOut && (
@@ -5962,6 +6134,19 @@ export default function App() {
                     </div>
                     <div className="row-meta">
                       <span className="app-badge">{t("Command")}</span>
+                    </div>
+                  </>
+                ) : r.kind === "folder" ? (
+                  <>
+                    <div className="row-lead">
+                      <span className="app-icon cmd-glyph">📁</span>
+                      <div className="row-main">
+                        <span className="row-title">{r.name}</span>
+                        <span className="row-sub">{r.path}</span>
+                      </div>
+                    </div>
+                    <div className="row-meta">
+                      <span className="app-badge">{t("Pinned")}</span>
                     </div>
                   </>
                 ) : r.kind === "script" ? (
@@ -6805,6 +6990,11 @@ function PreviewPane({
         <>
           <p className="pv-title">{hit.name}</p>
           <p className="pv-meta mono-wrap">{hit.target}</p>
+        </>
+      ) : hit.kind === "folder" ? (
+        <>
+          <p className="pv-title">{hit.name}</p>
+          <p className="pv-meta mono-wrap">{hit.path}</p>
         </>
       ) : hit.kind === "workspace" ? (
         <>

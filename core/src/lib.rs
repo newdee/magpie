@@ -22,6 +22,7 @@ pub mod launch;
 pub mod ocr;
 pub mod onnx;
 pub mod origin;
+pub mod pins;
 pub mod places;
 pub mod scripts;
 pub mod search;
