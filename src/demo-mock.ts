@@ -945,6 +945,9 @@ mockIPC((cmd, args) => {
       return null;
     case "plugin:event|listen":
       return 1;
+    case "plugin:dialog|open":
+      // a test picks what the folder dialog answers; otherwise it is cancelled
+      return (window as unknown as { __demoDialogPick?: string }).__demoDialogPick ?? null;
     case "plugin:updater|check":
       // ?update=1 simulates a pending release (exercises the footer red dot)
       return new URLSearchParams(location.search).has("update")

@@ -5981,7 +5981,8 @@ export default function App() {
               </div>
             )}
             {todayShown && todayLine && (
-              <div className="row today-row" aria-live="off">
+              // extra-row: like the calculator row, no result of the search
+              <div className="row extra-row today-row" aria-live="off">
                 <span className="today-text">{todayText(todayLine, currentLang())}</span>
               </div>
             )}
