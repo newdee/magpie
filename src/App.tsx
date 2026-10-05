@@ -1930,6 +1930,9 @@ export default function App() {
         setTip(termTodayRef.current ? TERM_TIP : randomTip());
         setTipPhase("in");
         refreshStatus();
+        // an empty box is built fresh on every summon: hidden empty, it kept
+        // the last one, yesterday's date line and recall cards after midnight
+        if (queryRef.current.trim() === "" && !imageQueryRef.current) void refreshResults();
       }),
       // drop an image file anywhere on the palette to search by it
       getCurrentWebview().onDragDropEvent(async (e) => {
