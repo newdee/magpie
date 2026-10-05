@@ -34,7 +34,7 @@ const demoVolume = { level: 38, muted: false };
 let demoEditRules: { exts: string[]; app: string }[] = [
   { exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "psd"], app: "" },
 ];
-let demoRecallSkipped = false;
+const demoRecallSkipped = new Set<string>();
 let demoWorkspaces: { name: string; items: { kind: string; target: string; title: string }[]; updated: number }[] = [
   {
     name: "Paper",
@@ -530,7 +530,7 @@ mockIPC((cmd, args) => {
       const q = String((args as { query?: string }).query ?? "").trim().toLowerCase();
       if (!q) return [];
       const all = [...demoWorkspaces].sort((a, b) => b.updated - a.updated);
-      if (["ws", "workspace", "workspaces", "现场", "工作现场"].includes(q)) return all.map((w) => ({ ...w, score: 0.95 }));
+      if (["ws", "workspace", "workspaces", "现场", "工作现场", "gzxc", "gongzuoxianchang"].includes(q)) return all.map((w) => ({ ...w, score: 0.95 }));
       return all
         .map((w) => {
           const n = w.name.toLowerCase();
@@ -569,23 +569,30 @@ mockIPC((cmd, args) => {
       const w = demoWorkspaces.find((x) => x.name.toLowerCase() === name);
       return w ? w.items.map((i) => `dry run: open ${i.kind} ${i.target}`) : [];
     }
-    case "recall_today":
-      // the empty box's card from long ago: a bookmark kept two years ago today
-      return demoRecallSkipped
-        ? null
-        : {
-            kind: "bookmark",
-            id: 3,
-            url: "https://doc.rust-lang.org/book/",
-            title: "The Rust Programming Language",
-            folder: "Reading",
-            browser: "firefox",
-            added_at: now - 730 * day,
-            score: 0,
-            recall: { why: "anniversary", years: 2 },
-          };
+    case "recall_today": {
+      // the empty box's cards from long ago, by tab like recall_today: a
+      // bookmark kept two years ago today (local, web), a repo starred 14
+      // months ago (local, stars)
+      const source = (args as { source?: string }).source;
+      const bookmark = {
+        kind: "bookmark",
+        id: 3,
+        url: "https://doc.rust-lang.org/book/",
+        title: "The Rust Programming Language",
+        folder: "Reading",
+        browser: "firefox",
+        added_at: now - 730 * day,
+        score: 0,
+        recall: { why: "anniversary", years: 2 },
+      };
+      const repo = { kind: "repo", ...repoHits[4], score: 0, recall: { why: "long_ago", months: 14 } };
+      const out = [];
+      if ((source === "local" || source === "web") && !demoRecallSkipped.has("bookmark")) out.push(bookmark);
+      if ((source === "local" || source === "github-stars") && !demoRecallSkipped.has("repo")) out.push(repo);
+      return out;
+    }
     case "recall_skip":
-      demoRecallSkipped = true;
+      demoRecallSkipped.add((args as { kind: string }).kind);
       return null;
     case "recent_hits":
       // the empty-box "recent opens" list: a few file rows for the local tab

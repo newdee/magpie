@@ -1417,17 +1417,17 @@ export default function App() {
       const wantRecall = recallEnabled() && mainTab;
       if (wantRecents || wantRecall) {
         const [recall, recents] = await Promise.all([
-          wantRecall ? invoke<Hit | null>("recall_today").catch(() => null) : Promise.resolve(null),
+          wantRecall ? invoke<Hit[]>("recall_today", { source: srcId }).catch(() => []) : Promise.resolve([]),
           wantRecents ? invoke<Hit[]>("recent_hits", { source: srcId }).catch(() => null) : Promise.resolve([]),
         ]);
         if (seq === searchSeqRef.current && sourceRef.current === srcIdx) {
-          // a failed recent list keeps the bare box, as before the card
+          // a failed recent list keeps the bare box, as before the cards
           const list = Array.isArray(recents) ? recents : [];
-          const card = recall ? [recall] : [];
+          const cards = Array.isArray(recall) ? recall : [];
           // the same page bookmarked twice has two row ids: compare addresses
           const same = (a: Hit, b: Hit) =>
             a.kind === "bookmark" && b.kind === "bookmark" ? a.url === b.url : hitKey(a) === hitKey(b);
-          show([...card, ...list.filter((h) => !recall || !same(h, recall))]);
+          show([...cards, ...list.filter((h) => !cards.some((c) => same(h, c)))]);
         }
         return;
       }
@@ -4068,7 +4068,7 @@ export default function App() {
                       <span className="set-name">{t("From long ago on the empty box")}</span>
                       <span className="set-desc">
                         {tf(
-                          "With nothing typed, one bookmark or starred repo you kept long ago comes up first, a different one each day. {key} on it can stop it from coming back.",
+                          "With nothing typed, a bookmark and a starred repo you kept long ago come up first, different ones each day: Web shows the bookmark, Stars the repo, Local both. {key} on one can stop it from coming back.",
                           { key: IS_MAC ? "⌘K" : "Ctrl+K" },
                         )}
                       </span>

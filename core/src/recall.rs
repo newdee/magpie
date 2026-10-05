@@ -47,8 +47,9 @@ struct Stored {
     pick: Pick,
 }
 
-/// Everything that may come up, with when it was kept (unix seconds).
-fn candidates(conn: &Connection) -> Result<Vec<(String, String, i64)>> {
+/// Everything of one kind ("bookmark" or "repo") that may come up, with
+/// when it was kept (unix seconds).
+fn candidates(conn: &Connection, kind: &str) -> Result<Vec<(String, String, i64)>> {
     let skipped: HashSet<(String, String)> = conn
         .prepare("SELECT kind, key FROM recall_skip")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -70,7 +71,7 @@ fn candidates(conn: &Connection) -> Result<Vec<(String, String, i64)>> {
             out.push(("repo".to_string(), id.to_string(), t.timestamp()));
         }
     }
-    out.retain(|(k, key, _)| !skipped.contains(&(k.clone(), key.clone())));
+    out.retain(|(k, key, _)| k == kind && !skipped.contains(&(k.clone(), key.clone())));
     // a stable order, so the day's choice does not depend on row order
     out.sort();
     Ok(out)
@@ -95,9 +96,9 @@ fn index_for(day: NaiveDate, len: usize) -> usize {
     (seed % len as u64) as usize
 }
 
-/// Today's choice from scratch (no memory of earlier picks).
-fn choose(conn: &Connection, today: NaiveDate, now: i64, tz: FixedOffset) -> Result<Option<Pick>> {
-    let all = candidates(conn)?;
+/// Today's choice of one kind from scratch (no memory of earlier picks).
+fn choose(conn: &Connection, kind: &str, today: NaiveDate, now: i64, tz: FixedOffset) -> Result<Option<Pick>> {
+    let all = candidates(conn, kind)?;
     let anniversaries: Vec<(&(String, String, i64), i64)> = all
         .iter()
         .filter_map(|c| {
@@ -125,24 +126,31 @@ fn choose(conn: &Connection, today: NaiveDate, now: i64, tz: FixedOffset) -> Res
     Ok(Some(Pick { kind: c.0.clone(), key: c.1.clone(), why: Why::LongAgo { months: months_between(c.2, now, tz) } }))
 }
 
-/// The card for `today`: the one already chosen today while it is still
-/// there and not skipped, else a new choice, remembered for the rest of the
-/// day. None when nothing qualifies.
-pub fn today(conn: &Connection, today: NaiveDate, now: i64, tz: FixedOffset) -> Result<Option<Pick>> {
-    let stored = crate::db::meta_get(conn, META_KEY)?
+/// Where the day's card of a kind is remembered.
+fn meta_key(kind: &str) -> String {
+    format!("{META_KEY}:{kind}")
+}
+
+/// The day's card of one kind ("bookmark" or "repo"; each tab shows its
+/// own, the local tab both, #13): the one already chosen today while it is
+/// still there and not skipped, else a new choice, remembered for the rest
+/// of the day. None when nothing of that kind qualifies.
+pub fn today(conn: &Connection, kind: &str, today: NaiveDate, now: i64, tz: FixedOffset) -> Result<Option<Pick>> {
+    let key = meta_key(kind);
+    let stored = crate::db::meta_get(conn, &key)?
         .and_then(|s| serde_json::from_str::<Stored>(&s).ok())
         .filter(|s| s.day == today.to_string());
     if let Some(s) = stored {
-        let still_there = candidates(conn)?.iter().any(|c| c.0 == s.pick.kind && c.1 == s.pick.key);
+        let still_there = candidates(conn, kind)?.iter().any(|c| c.0 == s.pick.kind && c.1 == s.pick.key);
         if still_there {
             return Ok(Some(s.pick));
         }
     }
-    let pick = choose(conn, today, now, tz)?;
+    let pick = choose(conn, kind, today, now, tz)?;
     match &pick {
-        Some(p) => crate::db::meta_set(conn, META_KEY, &serde_json::to_string(&Stored { day: today.to_string(), pick: p.clone() })?)?,
+        Some(p) => crate::db::meta_set(conn, &key, &serde_json::to_string(&Stored { day: today.to_string(), pick: p.clone() })?)?,
         None => {
-            conn.execute("DELETE FROM meta WHERE key = ?1", [META_KEY])?;
+            conn.execute("DELETE FROM meta WHERE key = ?1", [&key])?;
         }
     }
     Ok(pick)
@@ -160,7 +168,7 @@ pub fn local_clock() -> (NaiveDate, i64, FixedOffset) {
 /// "Don't show this again": it never comes up again, and today gets another.
 pub fn skip(conn: &Connection, kind: &str, key: &str) -> Result<()> {
     conn.execute("INSERT OR IGNORE INTO recall_skip (kind, key) VALUES (?1, ?2)", params![kind, key])?;
-    conn.execute("DELETE FROM meta WHERE key = ?1", [META_KEY])?;
+    conn.execute("DELETE FROM meta WHERE key = ?1", [meta_key(kind)])?;
     Ok(())
 }
 
@@ -198,10 +206,10 @@ mod tests {
     fn nothing_kept_nothing_shown() {
         let conn = crate::db::open_in_memory().unwrap();
         let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
-        assert_eq!(today(&conn, day, ts(2026, 10, 4), utc()).unwrap(), None);
+        assert_eq!(today(&conn, "bookmark", day, ts(2026, 10, 4), utc()).unwrap(), None);
         // kept recently only: not yet forgotten
         bookmark(&conn, "https://new.example", ts(2026, 9, 1));
-        assert_eq!(today(&conn, day, ts(2026, 10, 4), utc()).unwrap(), None);
+        assert_eq!(today(&conn, "bookmark", day, ts(2026, 10, 4), utc()).unwrap(), None);
     }
 
     #[test]
@@ -210,11 +218,32 @@ mod tests {
         let now = ts(2026, 10, 4);
         let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
         bookmark(&conn, "https://old.example", ts(2020, 1, 1));
+        bookmark(&conn, "https://anniversary.example", ts(2023, 10, 4));
         repo(&conn, 7, "2024-10-04T08:00:00Z");
+        repo(&conn, 8, "2020-01-01T08:00:00Z");
         // the same date this year is not an anniversary
         bookmark(&conn, "https://today.example", ts(2026, 10, 4));
-        let p = today(&conn, day, now, utc()).unwrap().unwrap();
+        let p = today(&conn, "repo", day, now, utc()).unwrap().unwrap();
         assert_eq!((p.kind.as_str(), p.key.as_str(), &p.why), ("repo", "7", &Why::Anniversary { years: 2 }));
+        let p = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
+        assert_eq!((p.key.as_str(), &p.why), ("https://anniversary.example", &Why::Anniversary { years: 3 }));
+    }
+
+    #[test]
+    fn each_kind_has_its_own_card() {
+        let conn = crate::db::open_in_memory().unwrap();
+        let now = ts(2026, 10, 4);
+        let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
+        bookmark(&conn, "https://a.example", ts(2024, 1, 1));
+        repo(&conn, 3, "2024-02-01T00:00:00Z");
+        let b = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
+        let r = today(&conn, "repo", day, now, utc()).unwrap().unwrap();
+        assert_eq!((b.kind.as_str(), r.kind.as_str()), ("bookmark", "repo"), "a tab never gets the other kind (#13)");
+        // retiring the repo leaves the bookmark's card alone
+        skip(&conn, "repo", "3").unwrap();
+        assert_eq!(today(&conn, "repo", day, now, utc()).unwrap(), None);
+        assert_eq!(today(&conn, "bookmark", day, now, utc()).unwrap(), Some(b));
+        assert_eq!(today(&conn, "history", day, now, utc()).unwrap(), None, "no other kinds");
     }
 
     #[test]
@@ -224,10 +253,10 @@ mod tests {
         repo(&conn, 1, "2024-10-03T20:00:00Z");
         let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
         let bj = FixedOffset::east_opt(8 * 3600).unwrap();
-        let p = choose(&conn, day, ts(2026, 10, 4), bj).unwrap().unwrap();
+        let p = choose(&conn, "repo", day, ts(2026, 10, 4), bj).unwrap().unwrap();
         assert_eq!(p.why, Why::Anniversary { years: 2 });
         // in UTC it was the 3rd, so not today's; and it is old enough to come up anyway
-        let p = choose(&conn, day, ts(2026, 10, 4), utc()).unwrap().unwrap();
+        let p = choose(&conn, "repo", day, ts(2026, 10, 4), utc()).unwrap().unwrap();
         assert_eq!(p.why, Why::LongAgo { months: 24 });
     }
 
@@ -238,10 +267,11 @@ mod tests {
         let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
         bookmark(&conn, "https://a.example", ts(2026, 3, 1)); // 7 months
         bookmark(&conn, "https://recent.example", now - 30 * DAY);
-        repo(&conn, 3, "2025-12-01T00:00:00Z"); // 10 months
+        repo(&conn, 3, "2025-12-01T00:00:00Z"); // 10 months, but opened
         crate::frecency::record_use(&conn, "repo", "3", now - DAY).unwrap();
-        let p = today(&conn, day, now, utc()).unwrap().unwrap();
+        let p = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
         assert_eq!((p.kind.as_str(), p.key.as_str(), &p.why), ("bookmark", "https://a.example", &Why::LongAgo { months: 7 }));
+        assert_eq!(today(&conn, "repo", day, now, utc()).unwrap(), None, "the only repo was opened here");
     }
 
     #[test]
@@ -252,16 +282,16 @@ mod tests {
         for i in 0..50 {
             bookmark(&conn, &format!("https://b{i:02}.example"), ts(2024, 1, 1) + i * DAY);
         }
-        let first = today(&conn, day, now, utc()).unwrap().unwrap();
+        let first = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
         crate::frecency::record_use(&conn, "bookmark", &first.key, now).unwrap();
-        assert_eq!(today(&conn, day, now + 3600, utc()).unwrap().unwrap(), first, "opened, still today's card");
+        assert_eq!(today(&conn, "bookmark", day, now + 3600, utc()).unwrap().unwrap(), first, "opened, still today's card");
         // the next day brings another
         let next = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
-        let second = today(&conn, next, now + DAY, utc()).unwrap().unwrap();
+        let second = today(&conn, "bookmark", next, now + DAY, utc()).unwrap().unwrap();
         assert_ne!(second.key, first.key);
         // a deleted bookmark is replaced the same day
         conn.execute("DELETE FROM bookmarks WHERE url = ?1", [&second.key]).unwrap();
-        let third = today(&conn, next, now + DAY, utc()).unwrap().unwrap();
+        let third = today(&conn, "bookmark", next, now + DAY, utc()).unwrap().unwrap();
         assert_ne!(third.key, second.key);
     }
 
@@ -272,17 +302,17 @@ mod tests {
         let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
         bookmark(&conn, "https://x.example", ts(2023, 1, 1));
         bookmark(&conn, "https://y.example", ts(2023, 2, 1));
-        let a = today(&conn, day, now, utc()).unwrap().unwrap();
+        let a = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
         skip(&conn, &a.kind, &a.key).unwrap();
-        let b = today(&conn, day, now, utc()).unwrap().unwrap();
+        let b = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
         assert_ne!(a.key, b.key, "today gets another");
         skip(&conn, &b.kind, &b.key).unwrap();
         skip(&conn, &b.kind, &b.key).unwrap(); // twice is harmless
-        assert_eq!(today(&conn, day, now, utc()).unwrap(), None, "all skipped");
+        assert_eq!(today(&conn, "bookmark", day, now, utc()).unwrap(), None, "all skipped");
         // on later days too
         for d in 5..20 {
             let day = NaiveDate::from_ymd_opt(2026, 10, d).unwrap();
-            assert_eq!(today(&conn, day, now + i64::from(d) * DAY, utc()).unwrap(), None);
+            assert_eq!(today(&conn, "bookmark", day, now + i64::from(d) * DAY, utc()).unwrap(), None);
         }
     }
 
@@ -298,13 +328,16 @@ mod tests {
         let seen: HashSet<String> = (0..60)
             .map(|d| {
                 let day = start + chrono::Days::new(d);
-                choose(&conn, day, ts(2026, 6, 1), utc()).unwrap().unwrap().key
+                choose(&conn, "bookmark", day, ts(2026, 6, 1), utc()).unwrap().unwrap().key
             })
             .collect();
         assert!(seen.len() >= 35, "60 days showed only {} different cards", seen.len());
         // same day, same answer
         let day = NaiveDate::from_ymd_opt(2026, 3, 3).unwrap();
-        assert_eq!(choose(&conn, day, ts(2026, 6, 1), utc()).unwrap(), choose(&conn, day, ts(2026, 6, 1), utc()).unwrap());
+        assert_eq!(
+            choose(&conn, "bookmark", day, ts(2026, 6, 1), utc()).unwrap(),
+            choose(&conn, "bookmark", day, ts(2026, 6, 1), utc()).unwrap()
+        );
     }
 
     #[test]
@@ -317,8 +350,8 @@ mod tests {
         )
         .unwrap();
         repo(&conn, 9, "not a date");
-        let all = candidates(&conn).unwrap();
-        assert_eq!(all, vec![("bookmark".to_string(), "https://dup.example".to_string(), 1500000000)]);
+        assert_eq!(candidates(&conn, "bookmark").unwrap(), vec![("bookmark".to_string(), "https://dup.example".to_string(), 1500000000)]);
+        assert!(candidates(&conn, "repo").unwrap().is_empty());
     }
 
     #[test]

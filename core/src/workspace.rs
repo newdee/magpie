@@ -96,12 +96,13 @@ pub fn delete(conn: &Connection, name: &str) -> Result<()> {
     store(conn, &all)
 }
 
-/// Words that list every workspace when typed alone.
-const LIST_ALL: &[&str] = &["ws", "workspace", "workspaces", "现场", "工作现场"];
+/// Words that list every workspace when typed alone (#19: `gzxc`, the
+/// initials of 工作现场, so a forgotten one shows up without its name).
+const LIST_ALL: &[&str] = &["ws", "workspace", "workspaces", "现场", "工作现场", "gzxc", "gongzuoxianchang"];
 
-/// Workspaces whose name matches the query, best first, with a score on
-/// the apps' scale (1.0 the exact name, 0.9 a prefix, 0.7 inside the name).
-/// One of the LIST_ALL words alone lists them all.
+/// Workspaces whose name matches the query, best first, scored and matched
+/// as app names are (prefix, word start, initials, pinyin: `bx` finds 报销).
+/// One of the LIST_ALL words alone lists them all, most recent first.
 pub fn search(conn: &Connection, query: &str) -> Result<Vec<(Workspace, f32)>> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
@@ -111,25 +112,17 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<(Workspace, f32)>> {
     if LIST_ALL.contains(&q.as_str()) {
         return Ok(all.into_iter().map(|w| (w, 0.95)).collect());
     }
-    let mut out: Vec<(Workspace, f32)> = all
-        .into_iter()
-        .filter_map(|w| {
-            let n = w.name.to_lowercase();
-            let s = if n == q {
-                1.0
-            } else if n.starts_with(&q) {
-                0.9
-            } else if n.contains(&q) {
-                0.7
-            } else {
-                return None;
-            };
-            Some((w, s))
-        })
+    let entries: Vec<crate::apps::AppEntry> = all
+        .iter()
+        .map(|w| crate::apps::AppEntry { name: w.name.clone(), target: w.name.to_lowercase(), ..Default::default() })
         .collect();
-    // stable: equal scores keep the most recently changed first
-    out.sort_by(|a, b| b.1.total_cmp(&a.1));
-    Ok(out)
+    let ascii = query.trim().is_ascii();
+    Ok(crate::apps::match_apps(&entries, query, entries.len(), true)
+        .into_iter()
+        // the floor the system commands and scripts use: no stray letters
+        .filter(|e| e.score >= 0.65 || (e.score >= 0.5 && !ascii))
+        .filter_map(|e| all.iter().find(|w| w.name.to_lowercase() == e.target).map(|w| (w.clone(), e.score)))
+        .collect())
 }
 
 #[cfg(test)]
@@ -194,18 +187,21 @@ mod tests {
         add(&conn, "报销 2026", item("file", "C:/b"), 2).unwrap();
         add(&conn, "年度报销", item("file", "C:/c"), 3).unwrap();
         add(&conn, "Project A", item("file", "C:/d"), 4).unwrap();
-        let names = |q: &str| search(&conn, q).unwrap().into_iter().map(|(w, s)| (w.name, s)).collect::<Vec<_>>();
-        assert_eq!(
-            names("报销"),
-            vec![("报销".into(), 1.0), ("报销 2026".into(), 0.9), ("年度报销".into(), 0.7)]
-        );
-        assert_eq!(names("project"), vec![("Project A".into(), 0.9)]);
+        let names = |q: &str| search(&conn, q).unwrap().into_iter().map(|(w, _)| w.name).collect::<Vec<_>>();
+        assert_eq!(names("报销"), vec!["报销", "报销 2026", "年度报销"], "exact, prefix, inside");
+        let scores: Vec<f32> = search(&conn, "报销").unwrap().into_iter().map(|(_, s)| s).collect();
+        assert!(scores[0] == 1.0 && scores[0] > scores[1] && scores[1] > scores[2], "{scores:?}");
+        assert_eq!(names("project"), vec!["Project A"]);
+        assert_eq!(names("pa"), vec!["Project A"], "initials, as for apps");
+        assert_eq!(names("bx")[..2], ["报销", "报销 2026"], "pinyin initials (#19)");
+        assert_eq!(names("baoxiao")[0], "报销", "full pinyin");
         assert!(names("").is_empty() && names("  ").is_empty() && names("zzz").is_empty());
         // a listing word alone lists them all, most recent first
         let all = names("工作现场");
         assert_eq!(all.len(), 4);
-        assert_eq!(all[0].0, "Project A");
+        assert_eq!(all[0], "Project A");
         assert_eq!(names("WS").len(), 4);
+        assert_eq!(names("gzxc").len(), 4, "the initials of 工作现场 (#19)");
     }
 
     #[test]

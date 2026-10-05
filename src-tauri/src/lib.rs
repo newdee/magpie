@@ -1428,18 +1428,30 @@ fn hit_row(
 /// the day's choice, and the search connection's ticket would cancel the
 /// recent list asked for at the same moment.
 #[tauri::command]
-async fn recall_today(state: State<'_, AppState>) -> Result<Option<serde_json::Value>, String> {
+async fn recall_today(state: State<'_, AppState>, source: String) -> Result<Vec<serde_json::Value>, String> {
+    // each tab its own kind (#13): bookmarks on Web, repos on Stars, both
+    // on the local tab, which every summon opens on
+    let kinds: &[&str] = match source.as_str() {
+        "local" => &["bookmark", "repo"],
+        "web" => &["bookmark"],
+        "github-stars" => &["repo"],
+        _ => &[],
+    };
     let conn = state.db.lock().await;
     let (day, now, tz) = magpie_core::recall::local_clock();
-    let Some(pick) = magpie_core::recall::today(&conn, day, now, tz).map_err(err_str)? else {
-        return Ok(None);
-    };
-    let apps = state.apps.lock().unwrap();
-    let Some(mut row) = hit_row(&conn, &apps, &pick.kind, &pick.key).map_err(err_str)? else {
-        return Ok(None);
-    };
-    row["recall"] = serde_json::to_value(&pick.why).map_err(err_str)?;
-    Ok(Some(row))
+    let mut out = Vec::new();
+    for kind in kinds {
+        let Some(pick) = magpie_core::recall::today(&conn, kind, day, now, tz).map_err(err_str)? else { continue };
+        let row = {
+            let apps = state.apps.lock().unwrap();
+            hit_row(&conn, &apps, &pick.kind, &pick.key).map_err(err_str)?
+        };
+        if let Some(mut row) = row {
+            row["recall"] = serde_json::to_value(&pick.why).map_err(err_str)?;
+            out.push(row);
+        }
+    }
+    Ok(out)
 }
 
 // ---------- script commands (scripts.rs) ----------
