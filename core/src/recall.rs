@@ -247,6 +247,22 @@ mod tests {
     }
 
     #[test]
+    fn each_kind_remembers_its_own_card_for_the_day() {
+        let conn = crate::db::open_in_memory().unwrap();
+        let now = ts(2026, 10, 4);
+        let day = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
+        for i in 0..20 {
+            bookmark(&conn, &format!("https://k{i:02}.example"), ts(2024, 1, 1) + i * DAY);
+            repo(&conn, 100 + i, &format!("2024-02-{:02}T00:00:00Z", i + 1));
+        }
+        let b = today(&conn, "bookmark", day, now, utc()).unwrap().unwrap();
+        // the repo's card is chosen in between, and the bookmark is opened
+        today(&conn, "repo", day, now, utc()).unwrap().unwrap();
+        crate::frecency::record_use(&conn, "bookmark", &b.key, now).unwrap();
+        assert_eq!(today(&conn, "bookmark", day, now + 60, utc()).unwrap(), Some(b), "still the day's bookmark card");
+    }
+
+    #[test]
     fn the_local_date_decides_the_anniversary() {
         let conn = crate::db::open_in_memory().unwrap();
         // 2024-10-03 20:00 UTC is already the 4th in Beijing
