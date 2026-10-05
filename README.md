@@ -229,17 +229,24 @@ vaguely remember (or drop in an image), hit Enter.
   keystrokes. The Local tab also lists files in your folders that are new or
   changed this week, so a screenshot or download you just saved is there
   even if you never opened it through magpie.
-- **From long ago**: with nothing typed, the first row is a bookmark or
-  starred repo you kept long ago, a different one each day. One kept on this
-  date in an earlier year comes first ("2 years ago today you bookmarked
-  this"); otherwise one kept at least half a year ago that you have not
-  opened from magpie. The row says only when you kept it. `Ctrl+K` →
-  "Don't show this again" retires it; settings can turn the row off.
+- **The empty box**: with nothing typed, the top line is today's date and
+  weekday (in Chinese with the Chinese calendar, its festivals and solar
+  terms; late at night, in the morning and at lunch, a word for the hour).
+  It is never selected and has its own switch. On the local tab your pinned
+  folders come next (Settings → Local Files: up to four, in your order, not
+  necessarily indexed; `Enter` opens one).
+- **From long ago**: then a bookmark and a starred repo you kept long ago,
+  different ones each day: the Web tab shows the bookmark, Stars the repo,
+  the local tab both. One kept on this date in an earlier year comes first
+  ("2 years ago today you bookmarked this"); otherwise one kept at least
+  half a year ago that you have not opened from magpie. The row says only
+  when you kept it. `Ctrl+K` → "Don't show this again" retires it; settings
+  can turn these rows off.
 - **Workspaces**: keep the files, pages, apps and repos you open together
   under one name, "taxes" say. `Ctrl+K` on any result → "Add to workspace",
   an existing one or a new one. Type the name and press `Enter`: everything
   opens. What cannot (a deleted file, an uninstalled app) is named and the
-  rest still opens. `ws` lists them all. A settings export carries them.
+  rest still opens. Names match by pinyin too; `ws` or `gzxc` lists them all. A settings export carries them.
 - **Script commands**: a script in the scripts folder (Settings → Script
   commands) whose top comment names it becomes a command in the box. The
   header is Raycast's script-command format (`@raycast.title`,
