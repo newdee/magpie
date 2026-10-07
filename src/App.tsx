@@ -1136,7 +1136,7 @@ export default function App() {
   useEffect(() => setScriptOut(null), [query]);
   const [recentsOn, setRecentsOn] = useState(recentsEnabled);
   const [recallOn, setRecallOn] = useState(recallEnabled);
-  // the date line on the empty box (#13), fetched each time the box empties
+  // the date in the empty search box (#13), fetched each time the box empties
   const [todayOn, setTodayOn] = useState(todayLineEnabled);
   const [todayLine, setTodayLine] = useState<TodayLine | null>(null);
   // the scripts folder (scripts.rs) and how many commands it holds
@@ -1929,7 +1929,7 @@ export default function App() {
         setTipPhase("in");
         refreshStatus();
         // an empty box is built fresh on every summon: hidden empty, it kept
-        // the last one, yesterday's date line and recall cards after midnight
+        // the last one, yesterday's date and recall cards after midnight
         if (queryRef.current.trim() === "" && !imageQueryRef.current) void refreshResults();
       }),
       // drop an image file anywhere on the palette to search by it

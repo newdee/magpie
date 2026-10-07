@@ -8,8 +8,8 @@ use rusqlite::Connection;
 use std::path::Path;
 
 pub const META_KEY: &str = "pinned_folders";
-/// Four, so with the date line and the two cards from long ago the empty
-/// box still fits on one screen (#13).
+/// Four, so with the two cards from long ago the empty box still fits on
+/// one screen (#13).
 pub const MAX: usize = 4;
 
 /// The pinned folders in the user's order; a missing or damaged record

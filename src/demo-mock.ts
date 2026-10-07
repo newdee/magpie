@@ -612,7 +612,7 @@ mockIPC((cmd, args) => {
     case "today_line": {
       // the browser's own today; no Chinese calendar here rather than a made-up one
       const d = new Date();
-      return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), weekday: ((d.getDay() + 6) % 7) + 1, hour: d.getHours(), lunar: null };
+      return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), weekday: ((d.getDay() + 6) % 7) + 1, lunar: null };
     }
     case "recall_skip":
       demoRecallSkipped.add((args as { kind: string }).kind);

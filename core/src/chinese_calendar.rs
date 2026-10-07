@@ -307,7 +307,7 @@ pub fn today_line(now: chrono::NaiveDateTime) -> TodayLine {
     }
 }
 
-/// `day` in the Chinese calendar, short, for the date line on the empty box
+/// `day` in the Chinese calendar, short, for the date in the empty search box
 /// (#13): the month and day (八月廿四), then the day's festivals and the
 /// solar term when one begins (八月十五 · 中秋节). None outside the years
 /// answered.

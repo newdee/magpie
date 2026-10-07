@@ -113,7 +113,7 @@ export function setRecallEnabled(on: boolean): void {
   }
 }
 
-// ---------- the date line on the empty box (#13) ----------
+// ---------- the date in the empty search box (#13) ----------
 
 export const TODAY_KEY = "magpie.todayline";
 

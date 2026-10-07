@@ -716,7 +716,7 @@ export function t(s: string): string {
 }
 
 /// The interface language in use, for what is worded differently rather
-/// than translated (the date line: the Chinese calendar only in Chinese).
+/// than translated (the date in the search box: the Chinese calendar only in Chinese).
 export function currentLang(): Lang {
   return current;
 }
