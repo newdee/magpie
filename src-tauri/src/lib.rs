@@ -1726,8 +1726,8 @@ async fn open_pinned_folder(app: AppHandle, state: State<'_, AppState>, path: St
     Ok(String::new())
 }
 
-/// The date line at the top of the empty box (#13): today, the weekday
-/// (1 = Monday), the hour for the greeting, and the Chinese-calendar day.
+/// Today for the empty search box (#13): the date, the weekday (1 =
+/// Monday) and the Chinese-calendar day.
 /// The clock is the one tests set in `MAGPIE_TEST_NOW`, as for the recall
 /// card and the solar-term reminder.
 #[tauri::command]

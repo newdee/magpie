@@ -181,7 +181,7 @@ const ZH: Record<string, string> = {
   "Bookmarked {n} months ago": "{n} 个月前收藏的",
   "Don't show this again": "不再提醒这条",
   "Store app": "商店应用",
-  "Date line on the empty box": "空框显示日期",
+  "Date in the search box": "搜索框里显示日期",
   Pinned: "置顶",
   "Pinned folders": "置顶文件夹",
   "Up to {n} folders at the top of the empty box, in this order; Enter opens one. They need not be indexed.":
@@ -190,8 +190,8 @@ const ZH: Record<string, string> = {
   "Move up": "上移",
   "Move down": "下移",
   "Unpin the folder": "取消置顶",
-  "With nothing typed, the top line shows today's date and weekday, the Chinese calendar in Chinese, and a word for the hour.":
-    "搜索框为空时，最上面一行显示今天的日期、星期和农历，夜里、早上、中午还会有一句问候。",
+  "With nothing typed, the right of the search box shows today's date and weekday, with the Chinese calendar in Chinese.":
+    "搜索框为空时，在框内右侧显示今天的日期和星期，中文界面还有农历。",
   "The row from long ago changes every day; Ctrl+K on it stops one from coming back":
     "空搜索框里那条旧物每天换一条；在它上面按 Ctrl+K 可以让它不再出现",
   "Ctrl+K on a result adds it to a workspace; type the name and Enter opens it all — gzxc or ws lists them":

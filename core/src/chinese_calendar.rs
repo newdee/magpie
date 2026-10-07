@@ -284,28 +284,25 @@ pub fn term_notice_now(clock: Option<&str>, enabled: bool, last_shown: Option<&s
     Some(TermNotice { day: now.date().format("%Y-%m-%d").to_string(), term, line, source })
 }
 
-/// What the date line at the top of the empty box shows (#13): today, the
-/// weekday (1 = Monday), the hour the greeting goes by, and the
-/// Chinese-calendar day. The page words it in the interface language.
+/// What the empty search box shows on its right (#13): today, the weekday
+/// (1 = Monday) and the Chinese-calendar day. The page words it in the
+/// interface language.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TodayLine {
     pub year: i32,
     pub month: u32,
     pub day: u32,
     pub weekday: u32,
-    pub hour: u32,
     pub lunar: Option<String>,
 }
 
 pub fn today_line(now: chrono::NaiveDateTime) -> TodayLine {
-    use chrono::Timelike;
     let d = now.date();
     TodayLine {
         year: d.year(),
         month: d.month(),
         day: d.day(),
         weekday: d.weekday().number_from_monday(),
-        hour: now.hour(),
         lunar: lunar_short(d),
     }
 }
@@ -690,7 +687,7 @@ mod tests {
         let t = today_line(day(2026, 10, 5).and_hms_opt(23, 40, 0).unwrap());
         assert_eq!(
             t,
-            TodayLine { year: 2026, month: 10, day: 5, weekday: 1, hour: 23, lunar: Some("八月廿五".into()) }
+            TodayLine { year: 2026, month: 10, day: 5, weekday: 1, lunar: Some("八月廿五".into()) }
         );
     }
 

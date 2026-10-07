@@ -229,12 +229,11 @@ vaguely remember (or drop in an image), hit Enter.
   keystrokes. The Local tab also lists files in your folders that are new or
   changed this week, so a screenshot or download you just saved is there
   even if you never opened it through magpie.
-- **The empty box**: with nothing typed, the top line is today's date and
-  weekday (in Chinese with the Chinese calendar, its festivals and solar
-  terms; late at night, in the morning and at lunch, a word for the hour).
-  It is never selected and has its own switch. On the local tab your pinned
-  folders come next (Settings → Local Files: up to four, in your order, not
-  necessarily indexed; `Enter` opens one).
+- **The empty box**: with nothing typed, the right of the search box shows
+  today's date and weekday (in Chinese with the Chinese calendar, its
+  festivals and solar terms); it has its own switch. On the local tab your
+  pinned folders head the list (Settings → Local Files: up to four, in your
+  order, not necessarily indexed; `Enter` opens one).
 - **From long ago**: then a bookmark and a starred repo you kept long ago,
   different ones each day: the Web tab shows the bookmark, Stars the repo,
   the local tab both. One kept on this date in an earlier year comes first

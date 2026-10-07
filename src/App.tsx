@@ -1439,13 +1439,13 @@ export default function App() {
       }
       return;
     }
+    // the date in the empty box, on every tab: read fresh, so it turns over
+    // at midnight
+    if (q.trim() === "" && todayLineEnabled()) {
+      void invoke<TodayLine>("today_line").then(setTodayLine).catch(() => setTodayLine(null));
+    }
     if (q.trim() === "" && srcId !== "clips") {
       const mainTab = srcId === "local" || srcId === "github-stars" || srcId === "web";
-      // the date line: read fresh, so it turns over at midnight and the
-      // greeting follows the hour
-      if (mainTab && todayLineEnabled()) {
-        void invoke<TodayLine>("today_line").then(setTodayLine).catch(() => setTodayLine(null));
-      }
       // opt-in: the empty box lists what you opened most recently from this
       // tab, so "back to that file from a minute ago" is two keystrokes
       const wantRecents = recentsEnabled() && mainTab;
@@ -1614,10 +1614,8 @@ export default function App() {
   // settings, or dropping an image stops the timer instead of burning one
   // in the background
   const tipsIdle = showTips && !showSettings && query.trim() === "" && !imageQuery;
-  // the date line heads the empty box of the main tabs; it is no result, so
-  // the selection starts on the row under it
-  const todayShown =
-    todayOn && todayLine != null && !showSettings && query.trim() === "" && !imageQuery && !wsNaming && source !== "clips";
+  // today's date sits inside the empty search box, on its right (#13)
+  const todayShown = todayOn && todayLine != null && !showSettings && query.trim() === "" && !imageQuery && !wsNaming;
   useEffect(() => {
     if (!tipsIdle) {
       // leaving the empty state mid-hand-off would strand the phase on
@@ -3830,6 +3828,13 @@ export default function App() {
           autoCorrect="off"
           autoCapitalize="off"
         />
+        {todayShown && todayLine && (
+          // today, in the room the empty box leaves on the right (#13); the
+          // placeholder gives way with an ellipsis rather than run under it
+          <span className="query-date" aria-hidden="true">
+            {todayText(todayLine, currentLang())}
+          </span>
+        )}
         {showWebHint && (
           <span
             ref={queryHintRef}
@@ -4169,10 +4174,10 @@ export default function App() {
 
                   <div className="set-row">
                     <div className="set-label">
-                      <span className="set-name">{t("Date line on the empty box")}</span>
+                      <span className="set-name">{t("Date in the search box")}</span>
                       <span className="set-desc">
                         {t(
-                          "With nothing typed, the top line shows today's date and weekday, the Chinese calendar in Chinese, and a word for the hour.",
+                          "With nothing typed, the right of the search box shows today's date and weekday, with the Chinese calendar in Chinese.",
                         )}
                       </span>
                     </div>
@@ -5921,7 +5926,7 @@ export default function App() {
           ))}
         </div>
       ) : (
-        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null || scriptOut != null || todayShown) && (
+        (results.length > 0 || calcHit != null || bangHit != null || noteHit != null || wsNaming != null || scriptOut != null) && (
           <>
           <div
             className="body-row"
@@ -5981,12 +5986,6 @@ export default function App() {
                   <span className="row-sub">{bangHit.url}</span>
                 </div>
                 <span className="badge">{t("web")}</span>
-              </div>
-            )}
-            {todayShown && todayLine && (
-              // extra-row: like the calculator row, no result of the search
-              <div className="row extra-row today-row" aria-live="off">
-                <span className="today-text">{todayText(todayLine, currentLang())}</span>
               </div>
             )}
             {scriptOut && (

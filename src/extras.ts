@@ -135,42 +135,26 @@ export function setTodayLineEnabled(on: boolean): void {
   }
 }
 
-/** What the date line says (today_line in chinese_calendar.rs): the date and
- *  weekday, the Chinese-calendar day in a Chinese interface, and a word for
- *  the hour when there is one (late at night, morning, lunch). */
+/** Today, as the empty search box shows it on its right (today_line in
+ *  chinese_calendar.rs): the date and weekday, and in a Chinese interface the
+ *  Chinese-calendar day with its festival or the solar term that begins. */
 export interface TodayLine {
   year: number;
   month: number;
   day: number;
   weekday: number;
-  hour: number;
   lunar: string | null;
 }
 
 export function todayText(d: TodayLine, lang: "zh" | "en"): string {
-  const greet =
-    d.hour >= 23 || d.hour < 5
-      ? lang === "zh"
-        ? "夜深了，早点休息"
-        : "It's late, get some rest"
-      : d.hour < 9
-        ? lang === "zh"
-          ? "早上好"
-          : "Good morning"
-        : d.hour >= 11 && d.hour < 13
-          ? lang === "zh"
-            ? "中午了，记得吃饭"
-            : "Lunchtime"
-          : null;
   if (lang === "zh") {
     const wd = "一二三四五六日"[d.weekday - 1] ?? "";
-    return [`${d.month}月${d.day}日 星期${wd}`, d.lunar ? `农历${d.lunar}` : null, greet].filter(Boolean).join(" · ");
+    return [`${d.month}月${d.day}日 星期${wd}`, d.lunar ? `农历${d.lunar}` : null].filter(Boolean).join(" · ");
   }
   const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  return [`${days[d.weekday - 1]}, ${months[d.month - 1]} ${d.day}`, greet].filter(Boolean).join(" · ");
+  return `${days[d.weekday - 1]}, ${months[d.month - 1]} ${d.day}`;
 }
-
 // ---------- launch tips ----------
 
 export const TIPS_KEY = "magpie.tips";
