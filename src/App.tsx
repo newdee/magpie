@@ -1085,14 +1085,37 @@ export default function App() {
   // hit's content renders beside the list. Backend data only for kinds whose
   // content is not already in the hit (file text/image, video shots, repo).
   const [previewOpen, setPreviewOpen] = useState(false);
-  // Every hide the page does itself; the backend's go through hide_palette,
-  // which says "palette-hidden". The preview is for checking a find, not a
-  // mode (#13): it closes once the window is out of sight, so the next
-  // summon starts without it and the narrowing is never seen.
+  // Whether the palette is on screen, and how many times it has been summoned.
+  // Out of sight nothing on it should tick; each summon starts the tips afresh
+  // (#13: the first tip could go within a second of opening).
+  const [paletteShown, setPaletteShown] = useState(true);
+  const [summons, setSummons] = useState(0);
+  // set by the first hide or summon, after which the startup read is stale
+  const paletteEventSeen = useRef(false);
+  // What goes when the palette is put away, by the page (hidePalette) or by
+  // the backend (hide_palette, which says "palette-hidden"): one list for
+  // both. The preview is for checking a find, not a mode (#13): it closes once
+  // the window is out of sight, so the next summon starts without it and the
+  // narrowing is never seen.
+  const onPaletteHidden = useCallback(() => {
+    paletteEventSeen.current = true;
+    setPaletteShown(false);
+    setPreviewOpen(false);
+    setWsNaming(null); // an unnamed new workspace is dropped with the palette
+    setScriptOut(null);
+  }, []);
   const hidePalette = useCallback(async () => {
     await getCurrentWindow().hide();
-    setPreviewOpen(false);
-    setWsNaming(null);
+    onPaletteHidden();
+  }, [onPaletteHidden]);
+  // the window starts hidden (a launch at login is never summoned at once)
+  useEffect(() => {
+    void getCurrentWindow()
+      .isVisible()
+      .then((v) => {
+        if (v === false && !paletteEventSeen.current) setPaletteShown(false);
+      })
+      .catch(() => {});
   }, []);
 
   // sync the tray language once at startup ("auto" resolves per OS locale)
@@ -1614,10 +1637,14 @@ export default function App() {
   // settings, or dropping an image stops the timer instead of burning one
   // in the background
   const tipsIdle = showTips && !showSettings && query.trim() === "" && !imageQuery;
+  // and only while the palette is: hidden, the line stays as it is (the
+  // window's height follows its content) but nothing ticks; a summon starts
+  // a fresh 8 s
+  const tipsTicking = tipsIdle && paletteShown;
   // today's date sits inside the empty search box, on its right (#13)
   const todayShown = todayOn && todayLine != null && !showSettings && query.trim() === "" && !imageQuery && !wsNaming;
   useEffect(() => {
-    if (!tipsIdle) {
+    if (!tipsTicking) {
       // leaving the empty state mid-hand-off would strand the phase on
       // "out", and the next tip would render already fading away
       setTipPhase("in");
@@ -1633,7 +1660,7 @@ export default function App() {
       }, OUT_MS);
     }, 8000);
     return () => clearInterval(iv);
-  }, [tipsIdle]);
+  }, [tipsTicking, summons]);
   const termToday = status?.term_today ?? null;
   const termTodayRef = useRef(termToday);
   termTodayRef.current = termToday;
@@ -1913,12 +1940,11 @@ export default function App() {
         refreshStatus();
         refreshResults();
       }),
-      listen("palette-hidden", () => {
-        setPreviewOpen(false);
-        setWsNaming(null); // an unnamed new workspace is dropped with the palette
-        setScriptOut(null);
-      }),
+      listen("palette-hidden", onPaletteHidden),
       listen("palette-shown", () => {
+        paletteEventSeen.current = true;
+        setPaletteShown(true);
+        setSummons((n) => n + 1);
         // hidden by something outside magpie (the OS, another tool): the
         // pane goes now, at the cost of a frame or two of it on screen
         setPreviewOpen(false);

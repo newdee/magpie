@@ -3,6 +3,7 @@
 // Also used to produce README screenshots — the fixtures below are styled
 // after real data so the shots look like the shipped app.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 // the version the fixture reports comes from the manifest, not a literal: a
 // hardcoded one goes stale on the next release and the settings screenshot on
 // the feature site keeps showing the old number
@@ -333,6 +334,10 @@ const imageHits = [
   dt.items.add(file);
   window.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt }));
 };
+
+// a test plays the backend's side of putting the palette away and summoning
+// it ("palette-hidden" / "palette-shown"); the page's listeners are real
+(window as unknown as { __demoEmit?: (name: string) => Promise<void> }).__demoEmit = (name) => emit(name);
 
 // a key assembled at run time (no key-shaped literal in the repo); masked the
 // way core/src/secrets.rs masks it
@@ -943,8 +948,6 @@ mockIPC((cmd, args) => {
       status.has_token = false;
       status.username = "";
       return null;
-    case "plugin:event|listen":
-      return 1;
     case "plugin:dialog|open":
       // a test picks what the folder dialog answers; otherwise it is cancelled
       return (window as unknown as { __demoDialogPick?: string }).__demoDialogPick ?? null;
@@ -956,4 +959,4 @@ mockIPC((cmd, args) => {
     default:
       return null; // never throw: unknown commands are inert in the demo
   }
-});
+}, { shouldMockEvents: true });
