@@ -234,13 +234,13 @@ vaguely remember (or drop in an image), hit Enter.
   festivals and solar terms); it has its own switch. On the local tab your
   pinned folders head the list (Settings → Local Files: up to four, in your
   order, not necessarily indexed; `Enter` opens one).
-- **From long ago**: then a bookmark and a starred repo you kept long ago,
-  different ones each day: the Web tab shows the bookmark, Stars the repo,
-  the local tab both. One kept on this date in an earlier year comes first
+- **From long ago** (off by default; turn it on in Settings → General):
+  then a bookmark and a starred repo you kept long ago, different ones each
+  day: the Web tab shows the bookmark, Stars the repo, the local tab both.
+  One kept on this date in an earlier year comes first
   ("2 years ago today you bookmarked this"); otherwise one kept at least
   half a year ago that you have not opened from magpie. The row says only
-  when you kept it. `Ctrl+K` → "Don't show this again" retires it; settings
-  can turn these rows off.
+  when you kept it. `Ctrl+K` → "Don't show this again" retires it.
 - **Workspaces**: keep the files, pages, apps and repos you open together
   under one name, "taxes" say. `Ctrl+K` on any result → "Add to workspace",
   an existing one or a new one. Type the name and press `Enter`: everything

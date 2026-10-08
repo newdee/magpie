@@ -558,8 +558,7 @@ fn open_repo(app: AppHandle, url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("only http(s) urls".into());
     }
-    use tauri_plugin_opener::OpenerExt;
-    app.opener().open_url(url, None::<&str>).map_err(err_str)
+    open_web(&app, &url, "a result or a web search")
 }
 
 // ---------- local files ----------
@@ -1047,7 +1046,7 @@ fn register_hotkeys(app: &AppHandle, summon: &str, selection: Option<&str>) -> R
     gs.unregister_all().map_err(err_str)?;
     gs.on_shortcut(summon, |app, _sc, event| {
         if event.state() == ShortcutState::Pressed {
-            toggle_window(app);
+            toggle_window(app, "summon key");
         }
     })
     .map_err(err_str)?;
@@ -1286,7 +1285,7 @@ async fn set_note_path(state: State<'_, AppState>, path: String) -> Result<Strin
 /// Open the notes file in whatever handles markdown; created empty if it does
 /// not exist yet, so the click always lands somewhere.
 #[tauri::command]
-async fn open_note_file(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn open_note_file(state: State<'_, AppState>) -> Result<(), String> {
     let path = {
         let conn = state.db.lock().await;
         note_path_from(&conn, &state.db_path)
@@ -1297,10 +1296,7 @@ async fn open_note_file(app: AppHandle, state: State<'_, AppState>) -> Result<()
         }
         std::fs::write(&path, "").map_err(err_str)?;
     }
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
-        .map_err(err_str)
+    open_default(&path, "the note file")
 }
 
 /// How far back a file's last change still counts as recent for the empty
@@ -1534,7 +1530,7 @@ async fn open_scripts_folder(state: State<'_, AppState>) -> Result<(), String> {
     if open_dry_run() {
         return Ok(());
     }
-    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(err_str)
+    open_default(&dir, "the scripts folder")
 }
 
 /// Pick another scripts folder (it must exist), or None for the default.
@@ -1639,7 +1635,7 @@ async fn open_workspace(app: AppHandle, state: State<'_, AppState>, name: String
                 } else if dry {
                     Ok(())
                 } else {
-                    tauri_plugin_opener::open_path(t, None::<&str>).map_err(err_str)
+                    open_default(Path::new(t), "a workspace")
                 }
             }
             "app" => {
@@ -1649,15 +1645,14 @@ async fn open_workspace(app: AppHandle, state: State<'_, AppState>, name: String
                 } else if dry {
                     Ok(())
                 } else {
-                    magpie_core::apps::launch_app(t).map_err(err_str)
+                    start_app(t, "a workspace")
                 }
             }
             "url" if t.starts_with("https://") || t.starts_with("http://") => {
                 if dry {
                     Ok(())
                 } else {
-                    use tauri_plugin_opener::OpenerExt;
-                    app.opener().open_url(t, None::<&str>).map_err(err_str)
+                    open_web(&app, t, "a workspace")
                 }
             }
             _ => Err("cannot be opened".into()),
@@ -1721,7 +1716,7 @@ async fn open_pinned_folder(app: AppHandle, state: State<'_, AppState>, path: St
     if open_dry_run() {
         return Ok(format!("dry run: open folder {path}"));
     }
-    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)?;
+    open_default(Path::new(&path), "a pinned folder")?;
     hide_palette(&app);
     Ok(String::new())
 }
@@ -1936,7 +1931,7 @@ fn launch_app(app: AppHandle, target: String) -> Result<(), String> {
         spawn_app_scan(app);
         return Err("this app has moved or been removed; the app list is refreshed now".into());
     }
-    magpie_core::apps::launch_app(&target).map_err(err_str)?;
+    start_app(&target, "an app result")?;
     hide_palette(&app);
     Ok(())
 }
@@ -2031,7 +2026,7 @@ async fn open_path_default(state: State<'_, AppState>, path: String) -> Result<(
     if RUNNABLE_EXTS.contains(&ext.as_str()) {
         return Err("programs are not opened from here; use Enter to show it in its folder".into());
     }
-    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)
+    open_default(Path::new(&path), "a file result")
 }
 
 /// Convert an indexed PDF to Markdown (every page, in order). Scanned pages
@@ -3419,7 +3414,7 @@ fn play_video(path: String, ts_ms: i64) -> Result<(), String> {
     // macOS and unknown players: plain open with the default app (no seek —
     // stock players expose no public jump interface)
     let _ = ts_ms;
-    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(err_str)
+    open_default(Path::new(&path), "a video")
 }
 
 /// Poll the clipboard once a second while enabled; embed new clips inline
@@ -4769,8 +4764,7 @@ fn run_action(app: AppHandle, action: String) -> Result<String, String> {
             return Ok(format!("dry run: {} {p}", if meta.is_dir() { "open folder" } else { "show file" }));
         }
         if meta.is_dir() {
-            use tauri_plugin_opener::OpenerExt;
-            app.opener().open_path(p, None::<&str>).map_err(err_str)?;
+            open_default(path, "a typed folder")?;
         } else {
             tauri_plugin_opener::reveal_item_in_dir(path).map_err(err_str)?;
         }
@@ -4825,7 +4819,9 @@ fn run_launch(app: &AppHandle, l: magpie_core::launch::Launch) -> Result<String,
     if open_dry_run() {
         return Ok(format!("dry run: {l}"));
     }
-    magpie_core::launch::run(&l).map_err(err_str)?;
+    let r = magpie_core::launch::run(&l).map_err(err_str);
+    log_handoff("file in another program", "a file action", &r);
+    r?;
     hide_palette(app);
     Ok(String::new())
 }
@@ -5143,12 +5139,12 @@ const ACCESSIBILITY_SETTINGS: &str = "x-apple.systempreferences:com.apple.prefer
 /// missing. The hint replaces macOS's own prompt, which opened underneath
 /// the palette: the palette floats above every other window.
 #[tauri::command]
-fn open_accessibility_settings() -> Result<(), String> {
+fn open_accessibility_settings(app: AppHandle) -> Result<(), String> {
     if open_dry_run() {
         log::info!("dry run: open {ACCESSIBILITY_SETTINGS}");
         return Ok(());
     }
-    tauri_plugin_opener::open_url(ACCESSIBILITY_SETTINGS, None::<&str>).map_err(err_str)
+    open_web(&app, ACCESSIBILITY_SETTINGS, "the Accessibility settings")
 }
 
 /// Open the OS log directory in the file manager — one click to grab the
@@ -5157,7 +5153,7 @@ fn open_accessibility_settings() -> Result<(), String> {
 fn open_log_dir(app: AppHandle) -> Result<(), String> {
     let dir = app.path().app_log_dir().map_err(err_str)?;
     std::fs::create_dir_all(&dir).map_err(err_str)?;
-    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(err_str)
+    open_default(&dir, "the log folder")
 }
 
 /// Rebuild the tray menu in the stored UI language (after a pause, resume or
@@ -5371,6 +5367,32 @@ mod hotkey_tests {
     #[test]
     fn the_default_never_collides_with_the_summon_chord() {
         assert_ne!(DEFAULT_SELECTION_HOTKEY, super::DEFAULT_HOTKEY);
+    }
+}
+
+#[cfg(test)]
+mod handoff_log_tests {
+    use super::handoff_kind;
+    use std::path::Path;
+
+    /// The log names the kind of thing opened, never where it is (#20).
+    #[test]
+    fn the_log_gets_the_extension_at_most_never_the_path() {
+        let cases = [
+            (r"C:\Users\someone\Secret Plans\budget 2027.XLSX", false, ".xlsx file"),
+            ("/home/someone/notes/today.md", false, ".md file"),
+            ("/home/someone/private", true, "folder"),
+            ("/home/someone/no-extension", false, "file"),
+            ("/home/someone/odd.na me", false, "file"),
+            ("/home/someone/long.abcdefghij", false, "file"),
+            ("/home/someone/x.工作", false, "file"),
+            ("/home/someone/trailing.", false, "file"),
+        ];
+        for (p, dir, want) in cases {
+            let got = handoff_kind(Path::new(p), dir);
+            assert_eq!(got, want, "{p}");
+            assert!(!got.contains("someone"), "{got}");
+        }
     }
 }
 
@@ -5727,6 +5749,55 @@ fn restart_for_update(app: AppHandle) {
     app.restart();
 }
 
+/// Every page, file, folder or app magpie hands to another program goes
+/// through these, and each leaves one line in the log saying why, and for a
+/// file its extension; never the address, the path or the app's name. A
+/// browser that seems to open by itself (#20) can then be told apart from one
+/// magpie opened.
+fn open_web(app: &AppHandle, url: &str, why: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let r = app.opener().open_url(url, None::<&str>).map_err(err_str);
+    log_handoff("web page", why, &r);
+    r
+}
+
+/// A file or folder in the program the OS picks for it.
+fn open_default(path: &Path, why: &str) -> Result<(), String> {
+    let r = tauri_plugin_opener::open_path(path, None::<&str>).map_err(err_str);
+    log_handoff(&handoff_kind(path, path.is_dir()), why, &r);
+    r
+}
+
+/// What the log calls a file or folder: its extension at most. An extension
+/// is a kind of file, short and plain; anything else is left out rather than
+/// written down.
+fn handoff_kind(path: &Path, is_dir: bool) -> String {
+    if is_dir {
+        return "folder".to_string();
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if !e.is_empty() && e.len() <= 8 && e.chars().all(|c| c.is_ascii_alphanumeric()) => {
+            format!(".{} file", e.to_ascii_lowercase())
+        }
+        _ => "file".to_string(),
+    }
+}
+
+/// An installed app from the app list.
+fn start_app(target: &str, why: &str) -> Result<(), String> {
+    let r = magpie_core::apps::launch_app(target).map_err(err_str);
+    log_handoff("app", why, &r);
+    r
+}
+
+fn log_handoff(what: &str, why: &str, r: &Result<(), String>) {
+    match r {
+        Ok(()) => log::info!("opened a {what} ({why})"),
+        // the error text can carry the path or the address: not logged
+        Err(_) => log::warn!("could not open a {what} ({why})"),
+    }
+}
+
 /// Hide the palette window. Every hide goes through here so the page hears
 /// of it ("palette-hidden") and can drop what should not outlive a summon,
 /// such as the preview pane (#13), while the window is out of sight.
@@ -5754,13 +5825,27 @@ fn dismiss(app: AppHandle) {
     dismiss_palette(&app);
 }
 
-fn toggle_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
-            dismiss_palette(app);
-        } else {
-            show_window(app);
+/// The summon key and `--toggle`. Each press leaves a line in the log (#20: a
+/// press that brought up a browser instead could not be told apart from one
+/// magpie never received).
+fn toggle_window(app: &AppHandle, from: &str) {
+    let Some(w) = app.get_webview_window("main") else {
+        log::warn!("{from}: no palette window");
+        return;
+    };
+    let shown = match w.is_visible() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("{from}: could not tell whether the palette is shown ({e}); showing it");
+            false
         }
+    };
+    if shown {
+        log::info!("{from}: palette was shown, hiding it");
+        dismiss_palette(app);
+    } else {
+        log::info!("{from}: palette was hidden, showing it");
+        show_window(app);
     }
 }
 
@@ -5837,8 +5922,12 @@ fn show_window(app: &AppHandle) {
         // a dismissal hid the whole app on macOS (#9): bring it back first
         #[cfg(target_os = "macos")]
         let _ = app.show();
-        let _ = w.show();
-        let _ = w.set_focus();
+        if let Err(e) = w.show() {
+            log::warn!("could not show the palette: {e}");
+        }
+        if let Err(e) = w.set_focus() {
+            log::warn!("could not focus the palette: {e}");
+        }
         let _ = app.emit("palette-shown", ());
         rescan_apps_if_stale(app);
     }
@@ -5872,7 +5961,7 @@ static FIRST_LAUNCH: StdMutex<Option<cli::Request>> = StdMutex::new(None);
 /// a plain launch shows it, as it always did.
 fn handle_request(app: &AppHandle, req: cli::Request) {
     if req.toggle && !req.opens_something() {
-        toggle_window(app);
+        toggle_window(app, "--toggle");
         return;
     }
     if req.opens_something() {

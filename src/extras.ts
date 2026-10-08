@@ -95,13 +95,14 @@ export function setRecentsEnabled(on: boolean): void {
 
 export const RECALL_KEY = "magpie.recall";
 
-/** On unless turned off: one card a day costs nothing and is how the
- *  feature is found at all. */
+/** Off unless turned on: the empty box opens on the pins and what was
+ *  recently used, and the cards from long ago are asked for (a tip points
+ *  at the switch). */
 export function recallEnabled(): boolean {
   try {
-    return localStorage.getItem(RECALL_KEY) !== "0";
+    return localStorage.getItem(RECALL_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -202,7 +203,7 @@ export const TIPS: string[] = [
   "diff compares the last two texts you copied, line by line",
   "qr with an image on the clipboard reads the QR code in it",
   "sys shows CPU, memory and free disk space; pick, dice and coin decide for you",
-  "The row from long ago changes every day; Ctrl+K on it stops one from coming back",
+  "Settings → General → From long ago: the empty box brings back a bookmark and a repo you kept long ago, new ones each day",
   "Ctrl+K on a result adds it to a workspace; type the name and Enter opens it all — gzxc or ws lists them",
   "Scripts in the scripts folder become commands (Settings → General); Raycast's script commands work as they are",
   ":sym lists symbols like → × ¥ ⌘; ip shows your local network address",

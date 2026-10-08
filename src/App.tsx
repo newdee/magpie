@@ -1472,7 +1472,7 @@ export default function App() {
       // opt-in: the empty box lists what you opened most recently from this
       // tab, so "back to that file from a minute ago" is two keystrokes
       const wantRecents = recentsEnabled() && mainTab;
-      // on unless turned off: today's cards from long ago lead (recall.rs)
+      // off unless turned on: today's cards from long ago (recall.rs)
       const wantRecall = recallEnabled() && mainTab;
       // the folders the user pinned, first on the local tab (pins.rs)
       const wantPins = srcId === "local";
@@ -3904,6 +3904,26 @@ export default function App() {
           </svg>
         </button>
       </div>
+
+      {/* the tip or the day's couplet, right under the box it is about: below
+          the list it sat under the pins and the cards, near the footer */}
+      {tipsIdle && (
+        <div className="tip-row">
+          {/* keyed so React swaps the node and the enter animation replays */}
+          <span key={tip} className={`tip-text ${tipPhase === "out" ? "leaving" : ""}`}>
+            {tip === TERM_TIP && termToday ? (
+              <>
+                <span className="tip-bulb">🍃</span> 今日{termToday.term} · {termToday.line}
+                <span className="tip-source"> {termToday.source}</span>
+              </>
+            ) : (
+              <>
+                <span className="tip-bulb">💡</span> {t(tip)}
+              </>
+            )}
+          </span>
+        </div>
+      )}
 
       {indexHint && <div className="index-hint">{indexHint}</div>}
 
@@ -6497,24 +6517,6 @@ export default function App() {
           <button className="access-close" tabIndex={-1} title={t("Dismiss")} onClick={() => setNeedsAccess(false)}>
             ×
           </button>
-        </div>
-      )}
-
-      {tipsIdle && (
-        <div className="tip-row">
-          {/* keyed so React swaps the node and the enter animation replays */}
-          <span key={tip} className={`tip-text ${tipPhase === "out" ? "leaving" : ""}`}>
-            {tip === TERM_TIP && termToday ? (
-              <>
-                <span className="tip-bulb">🍃</span> 今日{termToday.term} · {termToday.line}
-                <span className="tip-source"> {termToday.source}</span>
-              </>
-            ) : (
-              <>
-                <span className="tip-bulb">💡</span> {t(tip)}
-              </>
-            )}
-          </span>
         </div>
       )}
 

@@ -192,8 +192,8 @@ const ZH: Record<string, string> = {
   "Unpin the folder": "取消置顶",
   "With nothing typed, the right of the search box shows today's date and weekday, with the Chinese calendar in Chinese.":
     "搜索框为空时，在框内右侧显示今天的日期和星期，中文界面还有农历。",
-  "The row from long ago changes every day; Ctrl+K on it stops one from coming back":
-    "空搜索框里那条旧物每天换一条；在它上面按 Ctrl+K 可以让它不再出现",
+  "Settings → General → From long ago: the empty box brings back a bookmark and a repo you kept long ago, new ones each day":
+    "设置 → 通用 → 旧物重现：打开后，空搜索框里每天出现很久以前收藏的书签和仓库",
   "Ctrl+K on a result adds it to a workspace; type the name and Enter opens it all — gzxc or ws lists them":
     "在结果上按 Ctrl+K 可以加入工作现场；输入名字回车全部打开，gzxc 或 ws 列出所有工作现场",
   "Scripts in the scripts folder become commands (Settings → General); Raycast's script commands work as they are":

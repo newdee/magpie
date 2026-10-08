@@ -276,11 +276,11 @@ window.FEATURES = {
       tag: "From long ago",
       en: {
         t: "What you kept and forgot",
-        d: "A search only finds what you remember having. With nothing typed, a bookmark and a starred repo you kept long ago come up, different ones each day: one kept on this date in an earlier year, or one kept months ago that you have not opened from magpie. Retire any of them with one key, or turn the rows off.",
+        d: "A search only finds what you remember having. With nothing typed, a bookmark and a starred repo you kept long ago come up, different ones each day: one kept on this date in an earlier year, or one kept months ago that you have not opened from magpie. Turn it on in Settings → General; retire any of them with one key.",
       },
       zh: {
         t: "存过又忘了的，它替你记着",
-        d: "搜索只找得到你还记得的东西。搜索框空着时，列表里是很久以前收藏的书签和 star 的仓库，每天换：几年前的今天收藏的，或者几个月前存下、还没从 magpie 打开过的。不想再看到的按一下就不再出现，也可以整个关掉。",
+        d: "搜索只找得到你还记得的东西。搜索框空着时，列表里是很久以前收藏的书签和 star 的仓库，每天换：几年前的今天收藏的，或者几个月前存下、还没从 magpie 打开过的。在设置 → 通用里打开；不想再看到的按一下就不再出现。",
       },
     },
     {
