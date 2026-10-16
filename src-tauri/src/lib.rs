@@ -3417,8 +3417,9 @@ fn play_video(path: String, ts_ms: i64) -> Result<(), String> {
     open_default(Path::new(&path), "a video")
 }
 
-/// Poll the clipboard once a second while enabled; embed new clips inline
-/// when the model is free. Owns its DB connection.
+/// Watch the clipboard once a second while enabled (reading it only when the
+/// system says it changed, see [`clips::ClipboardWatcher`]); embed new clips
+/// inline when the model is free. Owns its DB connection.
 fn spawn_clip_watcher(app: AppHandle) {
     let state = app.state::<AppState>();
     if state.clip_thread_alive.swap(true, Ordering::SeqCst) {
@@ -3438,7 +3439,8 @@ fn spawn_clip_watcher(app: AppHandle) {
             let mut ticks: u64 = 0;
             while run.load(Ordering::SeqCst) {
                 let mut recorded = false;
-                if let Some(text) = watcher.poll() {
+                let change = watcher.poll_change();
+                if let Some(clips::ClipChange::Text(text)) = change {
                     let now = unix_now();
                     if clips::record_clip(&conn, &text, now, clips::DEFAULT_MAX_LEN)
                         .unwrap_or(false)
@@ -3451,7 +3453,7 @@ fn spawn_clip_watcher(app: AppHandle) {
                             }
                         }
                     }
-                } else if let Some((w, h, rgba)) = watcher.poll_image() {
+                } else if let Some(clips::ClipChange::Image(w, h, rgba)) = change {
                     // screenshots and copied images join the history too,
                     // searchable by describing what's in them
                     let hash = clips::sample_hash(w, h, &rgba);

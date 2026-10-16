@@ -411,11 +411,39 @@ pub fn all_clip_image_embeddings(conn: &Connection) -> Result<Vec<(i64, Vec<f32>
 
 // ---------- clipboard access ----------
 
-/// Polls the OS clipboard; yields text only when it changes. The caller owns
-/// the cadence (a 1s tick costs nothing measurable).
+/// What a clipboard change brought: text, or a picture as RGBA pixels.
+pub enum ClipChange {
+    Text(String),
+    Image(usize, usize, Vec<u8>),
+}
+
+/// Watches the OS clipboard; the caller owns the cadence (a tick a second).
+///
+/// Where the system keeps a change counter (Windows, macOS) a tick reads that
+/// alone, and the clipboard itself only when the counter moved. Reading it
+/// every tick cost about 5% of a core with a picture on it (#22, #23): the
+/// picture was decoded each second only to find it unchanged. Without a
+/// counter (Linux) every tick reads, as before.
 pub struct ClipboardWatcher {
     board: arboard::Clipboard,
     last_hash: Option<String>,
+    /// The counter at the last read that went through
+    last_seq: Option<u64>,
+}
+
+/// Whether a tick reads the clipboard: always without a counter, otherwise
+/// only when it moved since the last read that went through.
+pub fn should_read(last: Option<u64>, now: Option<u64>) -> bool {
+    match now {
+        None => true,
+        Some(n) => last != Some(n),
+    }
+}
+
+/// A read: what it found, or that another program held the clipboard.
+enum Read {
+    Done(Option<ClipChange>),
+    Busy,
 }
 
 impl ClipboardWatcher {
@@ -423,38 +451,63 @@ impl ClipboardWatcher {
         Ok(Self {
             board: arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("clipboard: {e}"))?,
             last_hash: None,
+            last_seq: None,
         })
     }
 
-    /// Returns new clipboard text once per change; None while unchanged,
-    /// non-text, or marked sensitive by the source app.
-    pub fn poll(&mut self) -> Option<String> {
-        if sensitive_clip_present() {
+    /// One tick: the new text or picture, once per change; None while
+    /// unchanged, neither, or marked sensitive by the source app. Text wins
+    /// when both are on the clipboard.
+    pub fn poll_change(&mut self) -> Option<ClipChange> {
+        let seq = crate::selection::clipboard_seq();
+        if !should_read(self.last_seq, seq) {
             return None;
         }
-        let text = self.board.get_text().ok()?;
-        let hash = embed::doc_hash(text.trim());
-        if self.last_hash.as_deref() == Some(hash.as_str()) {
-            return None;
+        match self.read() {
+            Read::Done(change) => {
+                self.last_seq = seq;
+                change
+            }
+            // another program holds the clipboard (a copy in progress): the
+            // counter stays unmarked, so the next tick reads again
+            Read::Busy => None,
         }
-        self.last_hash = Some(hash);
-        Some(text)
     }
 
-    /// Returns a new clipboard IMAGE once per change (when no text is
-    /// present). The hash samples the raw pixels — a 4K screenshot hashes in
-    /// well under a millisecond, so the 1s tick stays cheap.
-    pub fn poll_image(&mut self) -> Option<(usize, usize, Vec<u8>)> {
+    fn read(&mut self) -> Read {
         if sensitive_clip_present() {
-            return None;
+            return Read::Done(None);
         }
-        let img = self.board.get_image().ok()?;
-        let hash = sample_hash(img.width, img.height, &img.bytes);
+        match self.board.get_text() {
+            Ok(text) => {
+                let hash = embed::doc_hash(text.trim());
+                Read::Done(self.fresh(hash).then_some(ClipChange::Text(text)))
+            }
+            Err(arboard::Error::ClipboardOccupied) => Read::Busy,
+            Err(_) => match self.board.get_image() {
+                Ok(img) => {
+                    // the hash samples the raw pixels (well under a
+                    // millisecond for a 4K screenshot); the decode before it
+                    // is the costly part, and happens once per change
+                    let hash = sample_hash(img.width, img.height, &img.bytes);
+                    Read::Done(
+                        self.fresh(hash)
+                            .then(|| ClipChange::Image(img.width, img.height, img.bytes.into_owned())),
+                    )
+                }
+                Err(arboard::Error::ClipboardOccupied) => Read::Busy,
+                Err(_) => Read::Done(None),
+            },
+        }
+    }
+
+    /// Is this content new since the last one seen? Records it either way.
+    fn fresh(&mut self, hash: String) -> bool {
         if self.last_hash.as_deref() == Some(hash.as_str()) {
-            return None;
+            return false;
         }
         self.last_hash = Some(hash);
-        Some((img.width, img.height, img.bytes.into_owned()))
+        true
     }
 }
 
@@ -546,6 +599,27 @@ fn sensitive_clip_present() -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// #22/#23: with a change counter the clipboard is read once per change,
+    /// not every tick; without one (Linux) every tick reads, as before.
+    #[test]
+    fn the_clipboard_is_read_only_when_its_counter_moves() {
+        use super::should_read;
+        assert!(should_read(None, Some(7)), "the first tick reads");
+        assert!(!should_read(Some(7), Some(7)), "unchanged: nothing read");
+        assert!(should_read(Some(7), Some(8)), "a copy moves the counter");
+        assert!(should_read(Some(8), Some(3)), "a counter that went back (a restart) still reads");
+        assert!(should_read(None, None) && should_read(Some(7), None), "no counter: every tick reads");
+        // a minute of an unchanged clipboard: one read, then 59 skipped
+        let (mut last, mut reads) = (None, 0);
+        for _ in 0..60 {
+            if should_read(last, Some(42)) {
+                reads += 1;
+                last = Some(42);
+            }
+        }
+        assert_eq!(reads, 1);
+    }
+
     #[test]
     fn pinned_clips_survive_pruning_and_sort_first() {
         let conn = crate::db::open_in_memory().unwrap();
