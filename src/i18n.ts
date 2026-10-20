@@ -81,6 +81,8 @@ const ZH: Record<string, string> = {
   auto: "跟随系统",
   light: "浅色",
   dark: "深色",
+  paper: "纸张",
+  "paper-dark": "纸张深色",
   // misc option labels
   Unlimited: "无上限",
   "hf-mirror.com (China)": "hf-mirror.com（国内镜像）",

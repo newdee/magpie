@@ -486,7 +486,7 @@ lines to add to `config.kdl`).
 ## Settings (tray icon → Settings…)
 
 GitHub token (with connection badge) · indexed folders (add / remove /
-rebuild) · appearance (auto / light / dark) · UI language (auto / English /
+rebuild) · appearance (auto / light / dark / paper / paper dark) · UI language (auto / English /
 中文) · launch at login · solar term reminders · hide on click-out · jump-to-tab keys (Ctrl/Cmd,
 Alt or off) · pinyin app matching · app aliases · summon shortcut (recordable) ·
 search-selection shortcut · notes file · recent opens on the empty box ·

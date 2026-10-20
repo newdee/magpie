@@ -805,8 +805,8 @@ const WEB_SCOPES: { id: WebScope; label: string }[] = [
   { id: "history", label: "history" },
 ];
 
-type Theme = "auto" | "light" | "dark";
-const THEMES: Theme[] = ["auto", "light", "dark"];
+type Theme = "auto" | "light" | "dark" | "paper" | "paper-dark";
+const THEMES: Theme[] = ["auto", "light", "dark", "paper", "paper-dark"];
 
 const HF_ENDPOINTS: { url: string; label: string }[] = [
   { url: "https://huggingface.co", label: "huggingface.co" },

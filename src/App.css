@@ -17,14 +17,16 @@
   --accent-border: rgba(245, 185, 66, 0.3);
   --on-accent: #1a1408;
   --error: #e5716a;
+  --added: #5fbf73;
   --radius: 14px;
   --font-mono: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
 }
 
-/* system-light applies light tokens unless the user forces dark;
-   data-theme="light" forces light regardless of the system */
+/* with no data-theme (auto) the tokens follow the system; data-theme="light"
+   forces light, "dark" keeps the defaults above, and the two paper themes
+   below replace every token */
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
+  :root:not([data-theme]) {
     --bg: rgba(248, 248, 250, 0.68);
     --bg-fallback: rgba(248, 248, 250, 0.98);
     --border: rgba(0, 0, 0, 0.09);
@@ -39,6 +41,7 @@
     --accent-border: rgba(180, 83, 9, 0.3);
     --on-accent: #ffffff;
     --error: #b3261e;
+    --added: #1a7f37;
   }
 }
 
@@ -57,6 +60,49 @@
   --accent-border: rgba(180, 83, 9, 0.3);
   --on-accent: #ffffff;
   --error: #b3261e;
+  --added: #1a7f37;
+}
+
+/* Paper and Paper Dark, keepane's two themes: warm ink on sepia paper by day,
+   on a warm near-black by night, with cinnabar as the one accent. The panel
+   is nearly opaque so the paper colour survives the OS blur behind it: text
+   reads at 4.5:1 or more and the faint hints at 3:1 (WCAG AA) whether the
+   desktop behind is black or white. The faint ink is a shade darker (lighter
+   at night) than keepane's line colour to hold that. */
+:root[data-theme="paper"] {
+  --bg: rgba(240, 231, 210, 0.97);
+  --bg-fallback: rgba(240, 231, 210, 0.99);
+  --border: rgba(51, 48, 42, 0.12);
+  --border-strong: rgba(51, 48, 42, 0.22);
+  --text: #33302a;
+  --text-dim: #5a5346;
+  --text-faint: #857c6d;
+  --row-hover: rgba(51, 48, 42, 0.07);
+  --field-bg: rgba(51, 48, 42, 0.05);
+  --accent: #a53736;
+  --accent-soft: rgba(165, 55, 54, 0.08);
+  --accent-border: rgba(165, 55, 54, 0.3);
+  --on-accent: #f0e7d2;
+  --error: #a6363d;
+  --added: #046641;
+}
+
+:root[data-theme="paper-dark"] {
+  --bg: rgba(23, 23, 22, 0.97);
+  --bg-fallback: rgba(23, 23, 22, 0.99);
+  --border: rgba(206, 202, 190, 0.09);
+  --border-strong: rgba(206, 202, 190, 0.18);
+  --text: #cecabe;
+  --text-dim: #a5a29a;
+  --text-faint: #6c6b69;
+  --row-hover: rgba(206, 202, 190, 0.07);
+  --field-bg: rgba(206, 202, 190, 0.05);
+  --accent: #dd625e;
+  --accent-soft: rgba(221, 98, 94, 0.1);
+  --accent-border: rgba(221, 98, 94, 0.32);
+  --on-accent: #121212;
+  --error: #dc696c;
+  --added: #2b9870;
 }
 
 * {
@@ -1575,10 +1621,10 @@ kbd {
   overflow: hidden;
 }
 .calc-diff .add {
-  color: #5fbf73;
+  color: var(--added);
 }
 .calc-diff .removed {
-  color: #e0686b;
+  color: var(--error);
 }
 
 /* modifier and key apart: "⌘ K", "Ctrl K" (#5) */
@@ -1813,7 +1859,8 @@ kbd.keys {
   bottom: 2px;
   font-family: var(--font-mono);
   font-size: 9.5px;
-  color: var(--text);
+  /* light on the dark chip in every theme: the chip sits on the picture */
+  color: #ececf1;
   background: rgba(10, 10, 14, 0.72);
   border-radius: 3px;
   padding: 0 3px;
