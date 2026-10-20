@@ -24,43 +24,46 @@
 
 /* with no data-theme (auto) the tokens follow the system; data-theme="light"
    forces light, "dark" keeps the defaults above, and the two paper themes
-   below replace every token */
+   below replace every token. Light panels are nearly opaque (0.97): the OS
+   blur behind is dark, and at 0.68 it pulled the light panel down to grey,
+   the hints to 1.7:1. At 0.97 the inks hold their contrast (text and accent
+   4.5:1, hints 3:1) over a black or a white desktop. */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg: rgba(248, 248, 250, 0.68);
+    --bg: rgba(248, 248, 250, 0.97);
     --bg-fallback: rgba(248, 248, 250, 0.98);
     --border: rgba(0, 0, 0, 0.09);
     --border-strong: rgba(0, 0, 0, 0.16);
     --text: #1c1c22;
     --text-dim: #55555e;
-    --text-faint: #8e8e99;
+    --text-faint: #868691;
     --row-hover: rgba(0, 0, 0, 0.06);
     --field-bg: rgba(0, 0, 0, 0.04);
-    --accent: #b45309;
-    --accent-soft: rgba(180, 83, 9, 0.08);
-    --accent-border: rgba(180, 83, 9, 0.3);
+    --accent: #ad5008;
+    --accent-soft: rgba(173, 80, 8, 0.08);
+    --accent-border: rgba(173, 80, 8, 0.3);
     --on-accent: #ffffff;
     --error: #b3261e;
-    --added: #1a7f37;
+    --added: #187a34;
   }
 }
 
 :root[data-theme="light"] {
-  --bg: rgba(248, 248, 250, 0.68);
+  --bg: rgba(248, 248, 250, 0.97);
   --bg-fallback: rgba(248, 248, 250, 0.98);
   --border: rgba(0, 0, 0, 0.09);
   --border-strong: rgba(0, 0, 0, 0.16);
   --text: #1c1c22;
   --text-dim: #55555e;
-  --text-faint: #8e8e99;
+  --text-faint: #868691;
   --row-hover: rgba(0, 0, 0, 0.06);
   --field-bg: rgba(0, 0, 0, 0.04);
-  --accent: #b45309;
-  --accent-soft: rgba(180, 83, 9, 0.08);
-  --accent-border: rgba(180, 83, 9, 0.3);
+  --accent: #ad5008;
+  --accent-soft: rgba(173, 80, 8, 0.08);
+  --accent-border: rgba(173, 80, 8, 0.3);
   --on-accent: #ffffff;
   --error: #b3261e;
-  --added: #1a7f37;
+  --added: #187a34;
 }
 
 /* Paper and Paper Dark, keepane's two themes: warm ink on sepia paper by day,
