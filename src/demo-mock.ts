@@ -37,6 +37,19 @@ let demoEditRules: { exts: string[]; app: string }[] = [
 ];
 const demoRecallSkipped = new Set<string>();
 let demoPins: string[] = [];
+// the folders scope (#24): the folders that hold indexed files, with how many
+const demoDirs: { path: string; files: number }[] = [
+  { path: "C:\\Users\\dfine\\Documents\\projects", files: 1284 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\notes", files: 40 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\notes\\drafts", files: 1 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\magpie", files: 812 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\magpie\\docs", files: 24 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\paper", files: 31 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\paper\\docs", files: 6 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\slides", files: 12 },
+  { path: "C:\\Users\\dfine\\Documents\\projects\\clips", files: 9 },
+  { path: "C:\\Users\\dfine\\Pictures\\screenshots", files: 411 },
+];
 let demoWorkspaces: { name: string; items: { kind: string; target: string; title: string }[]; updated: number }[] = [
   {
     name: "Paper",
@@ -485,6 +498,19 @@ mockIPC((cmd, args) => {
         : [];
     }
     case "search_local": {
+      if ((args as { scope?: string })?.scope === "folders") {
+        // by name, as dir_search.rs ranks: whole name, prefix, anywhere;
+        // then the folder holding more files
+        const ql = q.trim().toLowerCase();
+        if (!ql) return [];
+        const rank = (n: string) => (n === ql ? 3 : n.startsWith(ql) ? 2 : n.includes(ql) ? 1 : 0);
+        return demoDirs
+          .map((d) => ({ ...d, name: d.path.split("\\").pop() ?? d.path }))
+          .map((d) => ({ d, r: rank(d.name.toLowerCase()) }))
+          .filter((x) => x.r > 0)
+          .sort((a, b) => b.r - a.r || b.d.files - a.d.files || a.d.path.length - b.d.path.length)
+          .map(({ d, r }) => ({ kind: "folder", path: d.path, name: d.name, files: d.files, score: r / 3 }));
+      }
       if ((args as { scope?: string })?.scope === "videos") {
         if (q.toLowerCase().includes("retry")) return [ocrVideoHit]; // OCR text -> shot
         return q
@@ -608,11 +634,18 @@ mockIPC((cmd, args) => {
       return [...demoPins];
     }
     case "pinned_rows":
-      return demoPins.map((p) => ({ kind: "folder", path: p, name: p.split(/[\\/]/).filter(Boolean).pop() ?? p, score: 0 }));
-    case "open_pinned_folder": {
+      return demoPins.map((p) => ({ kind: "folder", path: p, name: p.split(/[\\/]/).filter(Boolean).pop() ?? p, score: 0, pinned: true }));
+    case "open_folder": {
       const path = (args as { path: string }).path;
-      if (!demoPins.includes(path)) throw new Error("not a pinned folder");
+      if (!demoPins.includes(path) && !demoDirs.some((d) => d.path === path)) throw new Error("not a pinned or indexed folder");
       return `dry run: open folder ${path}`;
+    }
+    case "folder_files": {
+      const path = (args as { path: string }).path;
+      return fileHits
+        .filter((f) => f.path.startsWith(`${path}\\`))
+        .sort((a, b) => b.mtime - a.mtime)
+        .map((f) => ({ path: f.path, name: f.name, mtime: f.mtime }));
     }
     case "today_line": {
       // the browser's own today; no Chinese calendar here rather than a made-up one

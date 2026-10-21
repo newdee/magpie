@@ -545,27 +545,7 @@ pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize, use_pinyin: bool
         return Vec::new();
     }
     // one name, one score — reused for the app's real name and every alias
-    let score_name = |raw: &str| -> Option<f32> {
-        let name = raw.to_lowercase();
-        if name == q {
-            Some(1.0)
-        } else if name.starts_with(&q) {
-            Some(0.9 - 0.001 * name.len() as f32) // shorter prefix match ranks higher
-        } else if matches_word_start(&q, raw) {
-            Some(0.75) // "mac" -> "MyMacCleaner", "code" -> "Visual Studio Code"
-        } else if matches_initials(&q, raw) {
-            // "vsc" -> "Visual Studio Code", "mt" -> "MacTap". A whole acronym
-            // says more than letters that happen to sit inside a word: below
-            // it, "mpt" lost its app to six "Command Prompt" shortcuts
-            Some(0.7)
-        } else if name.contains(&q) {
-            Some(0.6)
-        } else if use_pinyin {
-            match_pinyin(&q, raw)
-        } else {
-            None
-        }
-    };
+    let score_name = |raw: &str| name_score(&q, raw, use_pinyin);
     let mut scored: Vec<AppEntry> = apps
         .iter()
         .filter_map(|a| {
@@ -588,6 +568,32 @@ pub fn match_apps(apps: &[AppEntry], query: &str, limit: usize, use_pinyin: bool
     scored.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.name.len().cmp(&b.name.len())));
     scored.truncate(limit);
     scored
+}
+
+/// How well the lowercased, trimmed query `q` matches one name, the way app
+/// names are matched (also folder names, dir_search.rs): whole name 1.0, prefix
+/// about 0.9, word start 0.75, initials 0.7, anywhere 0.6, and with
+/// `use_pinyin` a latin query against a Chinese name 0.8 or 0.55.
+pub fn name_score(q: &str, raw: &str, use_pinyin: bool) -> Option<f32> {
+    let name = raw.to_lowercase();
+    if name == q {
+        Some(1.0)
+    } else if name.starts_with(q) {
+        Some(0.9 - 0.001 * name.len() as f32) // shorter prefix match ranks higher
+    } else if matches_word_start(q, raw) {
+        Some(0.75) // "mac" -> "MyMacCleaner", "code" -> "Visual Studio Code"
+    } else if matches_initials(q, raw) {
+        // "vsc" -> "Visual Studio Code", "mt" -> "MacTap". A whole acronym
+        // says more than letters that happen to sit inside a word: below
+        // it, "mpt" lost its app to six "Command Prompt" shortcuts
+        Some(0.7)
+    } else if name.contains(q) {
+        Some(0.6)
+    } else if use_pinyin {
+        match_pinyin(q, raw)
+    } else {
+        None
+    }
 }
 
 /// Pinyin match for names containing Han characters. Each Han char may be

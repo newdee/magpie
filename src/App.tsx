@@ -302,12 +302,23 @@ type Hit =
   | ScriptHit
   | FolderHit;
 
-/// A pinned folder (pins.rs) at the top of the local tab's empty box.
+/// A folder: one the user pinned (pins.rs), at the top of the local tab's
+/// empty box, or one the folders scope found by name (dir_search.rs, #24).
 interface FolderHit {
   kind: "folder";
   path: string;
   name: string;
   score: number;
+  pinned?: boolean;
+  /// the folders scope: indexed files anywhere under it
+  files?: number;
+}
+
+/// One of the newest files under a folder, for the folder's preview.
+interface FolderFile {
+  path: string;
+  name: string;
+  mtime: number;
 }
 
 /// A Windows Store (packaged) app: its target is the shell's name for it,
@@ -790,12 +801,13 @@ const SORTS: { id: RepoSort; label: string }[] = [
   { id: "stars", label: "stars" },
 ];
 
-type LocalScope = "all" | "text" | "images" | "videos";
+type LocalScope = "all" | "text" | "images" | "videos" | "folders";
 const SCOPES: { id: LocalScope; label: string }[] = [
   { id: "all", label: "all" },
   { id: "text", label: "text" },
   { id: "images", label: "images" },
   { id: "videos", label: "videos" },
+  { id: "folders", label: "folders" },
 ];
 
 type WebScope = "all" | "bookmarks" | "history";
@@ -834,6 +846,11 @@ function formatSize(n: number): string {
 function relTime(iso: string | null): string | null {
   if (!iso) return null;
   return relTimeFromMs(Date.now() - Date.parse(iso));
+}
+
+/// How many files, as a label: one file is no plural.
+function filesLabel(n: number): string {
+  return n === 1 ? t("1 file") : tf("{n} files", { n: n.toLocaleString() });
 }
 
 function relTimeUnix(secs: number): string | null {
@@ -2219,6 +2236,23 @@ export default function App() {
     };
   }, [webUrl]);
 
+  // a folder row: the newest indexed files anywhere under it (#24), or for a
+  // pinned folder outside the index, what is straight in it on disk
+  const folderPath = previewOpen && selHit && selHit.kind === "folder" ? selHit.path : null;
+  const [folderFiles, setFolderFiles] = useKeyedState<FolderFile[]>(folderPath);
+  useEffect(() => {
+    if (!folderPath) return;
+    let stale = false;
+    invoke<FolderFile[]>("folder_files", { path: folderPath })
+      .then((f) => {
+        if (!stale) setFolderFiles(folderPath, f);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [folderPath]);
+
   // keep selection visible
   useEffect(() => {
     listRef.current
@@ -2388,7 +2422,7 @@ export default function App() {
     }
     if (hit.kind === "folder") {
       try {
-        const said = await invoke<string>("open_pinned_folder", { path: hit.path });
+        const said = await invoke<string>("open_folder", { path: hit.path });
         if (said.startsWith("dry run:")) setNotice(said);
         else await finishAction();
       } catch (e) {
@@ -2717,19 +2751,23 @@ export default function App() {
           return [
             { key: "open", label: t("Open"), run: () => openHit(hit) },
             { key: "copy-path", label: t("Copy path"), run: () => copy(hit.path) },
-            {
-              key: "unpin",
-              label: t("Unpin the folder"),
-              run: () =>
-                act(
-                  invoke<string[]>("get_pinned_folders")
-                    .then((all) => invoke<string[]>("set_pinned_folders", { paths: all.filter((p) => p !== hit.path) }))
-                    .then((left) => {
-                      setPinnedFolders(left);
-                      refresh();
-                    }),
-                ),
-            },
+            ...(hit.pinned
+              ? [
+                  {
+                    key: "unpin",
+                    label: t("Unpin the folder"),
+                    run: () =>
+                      act(
+                        invoke<string[]>("get_pinned_folders")
+                          .then((all) => invoke<string[]>("set_pinned_folders", { paths: all.filter((p) => p !== hit.path) }))
+                          .then((left) => {
+                            setPinnedFolders(left);
+                            refresh();
+                          }),
+                      ),
+                  },
+                ]
+              : []),
           ];
         case "script":
           return [
@@ -3839,7 +3877,9 @@ export default function App() {
                 ? status && status.repo_count > 0
                   ? tf("Search {n} starred repos", { n: status.repo_count })
                   : t("Search your stars")
-                : localScope === "videos"
+                : localScope === "folders"
+                  ? t("Search the indexed folders by name")
+                  : localScope === "videos"
                   ? t("Search videos by name, or describe a scene")
                   : localScope === "images"
                   ? t("Describe the image, or pick / drop / paste one")
@@ -4860,7 +4900,7 @@ export default function App() {
                               </span>
                               <span className="place-note">
                                 {p.state === "new"
-                                  ? tf(p.more ? "{n}+ files" : "{n} files", { n: p.files.toLocaleString() })
+                                  ? p.more ? tf("{n}+ files", { n: p.files.toLocaleString() }) : filesLabel(p.files)
                                   : p.state === "added"
                                     ? t("Added")
                                     : p.state === "covered"
@@ -5094,7 +5134,7 @@ export default function App() {
                         {status?.watch_enabled && status.watch_status === "watching" && (
                           <>
                             {" "}
-                            {t("Watching")} {status.watched_folders} {t("folders")}
+                            {tf("Watching {n} folders", { n: status.watched_folders })}
                           </>
                         )}
                         {status?.watch_enabled && status.watch_status.startsWith("failed") && (
@@ -6195,7 +6235,11 @@ export default function App() {
                       </div>
                     </div>
                     <div className="row-meta">
-                      <span className="app-badge">{t("Pinned")}</span>
+                      {r.pinned ? (
+                        <span className="app-badge">{t("Pinned")}</span>
+                      ) : (
+                        <span className="folder-files">{filesLabel(r.files ?? 0)}</span>
+                      )}
                     </div>
                   </>
                 ) : r.kind === "script" ? (
@@ -6479,6 +6523,7 @@ export default function App() {
               onReveal={toggleReveal}
               origin={origin}
               webInfo={webInfo}
+              folderFiles={folderFiles}
               onOpenPage={(url) => {
                 invoke("open_repo", { url })
                   .then(() => finishAction())
@@ -6922,6 +6967,7 @@ function PreviewPane({
   onReveal,
   origin,
   webInfo,
+  folderFiles,
   onOpenPage,
 }: {
   hit: Hit | undefined;
@@ -6932,6 +6978,7 @@ function PreviewPane({
   onReveal: (id: number) => void;
   origin: FileOrigin | null;
   webInfo: WebInfo | null;
+  folderFiles: FolderFile[] | null;
   onOpenPage: (url: string) => void;
 }) {
   if (!hit) return <div className="preview-pane" />;
@@ -7026,6 +7073,25 @@ function PreviewPane({
         <>
           <p className="pv-title">{hit.name}</p>
           <p className="pv-meta mono-wrap">{hit.path}</p>
+          {hit.files != null && <p className="pv-meta">{filesLabel(hit.files)}</p>}
+          {folderFiles && folderFiles.length > 0 && (
+            <>
+              <p className="pv-meta">{t("Newest in this folder")}</p>
+              <ul className="pv-ws pv-folder-files">
+                {folderFiles.map((f) => (
+                  <li key={f.path}>
+                    <span className="pv-ws-title">
+                      {f.name}
+                      {relTimeUnix(f.mtime) && <span className="pv-meta"> · {relTimeUnix(f.mtime)}</span>}
+                    </span>
+                    <span className="pv-meta pv-ws-target" title={f.path}>
+                      {f.path}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </>
       ) : hit.kind === "workspace" ? (
         <>

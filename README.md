@@ -306,7 +306,15 @@ name, and understood formats are searched in full text:
   names in the clear; Chinese names from Windows' own zipping are read right).
   Its preview lists the files inside, with the one that matched in view
 - Everything else (video, other archives, binaries) indexes by filename
-- Scope pills (or `Shift+Tab`) narrow results: all / text / images / videos
+- Scope pills (or `Shift+Tab`) narrow results: all / text / images / videos /
+  folders
+- The folders scope finds a folder by its name when you remember where you
+  put something but not what it was called. It lists every folder that holds
+  indexed files (same-named ones told apart by their path) with how many
+  files are under it; Enter opens it in the file manager, and the preview
+  lists its newest files. Names match as app names do (prefix, word start,
+  initials, anywhere in the name, pinyin), and several words match when each
+  is in the name. Folders without any indexed file are not listed.
 - Linked git worktrees are skipped when the checkout they belong to is
   already indexed, so a project with six worktrees is not indexed six times.
   A worktree that is the only copy is indexed as usual; there is an
@@ -448,7 +456,7 @@ starred form. Cap history by count (500 / 2000 / unlimited) and age (7 / 30 days
 | `Ctrl+Alt+Space` | in any app: look up the selected text (`Option+Shift+Space` on macOS; rebindable) |
 | `Tab` | next source (Local / Stars / Web / Clipboard, order set in settings) |
 | `Ctrl+1` … `Ctrl+9` | jump straight to that tab, in strip order (`Alt` instead, or off, in settings) |
-| `Shift+Tab` | cycle the active source's mode: local scope (all/text/images), web scope (all/bookmarks/history), or star sort |
+| `Shift+Tab` | cycle the active source's mode: local scope (all/text/images/videos/folders), web scope (all/bookmarks/history), or star sort |
 | `Shift+Enter` | paste the selected clip(s) into the previous app (Clipboard tab) |
 | `Shift`+`↑` `↓` | extend a multi-selection (Clipboard tab) |
 | `Ctrl+Delete` | delete the selected clips (Clipboard tab) |

@@ -233,6 +233,9 @@ struct Scan<'a> {
     known: HashMap<String, (i64, i64, i64)>,
     seen: HashSet<String>,
     report: IndexReport,
+    /// Each folder's own ignore rules (.gitignore, .git/info/exclude), read
+    /// once per scan: a change batch asks about the same folders many times.
+    ignores: HashMap<PathBuf, Option<ignore::gitignore::Gitignore>>,
 }
 
 impl<'a> Scan<'a> {
@@ -270,6 +273,7 @@ impl<'a> Scan<'a> {
             known,
             seen: HashSet::new(),
             report: IndexReport::default(),
+            ignores: HashMap::new(),
         })
     }
 
@@ -408,7 +412,7 @@ impl<'a> Scan<'a> {
     /// Would the full walk reach `path`? Dotfile components below the root
     /// and shadowed worktree directories are pruned there, so a change
     /// inside them is not news for the index.
-    fn walk_reaches(&self, root: &Path, path: &Path) -> bool {
+    fn walk_reaches(&mut self, root: &Path, path: &Path) -> bool {
         let Ok(rel) = path.strip_prefix(root) else { return false };
         let mut dir = root.to_path_buf();
         for comp in rel.components() {
@@ -416,11 +420,60 @@ impl<'a> Scan<'a> {
                 return false;
             }
             dir.push(comp.as_os_str());
-            if self.skip_worktrees && dir.is_dir() && crate::worktree::is_shadowed(&dir, &self.roots) {
+            if !dir.is_dir() {
+                continue; // a file, or gone: the walk of its folder applies the rules
+            }
+            if self.skip_worktrees && crate::worktree::is_shadowed(&dir, &self.roots) {
+                return false;
+            }
+            // a walk that starts inside a gitignored folder (target/,
+            // node_modules/) would take in all of it: the walker checks what
+            // it finds against the rules, never the folder it starts in
+            if self.dir_ignored(&dir) {
                 return false;
             }
         }
         true
+    }
+
+    /// Is the folder `dir` left out by an ignore file above it, as git
+    /// decides: the nearest file whose rules name it wins, `!` brings it
+    /// back. Every folder above counts, past the indexed one too, as for the
+    /// walker.
+    fn dir_ignored(&mut self, dir: &Path) -> bool {
+        let mut level = dir.parent();
+        while let Some(l) = level {
+            if let Some(rules) = self.ignore_rules(l) {
+                let m = rules.matched(dir, true);
+                if m.is_ignore() {
+                    return true;
+                }
+                if m.is_whitelist() {
+                    return false;
+                }
+            }
+            level = l.parent();
+        }
+        false
+    }
+
+    /// The rules a folder's own ignore files set, if it has any.
+    fn ignore_rules(&mut self, dir: &Path) -> Option<&ignore::gitignore::Gitignore> {
+        self.ignores
+            .entry(dir.to_path_buf())
+            .or_insert_with(|| {
+                let mut b = ignore::gitignore::GitignoreBuilder::new(dir);
+                let mut any = false;
+                // the walker's order, weakest first (a later rule wins):
+                // .git/info/exclude, .gitignore, then .ignore
+                for f in [dir.join(".git").join("info").join("exclude"), dir.join(".gitignore"), dir.join(".ignore")] {
+                    if f.is_file() && b.add(&f).is_none() {
+                        any = true;
+                    }
+                }
+                if any { b.build().ok() } else { None }
+            })
+            .as_ref()
     }
 }
 

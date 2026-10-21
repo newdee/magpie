@@ -158,6 +158,27 @@ fn migrate(conn: &Connection) -> Result<()> {
             VALUES (new.id, new.name, new.path, new.content);
         END;
 
+        -- the folders search (dir_search.rs) works its list out from the files and
+        -- keeps it until this counter moves: every way a file comes, goes or
+        -- moves passes through these, whichever code path did it
+        CREATE TRIGGER IF NOT EXISTS files_rev_ai AFTER INSERT ON files BEGIN
+            INSERT INTO meta(key, value) VALUES ('files_rev', '1')
+            ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS files_rev_ad AFTER DELETE ON files BEGIN
+            INSERT INTO meta(key, value) VALUES ('files_rev', '1')
+            ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+        END;
+        -- only a real move: the indexer's upsert writes folder_id back
+        -- unchanged on every content change (dropped first: a build of
+        -- 2026-10-21 made it without the WHEN)
+        DROP TRIGGER IF EXISTS files_rev_au;
+        CREATE TRIGGER files_rev_au AFTER UPDATE OF path, folder_id ON files
+        WHEN old.path IS NOT new.path OR old.folder_id IS NOT new.folder_id BEGIN
+            INSERT INTO meta(key, value) VALUES ('files_rev', '1')
+            ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1;
+        END;
+
         -- pre-1.0 schema step: single-vector-per-file replaced by chunks;
         -- dropped vectors rebuild automatically on the next index pass
         DROP TABLE IF EXISTS file_embeddings;

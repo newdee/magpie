@@ -215,6 +215,9 @@ pub enum LocalScope {
     /// Videos only (filename matches + semantic shot search — handled by
     /// [`search_videos_scope`], not [`search_files`]).
     Videos,
+    /// Folders by name (#24), no files: handled by [`crate::dir_search`],
+    /// not [`search_files`].
+    Folders,
 }
 
 /// Hybrid search over local files: filename/content FTS + e5 text vectors +
@@ -286,6 +289,8 @@ pub fn search_files(
         LocalScope::Videos => {
             hits.retain(|h| crate::videos::is_video_ext(h.ext.as_deref()));
         }
+        // the folders scope never reaches search_files either; no file is a folder
+        LocalScope::Folders => hits.clear(),
     }
     hits.truncate(limit);
     for h in &mut hits {

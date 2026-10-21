@@ -51,6 +51,9 @@ struct AppState {
     siglip_status: Arc<StdMutex<String>>,
     /// All embedding vectors, resident; reloaded after every embed/sync pass.
     store: Arc<StdMutex<VectorStore>>,
+    /// The folders that hold indexed files, for the folders scope (#24);
+    /// worked out again only after a file came, went or moved.
+    dirs: magpie_core::dir_search::Cache,
     sync_running: Arc<AtomicBool>,
     local_indexing: Arc<AtomicBool>,
     video_indexing: Arc<AtomicBool>,
@@ -576,6 +579,17 @@ async fn search_local(
     // test hook: a slow file search, to check the palette shows apps first
     if let Some(ms) = std::env::var("MAGPIE_TEST_SLOW_LOCAL_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+    // folders by name (#24): no file content is searched, so no model runs
+    if scope == search::LocalScope::Folders {
+        let Some(conn) = take_state_search_conn(&state).await else {
+            return Ok(Vec::new());
+        };
+        let dirs = state.dirs.get(&conn).map_err(err_str)?;
+        return Ok(magpie_core::dir_search::search(&dirs, &query, limit)
+            .into_iter()
+            .map(|h| tag_kind(serde_json::to_value(&h).unwrap_or_default(), "folder"))
+            .collect());
     }
     // embed the words, not the filter tokens: "ext:pdf invoice" should land
     // near "invoice" in vector space, and search_files strips the same
@@ -1697,28 +1711,59 @@ async fn pinned_rows(state: State<'_, AppState>) -> Result<Vec<serde_json::Value
         .filter(|p| Path::new(p).is_dir())
         .map(|p| {
             let name = Path::new(&p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
-            json!({ "kind": "folder", "path": p, "name": name, "score": 0.0 })
+            json!({ "kind": "folder", "path": p, "name": name, "score": 0.0, "pinned": true })
         })
         .collect())
 }
 
-/// Open a pinned folder. Only a folder on the pinned list opens here: the
-/// pins are how a folder outside the indexed ones gets opened at all.
+/// Is `path` a folder the palette may open or list: a pinned one (the pins
+/// are how a folder outside the indexed ones gets opened at all), or one in
+/// an indexed folder (the folders scope, #24)?
+fn folder_is_allowed(conn: &magpie_core::rusqlite::Connection, path: &str) -> Result<bool> {
+    Ok((magpie_core::pins::is_pinned(conn, path)? || files::path_is_allowed(conn, path)?) && Path::new(path).is_dir())
+}
+
+/// Open a folder in the file manager: a pinned one, or one the folders
+/// scope found. Anything else is refused, whatever the page sent.
 #[tauri::command]
-async fn open_pinned_folder(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<String, String> {
-    let pinned = {
+async fn open_folder(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let allowed = {
         let conn = state.db.lock().await;
-        magpie_core::pins::is_pinned(&conn, &path).map_err(err_str)?
+        folder_is_allowed(&conn, &path).map_err(err_str)?
     };
-    if !pinned || !Path::new(&path).is_dir() {
-        return Err("not a pinned folder".into());
+    if !allowed {
+        return Err("not a pinned or indexed folder".into());
     }
     if open_dry_run() {
         return Ok(format!("dry run: open folder {path}"));
     }
-    open_default(Path::new(&path), "a pinned folder")?;
+    open_default(Path::new(&path), "a folder")?;
     hide_palette(&app);
     Ok(String::new())
+}
+
+/// The preview of a folder row: the newest indexed files anywhere under it,
+/// or when the index has none there (a pinned folder outside it), the newest
+/// files straight in it on disk.
+#[tauri::command]
+async fn folder_files(state: State<'_, AppState>, path: String) -> Result<Vec<serde_json::Value>, String> {
+    const SHOWN: usize = 8;
+    let conn = state.db.lock().await;
+    if !folder_is_allowed(&conn, &path).map_err(err_str)? {
+        return Err("not a pinned or indexed folder".into());
+    }
+    let indexed = magpie_core::dir_search::newest_files(&conn, &path, SHOWN).map_err(err_str)?;
+    drop(conn);
+    if !indexed.is_empty() {
+        return Ok(indexed
+            .into_iter()
+            .map(|f| json!({ "path": f.path, "name": f.name, "mtime": f.changed }))
+            .collect());
+    }
+    Ok(files::newest_in(Path::new(&path), SHOWN)
+        .into_iter()
+        .map(|f| json!({ "path": f.path, "name": f.name, "mtime": f.mtime }))
+        .collect())
 }
 
 /// Today for the empty search box (#13): the date, the weekday (1 =
@@ -6081,6 +6126,7 @@ pub fn run() {
                 search_interrupt,
                 search_gen: AtomicU64::new(0),
                 store: Arc::new(StdMutex::new(store)),
+                dirs: Default::default(),
                 embedder: Arc::new(StdMutex::new(None)),
                 model_status: Arc::new(StdMutex::new("loading".into())),
                 siglip: Arc::new(StdMutex::new(None)),
@@ -6339,7 +6385,8 @@ pub fn run() {
             get_pinned_folders,
             set_pinned_folders,
             pinned_rows,
-            open_pinned_folder,
+            open_folder,
+            folder_files,
             search_scripts,
             run_script,
             scripts_folder,

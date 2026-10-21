@@ -75,6 +75,9 @@ const ZH: Record<string, string> = {
   all: "全部",
   text: "文本",
   images: "图片",
+  folders: "文件夹",
+  "Search the indexed folders by name": "按名字搜索已索引的文件夹",
+  "Newest in this folder": "这个文件夹里最新的文件",
   bookmarks: "书签",
   history: "历史",
   // theme
@@ -256,6 +259,7 @@ const ZH: Record<string, string> = {
   "Files received in WeChat": "微信收到的文件",
   "Files received in QQ": "QQ 收到的文件",
   "{n} files": "{n} 个文件",
+  "1 file": "1 个文件",
   "{n}+ files": "{n}+ 个文件",
   Added: "已添加",
   "Already in an indexed folder": "已包含在索引的文件夹里",
@@ -283,8 +287,7 @@ const ZH: Record<string, string> = {
   "File changes": "文件变化",
   "Changes inside indexed folders reach the index within seconds, without waiting for the next full walk.":
     "索引文件夹里的改动几秒内进索引，不用等下一次全量遍历。",
-  "Watching": "正在监听",
-  "folders": "个文件夹",
+  "Watching {n} folders": "正在监听 {n} 个文件夹",
   "Full rescan": "全量重扫",
   "Every so often all folders are walked again, so anything the watcher missed still lands. Off leaves it to the watcher and to startup.":
     "每隔一段时间把所有文件夹重新遍历一遍，监听漏掉的也能补上。关闭则只靠监听和启动时那一次。",

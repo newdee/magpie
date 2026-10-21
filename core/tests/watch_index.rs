@@ -52,6 +52,23 @@ fn a_changed_file_updates_only_its_row() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// The folders scope's list is worked out again only when a file comes,
+/// goes or moves (dir_search.rs): a file rewritten in place, through the
+/// indexer's own upsert, leaves its counter alone.
+#[test]
+fn a_rewritten_file_leaves_the_folder_list_alone() {
+    let (conn, root) = setup("rev");
+    let before = magpie_core::dir_search::rev(&conn).unwrap();
+    fs::write(root.join("a.txt"), "alpha one, longer now").unwrap();
+    let report = files::index_changed(&conn, &[root.join("a.txt")], |_| {}).unwrap();
+    assert_eq!(report.indexed, 1, "the new text went in");
+    assert_eq!(magpie_core::dir_search::rev(&conn).unwrap(), before);
+    fs::write(root.join("c.txt"), "gamma").unwrap();
+    files::index_changed(&conn, &[root.join("c.txt")], |_| {}).unwrap();
+    assert_eq!(magpie_core::dir_search::rev(&conn).unwrap(), before + 1, "a new file moves it");
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_deleted_file_is_dropped_and_its_siblings_stay() {
     let (conn, root) = setup("delete");
@@ -124,6 +141,66 @@ fn dotfiles_gitignored_and_outside_paths_are_ignored() {
     assert_eq!(report.indexed, 0, "{:?}", rows(&conn));
     assert_eq!(rows(&conn).len(), 2);
     let _ = fs::remove_file(&elsewhere);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A gitignored folder (`target/`, `node_modules/`) keeps out what is under
+/// it too: an event inside it (a build writing there) indexes nothing, as
+/// the full walk, which never goes in, indexes nothing there.
+#[test]
+fn nothing_under_a_gitignored_folder_comes_in_by_an_event() {
+    let (conn, root) = setup("ignored-dir");
+    fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+    fs::create_dir_all(root.join("ignored").join("components")).unwrap();
+    fs::write(root.join("ignored").join("components").join("q.tsx"), "built output").unwrap();
+    fs::write(root.join("ignored").join("top.txt"), "built output").unwrap();
+    assert_eq!(files::index_folders(&conn, |_| {}).unwrap().indexed, 0, "the full walk stays out");
+    for event in [
+        root.join("ignored").join("components").join("q.tsx"),
+        root.join("ignored").join("components"),
+        root.join("ignored").join("top.txt"),
+        root.join("ignored"),
+    ] {
+        let report = files::index_changed(&conn, std::slice::from_ref(&event), |_| {}).unwrap();
+        assert_eq!(report.indexed, 0, "{event:?} brought in {:?}", rows(&conn));
+    }
+    assert_eq!(rows(&conn).len(), 2);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// What events bring in is what the full walk takes: a `!` rule brings a
+/// folder back, a deeper .gitignore or an .ignore file leaves one out.
+#[test]
+fn events_take_in_what_the_full_walk_takes() {
+    let (conn, root) = setup("ignore-rules");
+    fs::write(root.join(".gitignore"), "gen/*\n!gen/keep/\n").unwrap();
+    fs::create_dir_all(root.join("sub").join("out")).unwrap();
+    fs::write(root.join("sub").join(".gitignore"), "out/\n").unwrap();
+    fs::create_dir_all(root.join("skipme")).unwrap();
+    fs::write(root.join(".ignore"), "skipme/\n").unwrap();
+    let tree = [
+        root.join("gen").join("keep").join("k.txt"),
+        root.join("gen").join("drop").join("d.txt"),
+        root.join("sub").join("out").join("o.txt"),
+        root.join("sub").join("in").join("i.txt"),
+        root.join("skipme").join("s.txt"),
+    ];
+    for f in &tree {
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, "text").unwrap();
+    }
+    for f in &tree {
+        files::index_changed(&conn, std::slice::from_ref(f), |_| {}).unwrap();
+        files::index_changed(&conn, &[f.parent().unwrap().to_path_buf()], |_| {}).unwrap();
+    }
+    let by_events: Vec<String> = rows(&conn).into_iter().map(|(p, _)| p).collect();
+    let full = db::open_in_memory().unwrap();
+    files::add_folder(&full, root.to_str().unwrap()).unwrap();
+    files::index_folders(&full, |_| {}).unwrap();
+    let by_walk: Vec<String> = rows(&full).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(by_events, by_walk);
+    assert!(by_walk.iter().any(|p| p.ends_with("k.txt")) && by_walk.iter().any(|p| p.ends_with("i.txt")), "{by_walk:?}");
+    assert_eq!(by_walk.len(), 4, "a.txt, b.txt, k.txt, i.txt: {by_walk:?}");
     let _ = fs::remove_dir_all(&root);
 }
 

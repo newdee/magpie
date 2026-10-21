@@ -10,6 +10,7 @@ pub mod clips;
 #[cfg(windows)]
 pub mod corners;
 pub mod db;
+pub mod dir_search;
 pub mod download;
 pub mod edit;
 pub mod embed;
