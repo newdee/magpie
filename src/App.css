@@ -2,14 +2,16 @@
    follows system light/dark, single amber accent */
 
 :root {
-  /* dark (default) */
-  --bg: rgba(18, 18, 23, 0.62);
+  /* dark (default). At 0.62 a white desktop showed through enough to pull
+     the panel to mid-grey: hints 1.0:1, secondary text 2.1:1. At 0.9 every
+     ink holds over a black or a white desktop (text 4.5:1, hints 3:1). */
+  --bg: rgba(18, 18, 23, 0.9);
   --bg-fallback: rgba(18, 18, 23, 0.97);
   --border: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
   --text: #ececf1;
   --text-dim: #a2a2ad;
-  --text-faint: #6b6b76;
+  --text-faint: #74747f;
   --row-hover: rgba(255, 255, 255, 0.07);
   --field-bg: rgba(255, 255, 255, 0.05);
   --accent: #f5b942;
@@ -24,7 +26,7 @@
 
 /* with no data-theme (auto) the tokens follow the system; data-theme="light"
    forces light, "dark" keeps the defaults above, and the two paper themes
-   below replace every token. Light panels are nearly opaque (0.97): the OS
+   below replace every token. Light panels are more opaque still (0.97): the OS
    blur behind is dark, and at 0.68 it pulled the light panel down to grey,
    the hints to 1.7:1. At 0.97 the inks hold their contrast (text and accent
    4.5:1, hints 3:1) over a black or a white desktop. */
