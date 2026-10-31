@@ -528,6 +528,9 @@ const ZH: Record<string, string> = {
   "Hide {s}": "隐藏 {s}",
   "Opens on launch": "启动时打开",
   "Make this the launch tab": "设为启动标签页",
+  "Start on the ★ tab": "每次呼出回到 ★ 标签页",
+  "Every summon opens on the ★ tab. Off: the palette comes back on the tab you left it on.":
+    "每次呼出都从 ★ 标签页开始。关闭时，回到上次离开的标签页。",
   // settings: privacy
   "Clipboard history": "剪贴板历史",
   "Recorded locally, searchable in the Clipboard tab. Password-manager secrets are never stored.":

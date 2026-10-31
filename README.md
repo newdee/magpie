@@ -279,7 +279,8 @@ vaguely remember (or drop in an image), hit Enter.
   for it, where you bookmarked it and when, and how often you visited, from
   the earliest visit your browser still remembers to the latest; all of it
   from your browsers' own files, nothing fetched.
-- **Yours to arrange**: reorder the tabs and pick which one opens on launch.
+- **Yours to arrange**: reorder the tabs and pick which one opens on launch,
+  or on every summon.
 - **It teaches itself**: the empty palette shows a one-line tip, a shortcut
   or a hidden trick, fresh on every summon (off-switch in settings).
 - **Works where the network doesn't**: one-click switch to `hf-mirror.com`
@@ -471,7 +472,8 @@ The palette sits top-center, stays above every window, and can be dragged by
 its tab strip. It hides when another window takes focus, on by default on
 macOS; on Windows and Linux it stays until dismissed by default, so files can
 be dragged in from other windows. Settings switch it either way. Tab order
-and the tab that opens on launch are both configurable.
+and the tab that opens on launch are both configurable; a switch makes every
+summon start on that tab instead of the one you left.
 
 ### From the command line, and on Wayland
 

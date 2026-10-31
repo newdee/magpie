@@ -572,6 +572,7 @@ const LOCAL_KEYS = [
   "magpie.taborder",
   "magpie.tabhidden",
   "magpie.defaulttab",
+  "magpie.tabreset",
   "magpie.theme",
   "magpie.lang",
   "magpie.pinyin",
@@ -700,6 +701,17 @@ function loadHideOnBlur(): boolean {
     /* fall through to the default */
   }
   return IS_MAC;
+}
+
+/// Put the palette back on the ★ tab each time it goes away (#10), so every
+/// summon starts there. Stored "1"/"0"; off by default: the palette comes
+/// back on the tab it was left on.
+function loadTabReset(): boolean {
+  try {
+    return localStorage.getItem("magpie.tabreset") === "1";
+  } catch {
+    return false;
+  }
 }
 
 /// Which modifier plus 1–9 jumps straight to a tab.
@@ -973,6 +985,11 @@ export default function App() {
   const [defaultTab, setDefaultTab] = useState<string>(
     () => localStorage.getItem("magpie.defaulttab") || "local",
   );
+  const defaultTabRef = useRef(defaultTab);
+  defaultTabRef.current = defaultTab;
+  const [tabReset, setTabReset] = useState(loadTabReset);
+  const tabResetRef = useRef(tabReset);
+  tabResetRef.current = tabReset;
   const [sourceIdx, setSourceIdx] = useState(() => {
     let hidden: string[] = [];
     try {
@@ -1120,6 +1137,15 @@ export default function App() {
     setPreviewOpen(false);
     setWsNaming(null); // an unnamed new workspace is dropped with the palette
     setScriptOut(null);
+    // back to the ★ tab while out of sight, not on the summon: a selection
+    // search or a `--source` request is heard before "palette-shown" and
+    // must keep the tab it asked for
+    if (tabResetRef.current) {
+      const idx = sourcesRef.current.findIndex((s) => s.id === defaultTabRef.current);
+      setSourceIdx(idx >= 0 ? idx : 0);
+      setSelected(0);
+      setSelAnchor(null);
+    }
   }, []);
   const hidePalette = useCallback(async () => {
     await getCurrentWindow().hide();
@@ -4577,6 +4603,38 @@ export default function App() {
                           </div>
                         );
                       })}
+                    </div>
+                  </div>
+
+                  <div className="set-row">
+                    <div className="set-label">
+                      <span className="set-name">{t("Start on the ★ tab")}</span>
+                      <span className="set-desc">
+                        {t(
+                          "Every summon opens on the ★ tab. Off: the palette comes back on the tab you left it on.",
+                        )}
+                      </span>
+                    </div>
+                    <div className="pill-row">
+                      {[
+                        { label: "off", on: false },
+                        { label: "on", on: true },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          className={`source ${tabReset === o.on ? "active" : ""}`}
+                          onClick={() => {
+                            setTabReset(o.on);
+                            try {
+                              localStorage.setItem("magpie.tabreset", o.on ? "1" : "0");
+                            } catch {
+                              /* preference just won't persist */
+                            }
+                          }}
+                        >
+                          {t(o.label)}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </div>

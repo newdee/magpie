@@ -349,8 +349,12 @@ const imageHits = [
 };
 
 // a test plays the backend's side of putting the palette away and summoning
-// it ("palette-hidden" / "palette-shown"); the page's listeners are real
-(window as unknown as { __demoEmit?: (name: string) => Promise<void> }).__demoEmit = (name) => emit(name);
+// it ("palette-hidden" / "palette-shown") or of a selection search; the
+// page's listeners are real
+(window as unknown as { __demoEmit?: (name: string, payload?: unknown) => Promise<void> }).__demoEmit = (
+  name,
+  payload,
+) => emit(name, payload);
 
 // a key assembled at run time (no key-shaped literal in the repo); masked the
 // way core/src/secrets.rs masks it
