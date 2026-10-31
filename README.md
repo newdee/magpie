@@ -557,9 +557,12 @@ Windows NSIS installer, macOS dmg (Apple Silicon), Linux AppImage/deb/rpm.
 The Linux builds run on Ubuntu 22.04 or newer and other distributions with
 glibc 2.35+; they carry Microsoft's ONNX Runtime library for semantic search.
 
-On a Mac, Homebrew works too:
+On a Mac, Homebrew works too. Homebrew 6 loads nothing from a third-party tap
+until you trust it, hence the second line (once):
 
 ```sh
+brew tap newdee/tap
+brew trust --tap newdee/tap
 brew install --cask newdee/tap/magpie
 ```
 

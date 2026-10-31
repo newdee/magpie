@@ -427,9 +427,11 @@ claude mcp add --transport http magpie http://127.0.0.1:端口/mcp --header "Aut
 Ubuntu 22.04 及以上、以及 glibc 2.35+ 的其他发行版上可用，语义搜索用的是随包
 附带的微软官方 ONNX Runtime 库。
 
-Mac 上也可以用 Homebrew：
+Mac 上也可以用 Homebrew。Homebrew 6 起第三方源要先信任才能用，所以有第二行（只需一次）：
 
 ```sh
+brew tap newdee/tap
+brew trust --tap newdee/tap
 brew install --cask newdee/tap/magpie
 ```
 
