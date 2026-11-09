@@ -1984,12 +1984,23 @@ export default function App() {
         refreshResults();
       }),
       listen("palette-hidden", onPaletteHidden),
-      listen("palette-shown", () => {
+      listen<number | null>("palette-shown", (e) => {
         paletteEventSeen.current = true;
         setPaletteShown(true);
         setSummons((n) => n + 1);
+        // On macOS the window stays transparent until this summon is painted
+        // (#10): a hidden window is not drawn, so what changed out of sight
+        // (the ★ tab, the pane) would show stale for a frame first. Two
+        // frames: the first runs before the paint that carries these
+        // updates, the second after it.
+        const seq = typeof e.payload === "number" ? e.payload : 0;
+        if (seq > 0) {
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => void invoke("palette_painted", { seq }).catch(() => {})),
+          );
+        }
         // hidden by something outside magpie (the OS, another tool): the
-        // pane goes now, at the cost of a frame or two of it on screen
+        // pane goes now, before the window can be seen (above)
         setPreviewOpen(false);
         inputRef.current?.focus();
         inputRef.current?.select();

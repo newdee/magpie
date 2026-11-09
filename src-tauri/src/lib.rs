@@ -5872,6 +5872,106 @@ fn dismiss(app: AppHandle) {
     dismiss_palette(&app);
 }
 
+/// The summon a paint is awaited for (#10). On macOS a hidden window is not
+/// drawn: the page's timers run, but a frame asked for at the hide comes only
+/// with the next summon (measured on a macOS runner: 4.0-4.3 s after 4 s
+/// hidden, 64 s after 64 s). What the page changed out of sight (the ★ tab,
+/// the preview pane put away) so reached the screen after the window was
+/// back, the stale frame first. A summon keeps the window transparent until
+/// the page says it has painted ([`palette_painted`], 48-125 ms there) or
+/// [`REVEAL_FALLBACK`] passes. 0 = none pending. Windows and Linux are left
+/// as they were: nothing waits.
+static REVEAL_PENDING: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static REVEAL_SEQ: AtomicU64 = AtomicU64::new(0);
+/// When the pending summon began, for the log line that says how long the
+/// paint took (a slow or missing one is what a stale frame would come from).
+static REVEAL_SINCE: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
+/// The longest a summon stays transparent when no paint is reported: past
+/// the slowest answer measured, short enough that a page that never answers
+/// (still loading at launch) costs a fifth of a second.
+#[cfg(target_os = "macos")]
+const REVEAL_FALLBACK: std::time::Duration = std::time::Duration::from_millis(200);
+
+fn reveal_elapsed_ms() -> u128 {
+    REVEAL_SINCE
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .map(|t| t.elapsed().as_millis())
+        .unwrap_or(0)
+}
+
+/// Set the palette window's opacity (0 to 1); see [`REVEAL_PENDING`].
+#[cfg(target_os = "macos")]
+fn set_palette_alpha(app: &AppHandle, alpha: f64) {
+    use objc2_app_kit::NSWindow;
+    let Some(w) = app.get_webview_window("main") else { return };
+    let w2 = w.clone();
+    let _ = w.run_on_main_thread(move || {
+        let Ok(ptr) = w2.ns_window() else { return };
+        // SAFETY: the live NSWindow tao owns for this window, on the main thread
+        let ns: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+        ns.setAlphaValue(alpha);
+    });
+}
+
+/// End the wait for summon `seq`, if it is still the one pending. Returns
+/// whether it was.
+fn reveal(app: &AppHandle, seq: u64) -> bool {
+    if seq == 0
+        || REVEAL_PENDING
+            .compare_exchange(seq, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+    {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    set_palette_alpha(app, 1.0);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    true
+}
+
+/// The page has painted what summon `seq` shows: the window can be seen.
+#[tauri::command]
+fn palette_painted(app: AppHandle, seq: u64) {
+    if reveal(&app, seq) {
+        log::info!("palette painted {} ms after the summon", reveal_elapsed_ms());
+    }
+}
+
+/// Start the wait for a paint before the window is shown (macOS only, see
+/// [`REVEAL_PENDING`]). Returns the summon's number, sent with
+/// "palette-shown" so the page can answer for it; 0 when nothing waits.
+fn begin_reveal(app: &AppHandle) -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        let seq = REVEAL_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+        REVEAL_PENDING.store(seq, Ordering::SeqCst);
+        if let Ok(mut g) = REVEAL_SINCE.lock() {
+            *g = Some(std::time::Instant::now());
+        }
+        set_palette_alpha(app, 0.0);
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(REVEAL_FALLBACK);
+            if reveal(&app, seq) {
+                log::warn!(
+                    "no paint reported {} ms after the summon; palette shown anyway",
+                    reveal_elapsed_ms()
+                );
+            }
+        });
+        seq
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        0
+    }
+}
+
 /// The summon key and `--toggle`. Each press leaves a line in the log (#20: a
 /// press that brought up a browser instead could not be told apart from one
 /// magpie never received).
@@ -5966,6 +6066,9 @@ fn show_window(app: &AppHandle) {
         let _ = w.set_visible_on_all_workspaces(true);
         #[cfg(target_os = "macos")]
         allow_over_fullscreen(&w);
+        // transparent until the page has painted this summon (#10); set
+        // before anything orders the window in, the app unhide included
+        let seq = if w.is_visible().unwrap_or(false) { 0 } else { begin_reveal(app) };
         // a dismissal hid the whole app on macOS (#9): bring it back first
         #[cfg(target_os = "macos")]
         let _ = app.show();
@@ -5975,7 +6078,7 @@ fn show_window(app: &AppHandle) {
         if let Err(e) = w.set_focus() {
             log::warn!("could not focus the palette: {e}");
         }
-        let _ = app.emit("palette-shown", ());
+        let _ = app.emit("palette-shown", seq);
         rescan_apps_if_stale(app);
     }
 }
@@ -6449,6 +6552,7 @@ pub fn run() {
             resize_palette,
             note_palette_misfit,
             dismiss,
+            palette_painted,
             recent_hits,
             append_note,
             set_note_path,

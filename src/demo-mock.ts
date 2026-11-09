@@ -391,6 +391,16 @@ const appIconSvg =
 mockIPC((cmd, args) => {
   const q = (args as { query?: string })?.query ?? "";
   switch (cmd) {
+    // which summons the page said it had painted (#10), and the source tab on
+    // screen at that moment, for a test to read
+    case "palette_painted": {
+      const w = window as unknown as { __demoPainted?: { seq: unknown; tab: number }[] };
+      const tab = [...document.querySelectorAll(".source-row > button.source")].findIndex((b) =>
+        b.classList.contains("active"),
+      );
+      (w.__demoPainted ??= []).push({ seq: (args as { seq?: unknown })?.seq, tab });
+      return null;
+    }
     case "get_status":
       // fresh object each call: the real backend returns new JSON every
       // time, and React's setState skips re-rendering on a same-reference
