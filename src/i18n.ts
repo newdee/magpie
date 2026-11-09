@@ -10,6 +10,9 @@ const ZH: Record<string, string> = {
   // quick features: notes, recent opens, selection search, text verbs
   "Enter appends this line to your notes file": "Enter 把这一行追加到你的笔记文件",
   note: "笔记",
+  "Noted in {file}": "已记下，存在 {file}",
+  "{n} notes in all · Enter copies": "共 {n} 条 · Enter 复制",
+  "Open the notes file": "打开笔记文件",
   "Recent opens on the empty box": "空搜索框显示最近打开",
   "With nothing typed, each tab lists what you opened from it most recently. Local also lists files in your folders that are new or changed this week.":
     "什么都没输入时，每个 tab 列出你最近从它打开过的条目。本地文件还会列出文件夹里这一周新增或改过的文件。",
@@ -59,8 +62,8 @@ const ZH: Record<string, string> = {
     "输入框会算日期：today + 30d、until 2026-10-01、2026-10-01 - today",
   "Narrow file searches: ext:pdf, >10mb, 7d, in:projects":
     "缩小文件搜索范围：ext:pdf、>10mb、7d、in:projects",
-  "note buy milk — one timestamped line into your notes file":
-    "note 买牛奶——一行带时间戳的记录进笔记文件",
+  "note buy milk — one timestamped line into your notes file; note alone lists them":
+    "note 买牛奶——一行带时间戳的记录进笔记文件；只输入 note 列出已记的",
   "Ctrl+Alt+Space looks up the text you have selected in any app — Option+Shift+Space on a Mac":
     "在任何应用里选中文字按 Ctrl+Alt+Space 直接搜——Mac 上是 Option+Shift+Space",
   // tabs

@@ -50,6 +50,12 @@ const demoDirs: { path: string; files: number }[] = [
   { path: "C:\\Users\\dfine\\Documents\\projects\\clips", files: 9 },
   { path: "C:\\Users\\dfine\\Pictures\\screenshots", files: 411 },
 ];
+// the notes file (notes.rs): two kept before, `note …` adds to the end
+const DEMO_NOTES_PATH = "C:\\Users\\demo\\AppData\\Roaming\\com.dfine.magpie\\notes.md";
+const demoNotes: { stamp: string; text: string }[] = [
+  { stamp: "2026-11-02 09:14", text: "call the landlord about the heating" },
+  { stamp: "2026-11-05 18:40", text: "invoice number INV-2026-0117" },
+];
 let demoWorkspaces: { name: string; items: { kind: string; target: string; title: string }[]; updated: number }[] = [
   {
     name: "Paper",
@@ -569,6 +575,29 @@ mockIPC((cmd, args) => {
     case "open_scripts_folder":
     case "set_scripts_folder":
       return null;
+    // notes, in memory, by notes.rs's rules (newest last, as in the file)
+    case "append_note": {
+      const text = String((args as { text?: string }).text ?? "").trim();
+      if (!text) throw new Error("empty note");
+      demoNotes.push({ stamp: "2026-11-09 10:00", text: text.replace(/\s*\n\s*/g, " ") });
+      return DEMO_NOTES_PATH;
+    }
+    case "search_notes": {
+      const q = String((args as { query?: string }).query ?? "").trim().toLowerCase();
+      if (q !== "note") return [];
+      return demoNotes
+        .map((n, i) => ({ ...n, line: i + 1, total: demoNotes.length, path: DEMO_NOTES_PATH, score: 0.95 }))
+        .reverse()
+        .slice(0, 20);
+    }
+    case "open_note_file":
+      return null;
+    // what the page put on the clipboard, for a test to read
+    case "copy_clip": {
+      const w = window as unknown as { __demoCopied?: string[] };
+      (w.__demoCopied ??= []).push(String((args as { text?: string }).text ?? ""));
+      return null;
+    }
     // workspaces, in memory, by workspace.rs's rules
     case "list_workspaces":
       return [...demoWorkspaces].sort((a, b) => b.updated - a.updated);

@@ -212,7 +212,7 @@ export const TIPS: string[] = [
   "qr turns your clipboard into a QR code; Enter copies it as an image",
   "Date math lives in the box: today + 30d, until 2026-10-01, 2026-10-01 - today",
   "Narrow file searches: ext:pdf, >10mb, 7d, in:projects",
-  "note buy milk — one timestamped line into your notes file",
+  "note buy milk — one timestamped line into your notes file; note alone lists them",
   "Ctrl+Alt+Space looks up the text you have selected in any app — Option+Shift+Space on a Mac",
   "Passwords and keys in the clipboard history show starred; Show on the row reveals one",
   "Apps on an external drive: add their folder in Settings → Local Files → App folders",

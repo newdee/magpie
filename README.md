@@ -216,8 +216,9 @@ vaguely remember (or drop in an image), hit Enter.
   `7d` (modified this week; `2w`, `3m`, `1y`), `in:projects`. Filters mix
   with words: `invoice ext:pdf 30d`.
 - **Quick notes**: `note buy milk` appends one timestamped line to a markdown
-  file of your choosing (Settings → Notes file). `Enter` writes it and the
-  palette goes away.
+  file of your choosing (Settings → Notes file). `Enter` writes it, the row
+  says where it went, and the palette goes away. `note` alone, on the
+  Local tab's "all" scope, lists the newest 20; `Enter` on one copies it.
 - **Look up what you have selected**: `Ctrl+Alt+Space` (`Option+Shift+Space`
   on macOS) copies the selection in whatever app you are in and summons
   magpie with it as the query. Rebindable or removable in Settings. On

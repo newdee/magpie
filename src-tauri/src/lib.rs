@@ -1287,6 +1287,39 @@ async fn append_note(state: State<'_, AppState>, text: String) -> Result<String,
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// The newest notes, for a query of one of the list words alone (`note`,
+/// `笔记`, …; #26); nothing for any other query. Scored with the workspace
+/// list (0.95) on the local tab.
+#[derive(serde::Serialize)]
+struct NoteHit {
+    #[serde(flatten)]
+    entry: magpie_core::notes::Entry,
+    /// how many notes the file holds, for the row that opens it
+    total: usize,
+    path: String,
+    score: f32,
+}
+
+/// How many notes the list shows; the rest are a click away in the file.
+const NOTES_LISTED: usize = 20;
+
+#[tauri::command]
+async fn search_notes(state: State<'_, AppState>, query: String) -> Result<Vec<NoteHit>, String> {
+    if !magpie_core::notes::is_list_query(&query) {
+        return Ok(Vec::new());
+    }
+    let path = {
+        let conn = state.db.lock().await;
+        note_path_from(&conn, &state.db_path)
+    };
+    let (list, total) = magpie_core::notes::recent(&path, NOTES_LISTED).map_err(err_str)?;
+    let shown = path.to_string_lossy().into_owned();
+    Ok(list
+        .into_iter()
+        .map(|entry| NoteHit { entry, total, path: shown.clone(), score: 0.95 })
+        .collect())
+}
+
 /// Choose the notes file; an empty path goes back to the default. Returns the
 /// path now in effect.
 #[tauri::command]
@@ -6555,6 +6588,7 @@ pub fn run() {
             palette_painted,
             recent_hits,
             append_note,
+            search_notes,
             set_note_path,
             open_note_file,
             set_selection_hotkey,

@@ -262,6 +262,19 @@ interface WorkspaceHit extends Workspace {
   score: number;
 }
 
+/// A line of the notes file, listed for `note` / `笔记` typed alone (#26):
+/// Enter copies it.
+interface NoteHit {
+  kind: "note";
+  stamp: string;
+  text: string;
+  line: number;
+  /// notes in the file, and where it is
+  total: number;
+  path: string;
+  score: number;
+}
+
 /// A script command from the scripts folder (scripts.rs), with the
 /// arguments typed after its keyword.
 interface ScriptHit {
@@ -300,7 +313,8 @@ type Hit =
   | ProcessHit
   | WorkspaceHit
   | ScriptHit
-  | FolderHit;
+  | FolderHit
+  | NoteHit;
 
 /// A folder: one the user pinned (pins.rs), at the top of the local tab's
 /// empty box, or one the folders scope found by name (dir_search.rs, #24).
@@ -374,6 +388,8 @@ function hitKey(r: Hit): string {
       return `script-${r.path}`;
     case "folder":
       return `folder-${r.path}`;
+    case "note":
+      return `note-${r.line}-${r.text}`;
     default:
       return `${r.kind}-${r.id}`;
   }
@@ -551,6 +567,10 @@ const PLACE_LABELS: Record<string, string> = {
 // key repeat is 30–50 ms a step, so this tells passing over a row from
 // stopping on it (800 ms felt slow on a Mac, #13)
 const LOCAL_PREVIEW_DELAY_MS = 350;
+
+/// How long a kept note's row says so before the palette goes (#26): long
+/// enough to read "✓", short enough that a quick note stays quick.
+const NOTE_SAVED_MS = 800;
 
 /// State fetched for one thing (a selected row, a path, an address), stored
 /// with that thing's key and read back only under it. Clearing it in the
@@ -1126,6 +1146,17 @@ export default function App() {
   const [summons, setSummons] = useState(0);
   // set by the first hide or summon, after which the startup read is stale
   const paletteEventSeen = useRef(false);
+  // the note `note …` just kept and the file it went to, shown on its row
+  // until the palette goes (saveNote); the timer that puts it away
+  const [noteSaved, setNoteSaved] = useState<{ text: string; path: string } | null>(null);
+  const noteSavingRef = useRef(false);
+  const noteSavedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelNoteSaved = useCallback(() => {
+    if (noteSavedTimer.current) clearTimeout(noteSavedTimer.current);
+    noteSavedTimer.current = null;
+    noteSavingRef.current = false;
+    setNoteSaved(null);
+  }, []);
   // What goes when the palette is put away, by the page (hidePalette) or by
   // the backend (hide_palette, which says "palette-hidden"): one list for
   // both. The preview is for checking a find, not a mode (#13): it closes once
@@ -1137,6 +1168,7 @@ export default function App() {
     setPreviewOpen(false);
     setWsNaming(null); // an unnamed new workspace is dropped with the palette
     setScriptOut(null);
+    cancelNoteSaved();
     // back to the ★ tab while out of sight, not on the summon: a selection
     // search or a `--source` request is heard before "palette-shown" and
     // must keep the tab it asked for
@@ -1146,7 +1178,11 @@ export default function App() {
       setSelected(0);
       setSelAnchor(null);
     }
-  }, []);
+  }, [cancelNoteSaved]);
+  // typing on after a note was kept: the palette stays for the new query
+  useEffect(() => {
+    cancelNoteSaved();
+  }, [query, cancelNoteSaved]);
   const hidePalette = useCallback(async () => {
     await getCurrentWindow().hide();
     onPaletteHidden();
@@ -1568,18 +1604,21 @@ export default function App() {
         let cmds: Hit[] | null = null;
         let wss: Hit[] | null = null;
         let scs: Hit[] | null = null;
+        let nts: Hit[] | null = null;
         let files: Hit[] | null = null;
         let painted = false;
         let shown: Hit[] | null = null; // the list this search last handed to React
         const paint = () => {
           if (!live()) return;
-          // workspaces, scripts, system commands and apps share one scale;
-          // the better match leads (a stable sort: the earlier kind wins a tie)
-          const top = [...(wss ?? []), ...(scs ?? []), ...(cmds ?? []), ...(apps ?? [])].sort(
+          // workspaces, notes, scripts, system commands and apps share one
+          // scale; the better match leads (a stable sort: the earlier kind
+          // wins a tie, and the notes keep their newest-first order)
+          const top = [...(wss ?? []), ...(nts ?? []), ...(scs ?? []), ...(cmds ?? []), ...(apps ?? [])].sort(
             (a, b) => (b as { score: number }).score - (a as { score: number }).score,
           );
           const list = [...top, ...(files ?? [])];
-          const allIn = apps !== null && cmds !== null && wss !== null && scs !== null && files !== null;
+          const allIn =
+            apps !== null && cmds !== null && wss !== null && nts !== null && scs !== null && files !== null;
           // nothing to show yet: keep the previous list rather than blank it
           if (list.length === 0 && !allIn) return;
           // a refresh keeps the list on screen until all of it is in, so the
@@ -1635,6 +1674,16 @@ export default function App() {
             .catch(() => [] as Omit<WorkspaceHit, "kind">[])
             .then((w) => {
               wss = w.map((x) => ({ ...x, kind: "workspace" as const }));
+              paint();
+            }),
+          // a narrowed scope (text, images, videos, folders) asks for files only
+          (localScopeRef.current === "all"
+            ? invoke<Omit<NoteHit, "kind">[]>("search_notes", { query: q })
+            : Promise.resolve([] as Omit<NoteHit, "kind">[])
+          )
+            .catch(() => [] as Omit<NoteHit, "kind">[])
+            .then((n) => {
+              nts = n.map((x) => ({ ...x, kind: "note" as const }));
               paint();
             }),
           invoke<Hit[]>("search_local", { query: q, scope: localScopeRef.current })
@@ -2471,6 +2520,16 @@ export default function App() {
       await runRisky(hit);
       return;
     }
+    if (hit.kind === "note") {
+      // a kept line is wanted back as text: a number, a name, a command
+      try {
+        await invoke("copy_clip", { text: hit.text });
+        await finishAction();
+      } catch (e) {
+        setLastError(String(e));
+      }
+      return;
+    }
     if (hit.kind === "workspace") {
       // everything in it opens; what could not is named, and the palette
       // stays so the user sees it
@@ -2844,6 +2903,15 @@ export default function App() {
             },
           ];
         }
+        case "note":
+          return [
+            { key: "copy", label: t("Copy"), run: () => openHit(hit) },
+            {
+              key: "open-notes",
+              label: t("Open the notes file"),
+              run: () => act(invoke("open_note_file").then(finishAction)),
+            },
+          ];
       }
     },
     [openHit, runRisky, finishAction, refreshResults, editors, revealed, toggleReveal, editAppName, editFile, loadWorkspaces],
@@ -2926,14 +2994,24 @@ export default function App() {
     [menuActions, results, selected],
   );
 
-  // `note …` → one line into the notes file, then the palette goes away
+  // `note …` → one line into the notes file. Its row then says it was kept,
+  // and where, for NOTE_SAVED_MS before the palette goes (#26: gone at once,
+  // the user could not tell the note was kept). Typing on, or a hide, drops
+  // the wait.
   const saveNote = useCallback(async () => {
     const n = noteHit;
-    if (!n) return;
+    // a second Enter while the first is saved or shown must not append twice
+    if (!n || noteSavingRef.current) return;
+    noteSavingRef.current = true;
     try {
-      await invoke("append_note", { text: n.text });
-      await finishAction();
+      const path = await invoke<string>("append_note", { text: n.text });
+      setNoteSaved({ text: n.text, path });
+      noteSavedTimer.current = setTimeout(() => {
+        noteSavedTimer.current = null;
+        void finishAction();
+      }, NOTE_SAVED_MS);
     } catch (e) {
+      noteSavingRef.current = false;
       setLastError(String(e));
     }
   }, [noteHit, finishAction]);
@@ -6187,8 +6265,19 @@ export default function App() {
                 onClick={() => void saveNote()}
               >
                 <div className="row-main">
-                  <span className="row-title">📝 {noteHit.text}</span>
-                  <span className="row-sub">{t("Enter appends this line to your notes file")}</span>
+                  {noteSaved ? (
+                    <>
+                      <span className="row-title">✓ {noteSaved.text}</span>
+                      <span className="row-sub" title={noteSaved.path}>
+                        {tf("Noted in {file}", { file: noteSaved.path })}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="row-title">📝 {noteHit.text}</span>
+                      <span className="row-sub">{t("Enter appends this line to your notes file")}</span>
+                    </>
+                  )}
                 </div>
                 <span className="badge">{t("note")}</span>
               </div>
@@ -6350,6 +6439,24 @@ export default function App() {
                     </div>
                     <div className="row-meta">
                       <span className="app-badge">{t("Workspace")}</span>
+                    </div>
+                  </>
+                ) : r.kind === "note" ? (
+                  <>
+                    <div className="row-lead">
+                      <span className="app-icon cmd-glyph">📝</span>
+                      <div className="row-main">
+                        <span className="row-title">{r.text}</span>
+                        <span className="row-sub">
+                          {r.stamp}
+                          {results.findIndex((h) => h.kind === "note") === i
+                            ? ` · ${tf("{n} notes in all · Enter copies", { n: r.total })}`
+                            : ""}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="row-meta">
+                      <span className="app-badge">{t("note")}</span>
                     </div>
                   </>
                 ) : r.kind === "process" ? (
@@ -7161,6 +7268,14 @@ function PreviewPane({
               </ul>
             </>
           )}
+        </>
+      ) : hit.kind === "note" ? (
+        <>
+          <p className="pv-title">{hit.text}</p>
+          <p className="pv-meta">{hit.stamp}</p>
+          <p className="pv-meta" title={hit.path}>
+            {hit.path}
+          </p>
         </>
       ) : hit.kind === "workspace" ? (
         <>
