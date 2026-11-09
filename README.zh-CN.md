@@ -435,6 +435,11 @@ brew trust --tap newdee/tap
 brew install --cask newdee/tap/magpie
 ```
 
+Homebrew 官方仓库里另有一个也叫 `magpie` 的 cask，是另一个软件。只写 `magpie`
+时 Homebrew 用的是它：`brew upgrade magpie` 会把这个 magpie 换成那个。请写全名
+`brew upgrade newdee/tap/magpie`，或用 `brew upgrade --greedy` 全部升级。magpie
+自己也会自动更新。
+
 macOS 构建自 v0.1.24 起已 Developer ID 签名并公证，像普通应用一样直接
 打开，升级后文件夹授权保持不失效。
 

@@ -566,6 +566,11 @@ brew trust --tap newdee/tap
 brew install --cask newdee/tap/magpie
 ```
 
+Homebrew's own catalogue has another cask called `magpie`, a different app,
+and a bare `magpie` means that one: `brew upgrade magpie` replaces this
+magpie with it. Write the full name, `brew upgrade newdee/tap/magpie`, or
+upgrade everything with `brew upgrade --greedy`. magpie also updates itself.
+
 macOS builds are Developer ID signed and notarized (since v0.1.24), so they
 open like any other app and folder-permission grants survive updates.
 
